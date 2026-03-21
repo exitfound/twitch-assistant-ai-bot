@@ -1,0 +1,10 @@
+.env
+venv/
+__pycache__/
+*.pyc
+.tio.tokens.json
+chat_history.db
+chat_history.db-wal
+chat_history.db-shm
+ChatExport*.zip
+import_tg_*.py

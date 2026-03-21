@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Twitch chat bot (`securityexpert`) for the `exitfound` channel powered by Gemini 2.5 Flash. Responds to `сосур*` words (сосурян, сосурити, etc.), `@securityexpert` mentions, and replies to bot messages. Stores full chat history in SQLite with FTS5 search and long-term memory.
+Twitch chat bot powered by Gemini 2.5 Flash. Responds to `сосур*` words (сосурян, сосурити, etc.), `@botname` mentions, and replies to bot messages. Stores full chat history in SQLite with FTS5 search and long-term memory.
 
 ## Commands
 
@@ -104,8 +104,8 @@ Context sent to Gemini (in order):
 
 - **twitchio 3.x** — EventSub (WebSocket), not IRC. Requires `client_id` + `client_secret` from dev.twitch.tv.
 - **Bot token bootstrap** — if `TWITCH_BOT_TOKEN` + `TWITCH_BOT_REFRESH` set in `.env`, loaded in `setup_hook` via `add_token()`. First-time users do OAuth once to get values printed to console.
-- **channel:bot not needed** — bot is a moderator in the channel (`/mod securityexpert`).
-- **TWITCH_CHANNEL** — streamer's channel (`exitfound`), not the bot's own channel.
+- **channel:bot not needed** — bot is a moderator in the channel (`/mod botname`).
+- **TWITCH_CHANNEL** — streamer's channel name, not the bot's own channel.
 - **Bot personality** — `prompt.txt` in project root. Read on every Gemini call via `Gemini.get_system_instruction()` → `_load_prompt()`. Editable without bot restart (hot-reload).
 - **Tokens** — `TWITCH_BOT_TOKEN` auto-refreshes via `TWITCH_BOT_REFRESH`. Also saved to `.tio.tokens.json` by twitchio internally.
 - **chat_history.db** — not committed (in .gitignore). Copy manually when moving to new machine.

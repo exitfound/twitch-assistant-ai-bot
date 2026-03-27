@@ -1,4 +1,4 @@
-twitchio>=3.0.0
+aiosqlite>=0.20.0
 google-genai>=1.62.0
 python-dotenv>=1.2.1
-aiosqlite>=0.20.0
+twitchio>=3.0.0

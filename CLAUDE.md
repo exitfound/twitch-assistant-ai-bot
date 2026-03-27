@@ -51,10 +51,13 @@ Flow:
 4. `ChatComponent.event_message`:
    - Saves every non-bot message to `chat_messages` (FTS synced via trigger)
    - Triggers on: `сосур\w*` regex match (SOSUR_RE) OR `@botname` mention OR reply to bot message
-   - Checks per-user cooldown
+   - Checks per-user cooldown (broadcaster exempt — no cooldown for channel owner)
    - If message == `!help` — replies with list of commands, returns (no Gemini call)
    - If message == `!stat` — queries session + total stats (messages, interactions, session count), returns (no Gemini call)
-   - If message == `!top` — queries top-5 users by bot interactions (session + total), returns (no Gemini call)
+   - If message == `!summary` — fetches up to 500 session messages, sends to Gemini with `prompt.txt` + summary instruction overlay (bot personality preserved, temperature 1.2). Response split into up to 3 chunks like `!ask`. Saved with `[summary]` prefix in `bot_interactions`
+   - If message starts with `!who <ник>` — fetches target user's facts + messages across all sessions (`get_user_messages`, no session filter) + past bot interactions (`get_user_interactions`). Uses `_make_gen_config()` (full bot personality). Prompt asks for a dossier: personality, interests, communication style. If no data — "не знаю". Normal post-processing. Saved with `[who]` prefix
+   - If message starts with `!versus <ник1> <ник2>` — fetches facts + messages across all sessions + past bot interactions for each user (parallel via `asyncio.gather`). Duplicate nicks deduplicated. Uses `_make_gen_config()`. Prompt asks to describe each user's personality/interests/style, cite specific messages, pick a winner. Truncates to 420 chars. Saved with `[versus]` prefix
+
    - `!fact`/`!defact` — **VIP, moderators, and broadcaster only** (checked via `message.chatter.vip/moderator/broadcaster`)
    - If message starts with `!defact` — finds matching facts by substring (`LIKE '%query%'`). One match → deletes + shows text. Multiple matches → shows list. No match → "такого факта нет". Returns (no Gemini call)
    - If message starts with `!fact` — extracts fact, saves to `facts` (with dedup), replies "запомнил", returns (no Gemini call)
@@ -115,10 +118,10 @@ Context sent to Gemini (in order):
 - **Logging** — `logging` module with `basicConfig` in `__main__`. Errors include full tracebacks via `logger.exception()`. `!ask` chunks logged at INFO level.
 - **is_caps** — shared via `src/utils.py`, used by `bot.py`.
 - **CAPS preserves mentions** — `_caps_preserve_mentions()` uppercases text but keeps `@mentions` in original case (e.g. `"ТЕКСТ @username ТЕКСТ"`).
-- **Cooldown** — timestamp set **before** Gemini API call (prevents duplicate responses on fast spam).
+- **Cooldown** — expiry time stored **before** Gemini API call (prevents duplicate responses on fast spam). Two tiers: `COOLDOWN_SECONDS` for regular messages, `COOLDOWN_COMMAND_SECONDS` for commands (`!ask`, `!summary`, `!who`, `!versus`). `_cooldowns` dict stores expiry timestamps (not start times).
 - **Gemini client** — lazy initialization via `get_genai_client()`. Created on first Gemini call, not at module import. Allows `--upload-lore` to work without `GEMINI_API_KEY`.
 - **Gemini API** — uses native async `client.aio.models.generate_content()`, not `asyncio.to_thread()`.
-- **`_make_gen_config()`** — shared helper for Gemini generation config (system instruction, temperature, safety settings, thinking). Used by `event_message` and `_proactive_loop`. NOT used by `!ask` (which has its own config without system prompt).
+- **`_make_gen_config()`** — shared helper for Gemini generation config (system instruction, temperature, safety settings, thinking). Used by `event_message`, `_proactive_loop`, `!who`, `!versus`. NOT used by `!ask` or `!summary` (which have their own configs).
 - **Safety settings** — all 5 harm categories set to `threshold='OFF'` (disables output filter). Input-level filter is server-side and cannot be disabled via API.
 - **Fallback retry** — if Gemini returns empty response (likely input filter block), retries without `[Язык чата]` and `[Контекст канала]` sections.
 - **Thinking** — controlled via `GEMINI_THINKING_BUDGET`. Default `0` (disabled) for faster, cheaper, more impulsive responses. Set to `-1` to let model decide, or a positive number for explicit token budget.
@@ -126,7 +129,7 @@ Context sent to Gemini (in order):
 - **session_id** — `@property` on `Bot`, recomputed on each access. Auto-transitions at midnight without restart.
 - **Follow events** — `ChannelFollowSubscription` via EventSub WebSocket. Requires `moderator:read:followers` scope on bot token. If scope missing, prints re-auth OAuth URL at startup. Bot responds with random hardcoded message from `FOLLOW_MESSAGES` (3 templates, no Gemini call).
 - **Proactive messages** — background asyncio task. Controlled via `PROACTIVE_ENABLED` and `PROACTIVE_INTERVAL_MINUTES`. Uses `_send_chat_message()` (HTTP API via `_http.post_chat_message()`). Skips when chat is empty.
-- **`_send_chat_message()`** — sends messages via `_http.post_chat_message()` (twitchio `ManagedHTTPClient`). Used by proactive loop and `!ask` continuation chunks. Does NOT have reply context (no "Chat Bot" badge on Twitch).
+- **`_send_chat_message()`** — sends messages via `_http.post_chat_message()` (twitchio `ManagedHTTPClient`). Used by proactive loop, `!ask` continuation chunks, and `!summary` continuation chunks. Does NOT have reply context (no "Chat Bot" badge on Twitch).
 - **`!ask` mode** — factual answers without bot personality. Separate `GenerateContentConfig` with plain-text system instruction, no `prompt.txt`. Markdown stripped from output (`*`, `#`, `_`, bullets, numbered lists). Response split into up to 3 chunks of 450 chars. First chunk sent via `message.respond()` (with bot badge), subsequent via `_send_chat_message()` with 1.5s delay.
 - **Response cleanup** — leading `@username:` and `@username,` stripped from Gemini response (`.lstrip(':,')`), then remaining `@username` mentions of addressed user removed.
 
@@ -146,9 +149,12 @@ Context sent to Gemini (in order):
 | `GEMINI_THINKING_BUDGET` | thinking tokens budget. `0` = disabled (default), positive = budget in tokens, `-1` = model decides |
 | `CAPS_PROBABILITY` | probability of uppercasing response, default `0.3`. Range: 0.0–1.0 |
 | `COOLDOWN_SECONDS` | default `10` |
+| `COOLDOWN_COMMAND_SECONDS` | cooldown for `!ask`, `!summary`, `!who`, `!versus`. Default `30` |
 | `COOLDOWN_MESSAGE` | supports `{seconds}` placeholder |
 | `CONTEXT_CHAT_MESSAGES` | recent chat messages in context (default `50`) |
 | `CONTEXT_SEARCH_RESULTS` | FTS results from knowledge + chat history combined (default `10`) |
 | `CONTEXT_KNOWLEDGE_RANDOM` | random knowledge entries per request (default `10`) |
+| `CONTEXT_WHO_MESSAGES` | user messages for `!who` (default `30`) |
+| `CONTEXT_VERSUS_MESSAGES` | user messages per user for `!versus` (default `30`) |
 | `PROACTIVE_ENABLED` | enable proactive messages, default `true` |
 | `PROACTIVE_INTERVAL_MINUTES` | interval between proactive messages, default `15` |

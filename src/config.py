@@ -34,12 +34,15 @@ class Caps:
 
 class Cooldown:
     SECONDS = int(os.getenv('COOLDOWN_SECONDS', '10'))
+    COMMAND_SECONDS = int(os.getenv('COOLDOWN_COMMAND_SECONDS', '30'))
     MESSAGE = os.getenv('COOLDOWN_MESSAGE', 'гуляй, отвечу повторно через {seconds} сек.')
 
 class Context:
     CHAT_MESSAGES = int(os.getenv('CONTEXT_CHAT_MESSAGES', '50'))
     SEARCH_RESULTS = int(os.getenv('CONTEXT_SEARCH_RESULTS', '10'))
     KNOWLEDGE_RANDOM = int(os.getenv('CONTEXT_KNOWLEDGE_RANDOM', '10'))
+    WHO_MESSAGES = int(os.getenv('CONTEXT_WHO_MESSAGES', '30'))
+    VERSUS_MESSAGES = int(os.getenv('CONTEXT_VERSUS_MESSAGES', '30'))
 
 class Proactive:
     INTERVAL_MINUTES = int(os.getenv('PROACTIVE_INTERVAL_MINUTES', '15'))

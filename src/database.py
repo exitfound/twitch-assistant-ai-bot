@@ -224,6 +224,27 @@ async def get_recent_chat(session_id: str, limit: int = 20) -> list[tuple]:
 
 
 
+async def get_user_messages(username: str, limit: int = 30) -> list[str]:
+    db = await get_db()
+    async with db.execute(
+        'SELECT message FROM chat_messages WHERE username = ? ORDER BY id DESC LIMIT ?',
+        (username, limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [row[0] for row in reversed(rows)]
+
+
+async def get_user_interactions(username: str, limit: int = 10) -> list[tuple[str, str]]:
+    db = await get_db()
+    async with db.execute(
+        'SELECT user_message, bot_response FROM bot_interactions '
+        'WHERE username = ? AND user_message NOT LIKE \'[%]\' ORDER BY id DESC LIMIT ?',
+        (username, limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return list(reversed(rows))
+
+
 async def get_session_stats(session_id: str) -> tuple[int, int]:
     db = await get_db()
     async with db.execute(
@@ -249,25 +270,6 @@ async def get_total_stats() -> tuple[int, int, int]:
         sessions = (await cursor.fetchone())[0]
     return msgs, interactions, sessions
 
-
-async def get_session_top_users(session_id: str, limit: int = 5) -> list[tuple[str, int]]:
-    db = await get_db()
-    async with db.execute(
-        'SELECT username, COUNT(*) as cnt FROM bot_interactions '
-        'WHERE session_id = ? GROUP BY username ORDER BY cnt DESC LIMIT ?',
-        (session_id, limit),
-    ) as cursor:
-        return [(row[0], row[1]) for row in await cursor.fetchall()]
-
-
-async def get_total_top_users(limit: int = 5) -> list[tuple[str, int]]:
-    db = await get_db()
-    async with db.execute(
-        'SELECT username, COUNT(*) as cnt FROM bot_interactions '
-        'GROUP BY username ORDER BY cnt DESC LIMIT ?',
-        (limit,),
-    ) as cursor:
-        return [(row[0], row[1]) for row in await cursor.fetchall()]
 
 
 def _sanitize_fts_query(text: str) -> str:

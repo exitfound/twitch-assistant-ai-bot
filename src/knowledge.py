@@ -1,6 +1,4 @@
-"""Работа с базой знаний (knowledge)."""
 import logging
-
 from src.database import get_db
 
 logger = logging.getLogger(__name__)
@@ -21,16 +19,10 @@ def parse_lore_file(path: str) -> list[str]:
 
 def dedup_entries(entries: list[str]) -> list[str]:
     """Убрать дубликаты, сохраняя порядок."""
-    seen = set()
-    unique = []
-    for entry in entries:
-        if entry not in seen:
-            seen.add(entry)
-            unique.append(entry)
-    return unique
+    return list(dict.fromkeys(entries))
 
 
-async def clear_knowledge():
+async def clear_knowledge() -> None:
     """Очистить таблицу knowledge (FTS синхронизируется триггером)."""
     db = await get_db()
     await db.execute('DELETE FROM knowledge')

@@ -21,6 +21,7 @@ asyncio.run(run_bot())
 - `_cooldowns = {}` — словарь `{username: expiry_time}` для per-user кулдаунов (хранит время истечения, не время начала)
 - `_bot_name = None` — имя бота (заполняется позже из Twitch API)
 - `_channel_id = None` — числовой ID канала стримера (заполняется позже)
+- `_proactive_task = None` — ссылка на asyncio-таск проактивного цикла (для reconnect guard)
 
 ### setup_hook (до подключения к Twitch)
 
@@ -33,7 +34,7 @@ asyncio.run(run_bot())
 
 1. **Получение имени бота** — `fetch_users(ids=[bot_id])` → сохраняет ник в `_bot_name`
 2. **Подписка на чат и события** — `_subscribe_to_chat()` создаёт `ChatMessageSubscription` + `ChannelFollowSubscription` через EventSub WebSocket
-3. **Запуск проактивного цикла** — если `PROACTIVE_ENABLED=true` и `_channel_id` известен, создаёт `asyncio.create_task(_proactive_loop())`
+3. **Запуск проактивного цикла** — если `PROACTIVE_ENABLED=true` и `_channel_id` известен, создаёт `asyncio.create_task(_proactive_loop())`. Reconnect guard: если таск уже запущен (`_proactive_task.done() == False`), повторный `event_ready` не создаёт дубликат
 
 ### Подписка на события
 
@@ -64,6 +65,8 @@ asyncio.run(run_bot())
 
 ### Шаг 3: Сохранение в БД
 
+Вычисляется `session_id` как локальная переменная (один раз за обработку). Передаётся параметром во все хэндлеры — не хранится как атрибут инстанса (предотвращает race condition между конкурентными корутинами в полночь).
+
 **Каждое** сообщение (кроме ботовых) сохраняется в `chat_messages` + `chat_fts` (через триггер). Безусловно, даже если не адресовано боту.
 
 ### Шаг 4: Определение триггера
@@ -82,11 +85,28 @@ asyncio.run(run_bot())
 
 Из текста удаляются триггеры (`@botname` и `сосур*`). Промпт приводится к нижнему регистру. Если пусто — используется исходный текст.
 
-### Шаг 7: Команды
+### Шаг 7: Роутинг команд
 
-Проверяются в порядке: `!help` → `!stat` → `!summary` → `!who` → `!versus` → проверка прав для `!fact`/`!defact` → `!defact` → `!fact` → `!ask`.
+Строится `CommandContext(message, user, prompt, original_text, session_id, bot)` и передаётся в `CommandRegistry.resolve(prompt)`.
 
-Все команды выходят до вызова Gemini с контекстом. Кулдаун `COOLDOWN_COMMAND_SECONDS` ставится на `!ask`, `!summary`, `!who`, `!versus`. На `!help`, `!stat`, `!fact`, `!defact` кулдаун не ставится.
+Реестр заполняется в `ChatComponent.__init__` — 8 записей в порядке приоритета:
+
+| Триггер | Тип | Роль | Кулдаун |
+|---|---|---|---|
+| `!help` | exact | — | `COOLDOWN_SECONDS` |
+| `!stat` | exact | — | `COOLDOWN_SECONDS` |
+| `!summary` | exact | — | `COOLDOWN_COMMAND_SECONDS` |
+| `!who` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
+| `!versus` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
+| `!defact` | prefix | vip/mod/broadcaster | — |
+| `!fact` | prefix | vip/mod/broadcaster | — |
+| `!ask` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
+
+`resolve()` сканирует записи по порядку: exact-match (`prompt == trigger`) или prefix-match (`prompt.startswith(trigger)`). Если ничего не нашлось — вызывается `_handle_default(ctx)`.
+
+Проверка роли (`vip_mod_broadcaster`) выполняется **в диспетчере** (`event_message`), а не внутри хендлера. Все хендлеры принимают единый `CommandContext` вместо разрозненных аргументов.
+
+Добавление новой команды = одна строка `_registry.add(...)` в `__init__` + один метод `_handle_*`.
 
 ### Шаг 7а: Команда `!summary`
 
@@ -119,9 +139,9 @@ asyncio.run(run_bot())
 2. Берёт первое слово после `!who` как целевой ник (остальное игнорируется)
 3. Параллельно загружает: факты (`get_relevant_facts`), сообщения за всё время (`get_user_messages`, `CONTEXT_WHO_MESSAGES`), прошлые обращения к боту (`get_user_interactions`, 10 записей)
 4. Если данных нет — «не знаю ничего», return
-5. Формирует промпт с секциями `[Факты]`, `[Сообщения]`, `[Прошлые обращения]` + инструкция: личность, интересы, стиль, со ссылками на конкретные сообщения, 1-3 предложения, максимум 400 символов
-6. Вызов Gemini через `_make_gen_config()` (с `prompt.txt`)
-7. Обрезка до 420 символов. CAPS по стандартным правилам
+5. Формирует промпт через `ContextBuilder`: секции `[Факты про {target}]`, `[Сообщения {target} в чате]`, `[Прошлые обращения {target} к боту]` + инструкция через `add_raw()`: личность, интересы, стиль, со ссылками на конкретные сообщения, 1-3 предложения, максимум 400 символов
+6. Вызов Gemini через `make_gen_config()` из `src/gemini.py` (с `prompt.txt`)
+7. `cleanup_response()` — очистка + обрезка до 420 символов. Если после cleanup пусто — «не удалось описать». CAPS по стандартным правилам
 8. Сохраняется в `bot_interactions` с `[who]` префиксом
 
 ### Шаг 7г: Команда `!versus`
@@ -131,9 +151,9 @@ asyncio.run(run_bot())
 2. Дедупликация ников через `dict.fromkeys()` — одинаковые ники схлопываются. Если меньше 2 уникальных — «нужны два разных ника»
 3. Параллельно загружает для каждого юзера: факты (`get_relevant_facts`), сообщения за всё время (`get_user_messages`, `CONTEXT_VERSUS_MESSAGES`), прошлые обращения к боту (`get_user_interactions`, 10 записей)
 4. Если данных нет ни про одного — «нет данных», return
-5. Формирует промпт с секциями `[Факты]`, `[Сообщения]`, `[Прошлые обращения]` для каждого юзера + инструкция: описать личность/интересы/стиль каждого, сослаться на конкретные сообщения, выбрать победителя, максимум 420 символов
-6. Вызов Gemini через `_make_gen_config()` (с `prompt.txt`)
-7. Обрезка до 420 символов. CAPS по стандартным правилам
+5. Формирует промпт через `ContextBuilder`: для каждого юзера добавляет секции `[Факты про {nick}]`, `[Сообщения {nick} в чате]`, `[Прошлые обращения {nick} к боту]` + инструкция через `add_raw()`: описать личность/интересы/стиль каждого, сослаться на конкретные сообщения, выбрать победителя, максимум 420 символов
+6. Вызов Gemini через `make_gen_config()` из `src/gemini.py` (с `prompt.txt`)
+7. `cleanup_response()` — очистка + обрезка до 420 символов. Если после cleanup пусто — «не удалось сравнить». CAPS по стандартным правилам
 8. Сохраняется в `bot_interactions` с `[versus]` префиксом
 
 ### Шаг 8: Сбор контекста
@@ -149,20 +169,40 @@ facts, recent_chat, context_results, random_knowledge = await asyncio.gather(
 )
 ```
 
+После сбора данные передаются в `ContextBuilder` из `src/context.py`, который собирает итоговый промпт:
+
+```python
+ctx = (
+    ContextBuilder()
+    .add_facts(facts)
+    .add_chat(recent_chat)
+    .add_lines('Контекст канала', context_results)
+    .add_lines('Язык чата', random_knowledge)
+    .add_prompt(user, prompt)
+)
+full_prompt = ctx.build()
+```
+
+Пустые секции пропускаются автоматически. Fallback-запрос использует `ctx.build_without('Язык чата', 'Контекст канала')` вместо ручной фильтрации списка.
+
 ### Шаг 9: Установка кулдауна
 
-Кулдаун ставится **до** вызова Gemini API. Причина: Gemini может отвечать 1–5 секунд, без раннего кулдауна бот начнёт генерировать второй ответ параллельно.
+Кулдаун ставится **до** сбора контекста и вызова Gemini API. Причина: `asyncio.gather` для context fetch и Gemini-вызов суммарно занимают 1–5 секунд, без раннего кулдауна бот начнёт параллельный context fetch и генерацию второго ответа.
 
 ### Шаг 10: Вызов Gemini
 
 Нативный async API `google-genai` SDK. Клиент инициализируется лениво при первом вызове. System prompt читается из `prompt.txt` при каждом вызове (hot-reload).
+
+`generate()` в `src/gemini.py` защищён двумя механизмами:
+- `asyncio.Semaphore(5)` — не более 5 параллельных запросов. Если пришли одновременно 10 команд, 5 встанут в очередь вместо того, чтобы получить ошибку rate-limit
+- `asyncio.wait_for(..., timeout=60)` — зависший запрос прерывается через 60 секунд и возвращает `None`
 
 ### Шаг 11: Постобработка ответа
 
 1. Удаление `@username:` / `@username,` из начала ответа (`.lstrip(':,')`)
 2. Удаление всех оставшихся `@username` адресата из тела (другие ники не затрагиваются)
 3. Обрезка до 450 символов
-4. CAPS — если входное сообщение капсом ИЛИ `random() < CAPS_PROBABILITY`. `@упоминания` сохраняют оригинальный регистр (`_caps_preserve_mentions()`)
+4. CAPS — если входное сообщение капсом ИЛИ `random() < CAPS_PROBABILITY`. `@упоминания` сохраняют оригинальный регистр (`caps_preserve_mentions()` из `src/utils.py`)
 5. Отправка `@username: <текст>`
 6. Сохранение в `bot_interactions`
 
@@ -172,7 +212,7 @@ facts, recent_chat, context_results, random_knowledge = await asyncio.gather(
 
 ## Проактивные сообщения
 
-Фоновая задача `_proactive_loop()`, запускается как `asyncio.create_task` в `event_ready`.
+Фоновая задача `_proactive_loop()`, запускается как `asyncio.create_task` в `event_ready`. Ссылка на таск хранится в `Bot._proactive_task`. Reconnect guard: повторный вызов `event_ready` не создаёт дубликат, если предыдущий таск жив.
 
 ### Логика
 
@@ -181,8 +221,8 @@ facts, recent_chat, context_results, random_knowledge = await asyncio.gather(
 3. Получает `get_random_knowledge()` для контекста
 4. Собирает уникальных пользователей из последних 20 сообщений
 5. С вероятностью 50% — обращение к случайному активному пользователю, 50% — общий комментарий
-6. Формирует промпт с `[Последние сообщения в чате]` + `[Язык чата]`
-7. Вызывает Gemini через `_make_gen_config()` (с system prompt из `prompt.txt`)
+6. Формирует промпт через `ContextBuilder`: `add_chat(recent_chat)` + `add_lines('Язык чата', random_knowledge)` + `add_raw(event_prompt)`
+7. Вызывает Gemini через `make_gen_config()` из `src/gemini.py` (с system prompt из `prompt.txt`)
 8. Обрезает до 450 символов
 9. С вероятностью `CAPS_PROBABILITY` — CAPS (с сохранением `@ников`)
 10. Отправляет через `_send_chat_message()` (HTTP API, без reply-контекста)
@@ -353,7 +393,7 @@ knowledge_fts USING fts5(content, content=knowledge, content_rowid=id, tokenize=
 
 Порог: 85% букв в верхнем регистре, минимум 3 буквы. Если входящее сообщение CAPS → ответ CAPS. Дополнительно: с вероятностью `CAPS_PROBABILITY` (30%) любой ответ переводится в CAPS.
 
-При переводе в CAPS `@упоминания` сохраняют оригинальный регистр: `"ТЕКСТ КАПСОМ @username ЕЩЁ ТЕКСТ"`. Реализация — `_caps_preserve_mentions()`, которая разбивает текст по `@\S+`, uppercasит только промежутки.
+При переводе в CAPS `@упоминания` сохраняют оригинальный регистр: `"ТЕКСТ КАПСОМ @username ЕЩЁ ТЕКСТ"`. Реализация — `caps_preserve_mentions()` в `src/utils.py`, которая разбивает текст по `@\S+`, uppercasит только промежутки.
 
 ---
 

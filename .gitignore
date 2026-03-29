@@ -8,3 +8,5 @@ chat_history.db-wal
 chat_history.db-shm
 ChatExport*.zip
 import_tg_*.py
+.claude/settings.local.json
+.claude/memory/

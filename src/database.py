@@ -1,30 +1,34 @@
-import logging
-
+import asyncio
 import aiosqlite
+import logging
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DB_PATH = 'chat_history.db'
+DB_PATH = Path(__file__).resolve().parent.parent / 'chat_history.db'
 
 _db: aiosqlite.Connection | None = None
+_db_lock = asyncio.Lock()
 
 
 async def get_db() -> aiosqlite.Connection:
     global _db
-    if _db is None:
-        _db = await aiosqlite.connect(DB_PATH)
-        await _db.execute('PRAGMA journal_mode=WAL')
+    async with _db_lock:
+        if _db is None:
+            _db = await aiosqlite.connect(DB_PATH)
+            await _db.execute('PRAGMA journal_mode=WAL')
     return _db
 
 
-async def close_db():
+async def close_db() -> None:
     global _db
-    if _db is not None:
-        await _db.close()
-        _db = None
+    async with _db_lock:
+        if _db is not None:
+            await _db.close()
+            _db = None
 
 
-async def init_db():
+async def init_db() -> None:
     db = await get_db()
     await db.execute('''
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -62,9 +66,6 @@ async def init_db():
         )
     ''')
     await db.execute(
-        'CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_username_fact ON facts(username, fact)'
-    )
-    await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_content ON knowledge(content)'
     )
     await db.execute(
@@ -84,7 +85,7 @@ _FTS_TABLES = [
 ]
 
 
-async def _migrate_fts(db: aiosqlite.Connection):
+async def _migrate_fts(db: aiosqlite.Connection) -> None:
     """Migrate FTS tables to content-linked (content=) if needed."""
     for fts_name, source, columns in _FTS_TABLES:
         needs_migration = False
@@ -110,7 +111,7 @@ async def _migrate_fts(db: aiosqlite.Connection):
         logger.warning('Migrated %s to content-linked FTS (rebuilt from %s)', fts_name, source)
 
 
-async def _create_fts_triggers(db: aiosqlite.Connection):
+async def _create_fts_triggers(db: aiosqlite.Connection) -> None:
     """Create triggers that keep FTS indexes in sync with source tables."""
     for fts_name, source, columns in _FTS_TABLES:
         cols = ', '.join(columns)
@@ -135,7 +136,7 @@ async def _create_fts_triggers(db: aiosqlite.Connection):
         ''')
 
 
-async def save_chat_message(session_id: str, username: str, message: str):
+async def save_chat_message(session_id: str, username: str, message: str) -> None:
     db = await get_db()
     await db.execute(
         'INSERT INTO chat_messages (session_id, username, message) VALUES (?, ?, ?)',
@@ -144,7 +145,7 @@ async def save_chat_message(session_id: str, username: str, message: str):
     await db.commit()
 
 
-async def save_bot_interaction(session_id: str, username: str, user_message: str, bot_response: str):
+async def save_bot_interaction(session_id: str, username: str, user_message: str, bot_response: str) -> None:
     db = await get_db()
     await db.execute(
         'INSERT INTO bot_interactions (session_id, username, user_message, bot_response) VALUES (?, ?, ?, ?)',
@@ -153,7 +154,7 @@ async def save_bot_interaction(session_id: str, username: str, user_message: str
     await db.commit()
 
 
-async def save_fact(username: str, fact: str):
+async def save_fact(username: str, fact: str) -> None:
     db = await get_db()
     await db.execute(
         'INSERT OR IGNORE INTO facts (username, fact) VALUES (?, ?)',
@@ -172,8 +173,8 @@ async def delete_fact(username: str, query: str) -> str | list[str] | None:
     """
     db = await get_db()
     async with db.execute(
-        'SELECT id, fact FROM facts WHERE username = ? AND fact LIKE ?',
-        (username, f'%{query}%'),
+        "SELECT id, fact FROM facts WHERE username = ? AND fact LIKE ? ESCAPE '\\'",
+        (username, f'%{_escape_like(query)}%'),
     ) as cursor:
         matches = await cursor.fetchall()
     if not matches:
@@ -185,24 +186,24 @@ async def delete_fact(username: str, query: str) -> str | list[str] | None:
     return matches[0][1]
 
 
-async def get_relevant_facts(username: str, query: str) -> list[tuple]:
+async def get_relevant_facts(username: str, query: str) -> list[tuple[str, str]]:
     db = await get_db()
     async with db.execute(
         'SELECT username, fact FROM facts WHERE username = ? ORDER BY id',
         (username,),
     ) as cursor:
-        user_facts = list(await cursor.fetchall())
+        user_facts = await cursor.fetchall()
 
     words = [w for w in query.split() if len(w) > 3]
     other_facts = []
     if words:
-        placeholders = ' OR '.join('fact LIKE ?' for _ in words)
-        params = tuple(f'%{w}%' for w in words) + (username,)
+        placeholders = ' OR '.join("fact LIKE ? ESCAPE '\\'" for _ in words)
+        params = tuple(f'%{_escape_like(w)}%' for w in words) + (username,)
         async with db.execute(
             f'SELECT username, fact FROM facts WHERE ({placeholders}) AND username != ? ORDER BY id',
             params,
         ) as cursor:
-            other_facts = list(await cursor.fetchall())
+            other_facts = await cursor.fetchall()
 
     seen = set(user_facts)
     for row in other_facts:
@@ -212,7 +213,7 @@ async def get_relevant_facts(username: str, query: str) -> list[tuple]:
     return user_facts
 
 
-async def get_recent_chat(session_id: str, limit: int = 20) -> list[tuple]:
+async def get_recent_chat(session_id: str, limit: int = 20) -> list[tuple[str, str]]:
     db = await get_db()
     async with db.execute(
         'SELECT username, message FROM chat_messages WHERE session_id = ? ORDER BY id DESC LIMIT ?',
@@ -220,7 +221,6 @@ async def get_recent_chat(session_id: str, limit: int = 20) -> list[tuple]:
     ) as cursor:
         rows = await cursor.fetchall()
     return list(reversed(rows))
-
 
 
 
@@ -272,14 +272,13 @@ async def get_total_stats() -> tuple[int, int, int]:
 
 
 
+def _escape_like(text: str) -> str:
+    return text.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
 def _sanitize_fts_query(text: str) -> str:
     cleaned = ''.join(c if c.isalnum() or c == ' ' else ' ' for c in text)
-    words = []
-    for w in cleaned.split():
-        if not w:
-            continue
-        prefix = w + '*' if len(w) > 3 else w
-        words.append(prefix)
+    words = [w + '*' if len(w) > 3 else w for w in cleaned.split()]
     return ' OR '.join(words)
 
 

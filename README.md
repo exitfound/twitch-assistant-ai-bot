@@ -147,7 +147,7 @@ Proactive messages enabled (every 15 min)
 
 ### Кулдаун
 
-Каждый пользователь может обращаться к боту не чаще одного раза в N секунд. Два уровня: обычные сообщения — `COOLDOWN_SECONDS` (по умолчанию 10), команды (`!ask`, `!summary`, `!who`, `!versus`) — `COOLDOWN_COMMAND_SECONDS` (по умолчанию 30). Кулдаун устанавливается **до** вызова Gemini API — это предотвращает дублирующие ответы. **Владелец канала (broadcaster) освобождён от кулдауна.** При срабатывании кулдауна бот отвечает сообщением с оставшимся временем ожидания.
+Каждый пользователь может обращаться к боту не чаще одного раза в N секунд. Два уровня: обычные сообщения (включая `!help`, `!stat`) — `COOLDOWN_SECONDS` (по умолчанию 10), команды (`!ask`, `!summary`, `!who`, `!versus`) — `COOLDOWN_COMMAND_SECONDS` (по умолчанию 30). Кулдаун устанавливается **до** сбора контекста и вызова Gemini API — это предотвращает дублирующие ответы. **Владелец канала (broadcaster) освобождён от кулдауна.** При срабатывании кулдауна бот отвечает сообщением с оставшимся временем ожидания.
 
 ### Обработка `!ask`
 
@@ -279,13 +279,17 @@ SQLite-файл `chat_history.db` в WAL-режиме. Используется 
 ## Структура проекта
 
 ```
-├── bot.py                 # Точка входа. Bot (twitchio) + ChatComponent + proactive loop + CLI
+├── bot.py                 # Точка входа. Bot (twitchio) + ChatComponent + proactive loop
 ├── prompt.txt             # System prompt для Gemini (hot-reload без перезапуска)
 ├── src/
+│   ├── cli.py             # CLI: argparse, --upload-lore, --clear-lore, --list-facts
+│   ├── commands.py        # CommandRegistry, CommandContext, CommandEntry — роутинг команд
 │   ├── config.py          # Настройки: Twitch, Gemini, Caps, Cooldown, Context, Proactive
+│   ├── context.py         # ContextBuilder: сборка секционированных промптов для Gemini
 │   ├── database.py        # SQLite: таблицы, FTS5 (content= + триггеры), индексы, CRUD, WAL
+│   ├── gemini.py          # Gemini-клиент, generate() с семафором и таймаутом, make_gen_config(), SAFETY_OFF
 │   ├── knowledge.py       # Работа с базой знаний: парсинг txt, импорт, очистка
-│   └── utils.py           # Общие утилиты (is_caps — определение CAPS-сообщений)
+│   └── utils.py           # Утилиты: is_caps, caps_preserve_mentions, strip_markdown, cleanup_response
 ├── requirements.txt       # Зависимости: twitchio, google-genai, python-dotenv, aiosqlite
 ├── .env                   # Секреты и настройки (не коммитится)
 ├── .env.example           # Шаблон .env со всеми переменными

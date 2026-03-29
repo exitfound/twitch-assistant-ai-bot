@@ -37,45 +37,47 @@ python3 -m venv venv
 
 ## Architecture
 
-- `bot.py` — `commands.Bot` subclass + `ChatComponent` (handles `event_message`, `event_follow`). Proactive message loop. CLI (`--upload-lore`, `--list-facts`)
+- `bot.py` — `commands.Bot` subclass + `ChatComponent` (handles `event_message`, `event_follow`). Proactive message loop. Entry point (`__main__` delegates to `src/cli.py` for CLI commands, falls back to `run_bot()`)
+- `src/cli.py` — CLI: argparse, `--upload-lore`, `--clear-lore`, `--dry-run`, `--list-facts`. `main()` returns `False` if no CLI args (bot should start)
 - `src/config.py` — config classes: `Twitch`, `Gemini`, `Caps`, `Cooldown`, `Context`, `Proactive`. System prompt loaded from `prompt.txt` via `Gemini.get_system_instruction()`
 - `src/database.py` — SQLite async (aiosqlite): shared connection via `get_db()`/`close_db()`, init, save, query, FTS5 search. FTS tables use `content=` with auto-sync triggers. Indexes on `session_id` for `chat_messages` and `bot_interactions`
+- `src/commands.py` — `CommandContext` (dataclass: message, user, prompt, original_text, session_id, bot), `CommandEntry`, `CommandRegistry`. Registry populated in `ChatComponent.__init__`; `resolve(prompt)` returns matching entry by exact or prefix match
+- `src/context.py` — `ContextBuilder`: assembles Gemini prompts from named sections. Used in `_handle_default`, `_handle_who`, `_handle_versus`, `_proactive_loop`. `build()` renders full prompt; `build_without(*labels)` renders fallback without specified sections
+- `src/gemini.py` — Gemini client (`get_client()`), `generate()`, `make_gen_config()`, `SAFETY_OFF` constants. `_semaphore` limits to 5 concurrent requests; `asyncio.wait_for(..., timeout=60)` prevents hanging calls
 - `src/knowledge.py` — knowledge base operations: parse lore txt files, import entries, clear knowledge
-- `src/utils.py` — shared utilities (`is_caps`)
+- `src/utils.py` — shared utilities: `is_caps`, `caps_preserve_mentions`, `strip_markdown`, `split_into_chunks`, `cleanup_response`, Twitch message limit constants (`TWITCH_MSG_MAX`, `WHO_VERSUS_MAX`, `CHUNK_SEND_DELAY`)
 - `prompt.txt` — system prompt for Gemini (bot personality). Read on every Gemini call — editable without restart
 
 Flow:
 1. `setup_hook` — `init_db()` (opens shared DB connection), loads bot token from env, fetches broadcaster ID, registers `ChatComponent`
-2. `event_ready` — fetches bot username, calls `_subscribe_to_chat()` (chat + follow events); on failure logs error + prints OAuth URL. Starts `_proactive_loop` if `PROACTIVE_ENABLED`
+2. `event_ready` — fetches bot username, calls `_subscribe_to_chat()` (chat + follow events); on failure logs error + prints OAuth URL. Starts `_proactive_loop` if `PROACTIVE_ENABLED` (reconnect guard prevents duplicate tasks)
 3. `event_oauth_authorized` — saves token, prints `TWITCH_BOT_TOKEN` / `TWITCH_BOT_REFRESH` to console
 4. `ChatComponent.event_message`:
+   - Computes `session_id` once as local variable (prevents race condition at midnight)
    - Saves every non-bot message to `chat_messages` (FTS synced via trigger)
    - Triggers on: `сосур\w*` regex match (SOSUR_RE) OR `@botname` mention OR reply to bot message
-   - Checks per-user cooldown (broadcaster exempt — no cooldown for channel owner)
-   - If message == `!help` — replies with list of commands, returns (no Gemini call)
-   - If message == `!stat` — queries session + total stats (messages, interactions, session count), returns (no Gemini call)
-   - If message == `!summary` — fetches up to 500 session messages, sends to Gemini with `prompt.txt` + summary instruction overlay (bot personality preserved, temperature 1.2). Response split into up to 3 chunks like `!ask`. Saved with `[summary]` prefix in `bot_interactions`
-   - If message starts with `!who <ник>` — fetches target user's facts + messages across all sessions (`get_user_messages`, no session filter) + past bot interactions (`get_user_interactions`). Uses `_make_gen_config()` (full bot personality). Prompt asks for a dossier: personality, interests, communication style. If no data — "не знаю". Normal post-processing. Saved with `[who]` prefix
-   - If message starts with `!versus <ник1> <ник2>` — fetches facts + messages across all sessions + past bot interactions for each user (parallel via `asyncio.gather`). Duplicate nicks deduplicated. Uses `_make_gen_config()`. Prompt asks to describe each user's personality/interests/style, cite specific messages, pick a winner. Truncates to 420 chars. Saved with `[versus]` prefix
-
-   - `!fact`/`!defact` — **VIP, moderators, and broadcaster only** (checked via `message.chatter.vip/moderator/broadcaster`)
-   - If message starts with `!defact` — finds matching facts by substring (`LIKE '%query%'`). One match → deletes + shows text. Multiple matches → shows list. No match → "такого факта нет". Returns (no Gemini call)
-   - If message starts with `!fact` — extracts fact, saves to `facts` (with dedup), replies "запомнил", returns (no Gemini call)
-   - If message starts with `!ask` — factual mode: calls Gemini **without** system prompt (`prompt.txt`) and **without** context sections. Own system instruction: concise plain text, no markdown, max 900 chars. Response split into up to 3 messages (450 chars each). First chunk via `message.respond()` (reply with bot badge), subsequent chunks via `_send_chat_message()` with 1.5s delay. Markdown stripped from response. No CAPS mode. Saved with `[ask]` prefix in `bot_interactions`
-   - Sets cooldown immediately (before Gemini call, prevents race condition with duplicate requests)
-   - Fetches context in parallel: facts + recent chat + context search (FTS across knowledge + chat) + random knowledge
-   - Strips leading `@username:` / `@username,` from Gemini response, then removes all remaining `@username` mentions of the addressed user from the body (other users' mentions are kept)
-   - Truncates to 450 chars
-   - If original message was CAPS (85%+ uppercase letters) OR `random() < CAPS_PROBABILITY` — uppercases the response via `_caps_preserve_mentions()` (preserves `@mentions` in original case)
-   - Replies via `message.respond()`
-   - Saves interaction to `bot_interactions`
+   - Checks per-user cooldown (broadcaster exempt)
+   - Builds `CommandContext(message, user, prompt, original_text, session_id, bot)`
+   - Calls `CommandRegistry.resolve(prompt)` → finds matching `CommandEntry` by exact or prefix match
+   - If entry found and `role='vip_mod_broadcaster'` — checks `chatter.vip/moderator/broadcaster`; denies if not privileged
+   - Calls `entry.handler(ctx)` and returns
+   - Falls through to `_handle_default(ctx)` if no command matched
+   - `!help` — sets regular cooldown, replies with command list (no Gemini)
+   - `!stat` — sets regular cooldown, queries session + total stats (no Gemini)
+   - `!summary` — fetches up to 500 session messages, sends to Gemini with `prompt.txt` + summary overlay (temperature 1.2). Split into up to 3 chunks. Saved with `[summary]` prefix
+   - `!who <ник>` — fetches target's facts + messages + past interactions. Prompt via `ContextBuilder`. Saved with `[who]` prefix
+   - `!versus <ник1> <ник2>` — parallel fetch for both users. Prompt via `ContextBuilder`. Saved with `[versus]` prefix
+   - `!defact` — role-gated. Finds facts by substring, deletes single match or shows list if ambiguous (no Gemini)
+   - `!fact` — role-gated. Saves fact to DB (no Gemini)
+   - `!ask` — factual mode without `prompt.txt` or context. Plain text, markdown stripped, up to 3 chunks. Saved with `[ask]` prefix
+   - Default — sets regular cooldown, fetches context in parallel (facts + chat + FTS + random knowledge), builds prompt via `ContextBuilder`, calls Gemini, responds and saves
 5. `ChatComponent.event_follow`:
    - Triggered on new channel follows (EventSub `channel.follow`)
    - Responds with random message from `FOLLOW_MESSAGES` (3 hardcoded templates, no Gemini call)
    - Saves to `bot_interactions` with `[follow]` as user_message
    - Requires `moderator:read:followers` scope (bot is moderator)
 6. `Bot._proactive_loop`:
-   - Background asyncio task, started in `event_ready` if `PROACTIVE_ENABLED=true`
+   - Background asyncio task, started in `event_ready` if `PROACTIVE_ENABLED=true`. Reconnect guard prevents duplicate tasks. Task reference in `Bot._proactive_task`
    - Initial delay = `PROACTIVE_INTERVAL_MINUTES`, then repeats every interval
    - Skips if no recent chat messages (empty channel)
    - 50% chance: targets random active user from last 20 messages, 50%: general comment
@@ -115,23 +117,29 @@ Context sent to Gemini (in order):
 - **DB connection** — single shared connection via `get_db()`, initialized on first use. Closed via `close_db()` on bot shutdown. All database functions reuse this connection.
 - **FTS5 sync** — FTS tables are linked via `content=` and kept in sync by SQLite triggers (AFTER INSERT/DELETE/UPDATE). No manual FTS inserts in application code. FTS search failures are logged (not silently swallowed). On first run with old DB, `_migrate_fts()` auto-detects and rebuilds FTS tables.
 - **Graceful shutdown** — SIGTERM handled via `loop.add_signal_handler()`, triggers `close_db()` through `finally` block. SIGKILL cannot be caught (OS-level).
-- **Logging** — `logging` module with `basicConfig` in `__main__`. Errors include full tracebacks via `logger.exception()`. `!ask` chunks logged at INFO level.
+- **Logging** — `logging` module with `basicConfig` in `src/cli.py:main()`. Errors include full tracebacks via `logger.exception()`. `!ask` chunks logged at INFO level.
 - **is_caps** — shared via `src/utils.py`, used by `bot.py`.
-- **CAPS preserves mentions** — `_caps_preserve_mentions()` uppercases text but keeps `@mentions` in original case (e.g. `"ТЕКСТ @username ТЕКСТ"`).
-- **Cooldown** — expiry time stored **before** Gemini API call (prevents duplicate responses on fast spam). Two tiers: `COOLDOWN_SECONDS` for regular messages, `COOLDOWN_COMMAND_SECONDS` for commands (`!ask`, `!summary`, `!who`, `!versus`). `_cooldowns` dict stores expiry timestamps (not start times).
-- **Gemini client** — lazy initialization via `get_genai_client()`. Created on first Gemini call, not at module import. Allows `--upload-lore` to work without `GEMINI_API_KEY`.
+- **CAPS preserves mentions** — `caps_preserve_mentions()` (in `src/utils.py`) uppercases text but keeps `@mentions` in original case (e.g. `"ТЕКСТ @username ТЕКСТ"`).
+- **Cooldown** — expiry time stored **before** Gemini API call and before context fetch (prevents duplicate responses on fast spam). Two tiers: `COOLDOWN_SECONDS` for regular messages (including `!help`, `!stat`), `COOLDOWN_COMMAND_SECONDS` for commands (`!ask`, `!summary`, `!who`, `!versus`). `_cooldowns` dict stores expiry timestamps (not start times).
+- **Gemini client** — lazy initialization via `get_client()` in `src/gemini.py`. Created on first Gemini call, not at module import. Allows `--upload-lore` to work without `GEMINI_API_KEY`. `validate_config()` checks `GEMINI_API_KEY` at bot startup but not for CLI commands.
 - **Gemini API** — uses native async `client.aio.models.generate_content()`, not `asyncio.to_thread()`.
-- **`_make_gen_config()`** — shared helper for Gemini generation config (system instruction, temperature, safety settings, thinking). Used by `event_message`, `_proactive_loop`, `!who`, `!versus`. NOT used by `!ask` or `!summary` (which have their own configs).
+- **Gemini semaphore** — `asyncio.Semaphore(5)` in `src/gemini.py` limits concurrent Gemini requests. Excess requests queue up instead of hitting rate limits in parallel.
+- **Gemini timeout** — `asyncio.wait_for(..., timeout=60)` in `generate()`. Hanging requests return `None` after 60 seconds instead of blocking indefinitely.
+- **ContextBuilder** — `src/context.py`. Assembles named sections (`[Label]\ncontent`) into a prompt string. `build()` renders all sections; `build_without('Язык чата', 'Контекст канала')` renders the fallback prompt. Used instead of manual `parts.append(...)` in `_handle_default`, `_handle_who`, `_handle_versus`, `_proactive_loop`.
+- **CommandRegistry** — `src/commands.py`. Populated in `ChatComponent.__init__` with 8 entries. `resolve(prompt)` scans entries in registration order — exact match first priority, then prefix. Role check (`vip_mod_broadcaster`) handled by dispatcher in `event_message`, not inside handlers. Adding a new command = one `_registry.add()` line + one `_handle_*` method.
+- **CommandContext** — `src/commands.py`. Unified dataclass passed to every `_handle_*` method. Fields: `message`, `user`, `prompt`, `original_text`, `session_id`, `bot`. Replaces the previous per-handler argument lists (was different for each handler).
+- **`make_gen_config()`** — shared helper in `src/gemini.py` for Gemini generation config (system instruction, temperature, safety settings, thinking). Used by `_handle_default`, `_proactive_loop`, `!who`, `!versus`. NOT used by `!ask` or `!summary` (which have their own configs).
 - **Safety settings** — all 5 harm categories set to `threshold='OFF'` (disables output filter). Input-level filter is server-side and cannot be disabled via API.
-- **Fallback retry** — if Gemini returns empty response (likely input filter block), retries without `[Язык чата]` and `[Контекст канала]` sections.
+- **Fallback retry** — if Gemini returns empty response (likely input filter block), retries with `ctx.build_without('Язык чата', 'Контекст канала')`. Implemented via `ContextBuilder.build_without()`.
 - **Thinking** — controlled via `GEMINI_THINKING_BUDGET`. Default `0` (disabled) for faster, cheaper, more impulsive responses. Set to `-1` to let model decide, or a positive number for explicit token budget.
 - **Knowledge context** — two sources: FTS5 search (`[Контекст канала]`, keyword-matched from knowledge + chat history) + random sample (`[Язык чата]`, always present). Random sample ensures the bot absorbs chat language even when FTS finds nothing.
-- **session_id** — `@property` on `Bot`, recomputed on each access. Auto-transitions at midnight without restart.
+- **session_id** — `@property` on `Bot`, recomputed on each access. Auto-transitions at midnight without restart. In `event_message`, computed once as local variable and passed to handlers to avoid race conditions between concurrent coroutines.
 - **Follow events** — `ChannelFollowSubscription` via EventSub WebSocket. Requires `moderator:read:followers` scope on bot token. If scope missing, prints re-auth OAuth URL at startup. Bot responds with random hardcoded message from `FOLLOW_MESSAGES` (3 templates, no Gemini call).
-- **Proactive messages** — background asyncio task. Controlled via `PROACTIVE_ENABLED` and `PROACTIVE_INTERVAL_MINUTES`. Uses `_send_chat_message()` (HTTP API via `_http.post_chat_message()`). Skips when chat is empty.
+- **Proactive messages** — background asyncio task. Controlled via `PROACTIVE_ENABLED` and `PROACTIVE_INTERVAL_MINUTES`. Uses `_send_chat_message()` (HTTP API via `_http.post_chat_message()`). Skips when chat is empty. Reconnect guard in `event_ready` prevents duplicate tasks. Task reference stored in `Bot._proactive_task` (initialized as `None` in `__init__`).
 - **`_send_chat_message()`** — sends messages via `_http.post_chat_message()` (twitchio `ManagedHTTPClient`). Used by proactive loop, `!ask` continuation chunks, and `!summary` continuation chunks. Does NOT have reply context (no "Chat Bot" badge on Twitch).
 - **`!ask` mode** — factual answers without bot personality. Separate `GenerateContentConfig` with plain-text system instruction, no `prompt.txt`. Markdown stripped from output (`*`, `#`, `_`, bullets, numbered lists). Response split into up to 3 chunks of 450 chars. First chunk sent via `message.respond()` (with bot badge), subsequent via `_send_chat_message()` with 1.5s delay.
-- **Response cleanup** — leading `@username:` and `@username,` stripped from Gemini response (`.lstrip(':,')`), then remaining `@username` mentions of addressed user removed.
+- **Response cleanup** — `cleanup_response()` in `src/utils.py`. Leading `@username:` / `@username,` stripped (`.lstrip(':,')`), then remaining `@username` mentions of addressed user removed, truncated to max length. Empty result after cleanup is checked before sending in `!who`, `!versus`, `_handle_default`.
+- **`_send_chunked()`** — splits response into up to 3 chunks of 450 chars. Only saves to `bot_interactions` if at least one chunk was successfully sent (partial delivery tracking).
 
 ## Environment Variables
 

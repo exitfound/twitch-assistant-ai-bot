@@ -22,6 +22,7 @@ asyncio.run(run_bot())
 - `_bot_name = None` — имя бота (заполняется позже из Twitch API)
 - `_channel_id = None` — числовой ID канала стримера (заполняется позже)
 - `_proactive_task = None` — ссылка на asyncio-таск проактивного цикла (для reconnect guard)
+- `_emote_spam_task = None` — ссылка на asyncio-таск спама эмотами (для reconnect guard)
 
 ### setup_hook (до подключения к Twitch)
 
@@ -35,6 +36,7 @@ asyncio.run(run_bot())
 1. **Получение имени бота** — `fetch_users(ids=[bot_id])` → сохраняет ник в `_bot_name`
 2. **Подписка на чат и события** — `_subscribe_to_chat()` создаёт `ChatMessageSubscription` + `ChannelFollowSubscription` через EventSub WebSocket
 3. **Запуск проактивного цикла** — если `PROACTIVE_ENABLED=true` и `_channel_id` известен, создаёт `asyncio.create_task(_proactive_loop())`. Reconnect guard: если таск уже запущен (`_proactive_task.done() == False`), повторный `event_ready` не создаёт дубликат
+4. **Запуск цикла спама эмотами** — если `EMOTE_SPAM_ENABLED=true`, `_channel_id` известен и `emotes.txt` непустой, создаёт `asyncio.create_task(_emote_spam_loop())`. Аналогичный reconnect guard через `_emote_spam_task`. Оба таска стартуют **независимо** друг от друга
 
 ### Подписка на события
 
@@ -89,12 +91,15 @@ asyncio.run(run_bot())
 
 Строится `CommandContext(message, user, prompt, original_text, session_id, bot)` и передаётся в `CommandRegistry.resolve(prompt)`.
 
-Реестр заполняется в `ChatComponent.__init__` — 8 записей в порядке приоритета:
+Реестр заполняется в `ChatComponent.__init__` — 11 записей в порядке приоритета:
 
 | Триггер | Тип | Роль | Кулдаун |
 |---|---|---|---|
 | `!help` | exact | — | `COOLDOWN_SECONDS` |
 | `!stat` | exact | — | `COOLDOWN_SECONDS` |
+| `!roll` | exact | — | `COOLDOWN_SECONDS` |
+| `!roll-info` | exact | — | `COOLDOWN_SECONDS` |
+| `!emote` | exact | — | `COOLDOWN_SECONDS` |
 | `!summary` | exact | — | `COOLDOWN_COMMAND_SECONDS` |
 | `!who` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
 | `!versus` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
@@ -108,7 +113,32 @@ asyncio.run(run_bot())
 
 Добавление новой команды = одна строка `_registry.add(...)` в `__init__` + один метод `_handle_*`.
 
-### Шаг 7а: Команда `!summary`
+### Шаг 7а: Команда `!roll`
+
+Игра «залупа стрима»:
+1. Кулдаун ставится сразу (`COOLDOWN_SECONDS`)
+2. Генерируется случайное число 1–100
+3. Сохраняется в таблицу `rolls` через `save_roll()` — `ON CONFLICT DO UPDATE` перезаписывает предыдущий результат пользователя
+4. Запрашивается текущий минимум через `get_session_loser()` — `ORDER BY roll_value ASC, rolled_at ASC` (при ничьей — кто первый скатился)
+5. Если пользователь стал залупой — ответ из `ROLL_LOSER_SELF`, иначе из `ROLL_LOSER_OTHER`
+6. В BD **не сохраняется** (нет вызова Gemini, аналогично `!stat`)
+
+### Шаг 7б: Команда `!roll-info`
+
+Информация о текущей залупе:
+1. Кулдаун ставится сразу (`COOLDOWN_SECONDS`)
+2. `get_session_loser()` возвращает текущего лидера по минимуму
+3. Если роллов нет — ответ из `ROLL_INFO_NO_ROLLS`, иначе из `ROLL_INFO_LOSER`
+
+### Шаг 7в: Команда `!emote`
+
+Случайный эмот из `emotes.txt`:
+1. Кулдаун ставится сразу (`COOLDOWN_SECONDS`)
+2. Если список пуст — сообщение об ошибке
+3. Выбирается случайный эмот, повторяется случайное количество раз (1–5)
+4. Отправляется через `_send_chat_message()` (HTTP API) — **без ника**, просто эмоты
+
+### Шаг 7г: Команда `!summary`
 
 Саммари чата текущей сессии:
 1. Кулдаун ставится сразу
@@ -118,7 +148,7 @@ asyncio.run(run_bot())
 5. Постобработка и chunking идентичны `!ask` (markdown strip, до 3 чанков по 450 символов)
 6. Сохраняется в `bot_interactions` с `[summary]` в `user_message`
 
-### Шаг 7б: Команда `!ask`
+### Шаг 7д: Команда `!ask`
 
 Фактический режим — Gemini без персонажа бота:
 1. Кулдаун ставится сразу
@@ -132,7 +162,7 @@ asyncio.run(run_bot())
 9. Каждый кусок отправляется в отдельном try/except с логированием
 10. Сохраняется в `bot_interactions` с `[ask]` префиксом в `user_message`
 
-### Шаг 7в: Команда `!who`
+### Шаг 7е: Команда `!who`
 
 Досье на юзера:
 1. Кулдаун ставится сразу
@@ -144,7 +174,7 @@ asyncio.run(run_bot())
 7. `cleanup_response()` — очистка + обрезка до 420 символов. Если после cleanup пусто — «не удалось описать». CAPS по стандартным правилам
 8. Сохраняется в `bot_interactions` с `[who]` префиксом
 
-### Шаг 7г: Команда `!versus`
+### Шаг 7ж: Команда `!versus`
 
 Баттл двух юзеров:
 1. Кулдаун ставится сразу
@@ -203,6 +233,7 @@ full_prompt = ctx.build()
 2. Удаление всех оставшихся `@username` адресата из тела (другие ники не затрагиваются)
 3. Обрезка до 450 символов
 4. CAPS — если входное сообщение капсом ИЛИ `random() < CAPS_PROBABILITY`. `@упоминания` сохраняют оригинальный регистр (`caps_preserve_mentions()` из `src/utils.py`)
+4а. Эмот — с вероятностью `EMOTE_PROBABILITY` добавляется случайный эмот из `emotes.txt` в конец текста (если помещается в лимит символов)
 5. Отправка `@username: <текст>`
 6. Сохранение в `bot_interactions`
 
@@ -225,12 +256,27 @@ full_prompt = ctx.build()
 7. Вызывает Gemini через `make_gen_config()` из `src/gemini.py` (с system prompt из `prompt.txt`)
 8. Обрезает до 450 символов
 9. С вероятностью `CAPS_PROBABILITY` — CAPS (с сохранением `@ников`)
-10. Отправляет через `_send_chat_message()` (HTTP API, без reply-контекста)
-11. Сохраняет в `bot_interactions` с `_proactive_` как username
+10. С вероятностью `EMOTE_PROBABILITY` — добавляет случайный эмот в конец
+11. Отправляет через `_send_chat_message()` (HTTP API, без reply-контекста)
+12. Сохраняет в `bot_interactions` с `_proactive_` как username
 
 ### Отказоустойчивость
 
 Ошибки логируются через `logger.exception()`, цикл продолжается. Отказ одной итерации не останавливает проактивные сообщения.
+
+---
+
+## Спам эмотами
+
+Фоновая задача `_emote_spam_loop()`, запускается независимо от `_proactive_loop` в `event_ready`. Активна если `EMOTE_SPAM_ENABLED=true` и `emotes.txt` непустой.
+
+### Логика
+
+1. Ждёт `EMOTE_SPAM_INTERVAL_MINUTES` после старта
+2. Читает актуальный список из `emotes.txt` (hot-reload через mtime)
+3. Выбирает случайное количество (1–5) разных эмотов через `random.sample` (если список ≥ count) или `random.choices` (если меньше)
+4. Отправляет через `_send_chat_message()` (HTTP API)
+5. Ошибки логируются, цикл продолжается
 
 ---
 
@@ -335,6 +381,10 @@ username спрашивает: prompt    ← всегда
 
 Хранит пары вопрос-ответ. Отдельная таблица — бот не видит свои прошлые ответы в контексте, что предотвращает зацикливание. Индекс на `session_id`. Используется для `!stat`. Проактивные сообщения сохраняются с `_proactive_` как username. Префиксы в `user_message`: `[ask]`, `[summary]`, `[who]`, `[versus]`, `[follow]`.
 
+#### rolls
+
+Результаты `!roll` по сессиям. `UNIQUE(session_id, username)` + `ON CONFLICT DO UPDATE` — ролл перезаписывает предыдущий результат. Залупа определяется через `ORDER BY roll_value ASC, rolled_at ASC LIMIT 1`.
+
 #### facts
 
 Факты пользователей. `UNIQUE(username, fact)` + `INSERT OR IGNORE`. Удаление через `LIKE '%query%'`.
@@ -361,6 +411,22 @@ knowledge_fts USING fts5(content, content=knowledge, content_rowid=id, tokenize=
 3. Prefix-match: [«медоед*», «такой*»]
 4. Объединение: «медоед* OR такой*»
 ```
+
+---
+
+## Список эмотов (emotes.txt)
+
+Хранится в корне проекта. Формат: один эмот на строку, `#` — комментарии, пустые строки игнорируются. Читается через `_load_emotes_sync()` с mtime-кешем (hot-reload без перезапуска, аналогично `prompt.txt`).
+
+`Emote.get_list()` вызывается на каждый запрос — подхватывает изменения файла автоматически.
+
+Для заполнения из внешних API:
+
+```bash
+./venv/bin/python3 fetch_emotes.py
+```
+
+Скрипт дёргает BTTV Global/Channel, 7TV Global/Channel, FFZ Channel, Twitch Global/Channel. Дозаписывает только новые эмоты, разбитые по секциям с комментариями. Если канал не подключён к сервису — пропускает без ошибки.
 
 ---
 

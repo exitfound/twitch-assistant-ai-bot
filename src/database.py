@@ -65,6 +65,16 @@ async def init_db() -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS rolls (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            roll_value INTEGER NOT NULL,
+            rolled_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(session_id, username)
+        )
+    ''')
     await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_content ON knowledge(content)'
     )
@@ -322,3 +332,24 @@ async def get_random_knowledge(limit: int = 10) -> list[str]:
         (limit,),
     ) as cursor:
         return [row[0] for row in await cursor.fetchall()]
+
+
+async def save_roll(session_id: str, username: str, value: int) -> None:
+    db = await get_db()
+    await db.execute(
+        'INSERT INTO rolls (session_id, username, roll_value) VALUES (?, ?, ?)'
+        ' ON CONFLICT(session_id, username) DO UPDATE SET roll_value = excluded.roll_value, rolled_at = CURRENT_TIMESTAMP',
+        (session_id, username, value),
+    )
+    await db.commit()
+
+
+async def get_session_loser(session_id: str) -> tuple[str, int] | None:
+    """Returns (username, roll_value) of the current session залупа (minimum roll)."""
+    db = await get_db()
+    async with db.execute(
+        'SELECT username, roll_value FROM rolls WHERE session_id = ? ORDER BY roll_value ASC, rolled_at ASC LIMIT 1',
+        (session_id,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return (row[0], row[1]) if row else None

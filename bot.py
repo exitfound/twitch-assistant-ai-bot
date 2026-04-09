@@ -9,12 +9,13 @@ import twitchio
 from google.genai import types
 from twitchio import eventsub
 from twitchio.ext import commands
-from src.config import Twitch, Gemini, Cooldown, Context, Caps, Proactive, validate_config
+from src.config import Twitch, Gemini, Cooldown, Context, Caps, Proactive, Emote, Roll, validate_config
 from src.database import (
     init_db, close_db, save_chat_message, save_bot_interaction, save_fact, delete_fact,
     get_relevant_facts, get_recent_chat, search_context,
     get_random_knowledge, get_session_stats, get_total_stats,
     get_user_messages, get_user_interactions,
+    save_roll, get_session_loser,
 )
 from src.commands import CommandContext, CommandRegistry
 from src.context import ContextBuilder
@@ -34,7 +35,19 @@ ASK_TRIGGER = '!ask'
 SUMMARY_TRIGGER = '!summary'
 WHO_TRIGGER = '!who'
 VERSUS_TRIGGER = '!versus'
+ROLL_TRIGGER = '!roll'
+ROLL_INFO_TRIGGER = '!roll-info'
+EMOTE_TRIGGER = '!emote'
 SOSUR_RE = re.compile(r'сосур\w*', re.IGNORECASE | re.UNICODE)
+
+
+def _maybe_add_emote(text: str, max_len: int = TWITCH_MSG_MAX) -> str:
+    emotes = Emote.get_list()
+    if emotes and random.random() < Emote.PROBABILITY:
+        emote = random.choice(emotes)
+        if len(text) + len(emote) + 1 <= max_len:
+            return f'{text} {emote}'
+    return text
 
 
 class Bot(commands.Bot):
@@ -50,6 +63,7 @@ class Bot(commands.Bot):
         self._bot_name: str | None = None
         self._channel_id: str | None = None
         self._proactive_task: asyncio.Task | None = None
+        self._emote_spam_task: asyncio.Task | None = None
 
     @property
     def session_id(self) -> str:
@@ -78,10 +92,13 @@ class Bot(commands.Bot):
                 'http://localhost:4343/oauth?scopes=user:read:chat+user:write:chat+user:bot&force_verify=true'
             )
         if Proactive.ENABLED and self._channel_id:
-            if self._proactive_task and not self._proactive_task.done():
-                return
-            self._proactive_task = asyncio.create_task(self._proactive_loop())
-            logger.info('Proactive messages enabled (every %d min)', Proactive.INTERVAL_MINUTES)
+            if not (self._proactive_task and not self._proactive_task.done()):
+                self._proactive_task = asyncio.create_task(self._proactive_loop())
+                logger.info('Proactive messages enabled (every %d min)', Proactive.INTERVAL_MINUTES)
+        if Emote.SPAM_ENABLED and self._channel_id and Emote.get_list():
+            if not (self._emote_spam_task and not self._emote_spam_task.done()):
+                self._emote_spam_task = asyncio.create_task(self._emote_spam_loop())
+                logger.info('Emote spam enabled (every %d min)', Emote.SPAM_INTERVAL_MINUTES)
 
     async def event_oauth_authorized(self, payload: twitchio.authentication.UserTokenPayload):
         await self.add_token(payload.access_token, payload.refresh_token)
@@ -134,11 +151,25 @@ class Bot(commands.Bot):
                         text = text[:TWITCH_MSG_MAX - 3] + '...'
                     if random.random() < Caps.PROBABILITY:
                         text = caps_preserve_mentions(text)
+                    text = _maybe_add_emote(text)
                     await self._send_chat_message(text)
                     await save_bot_interaction(self.session_id, '_proactive_', event_prompt, text)
             except Exception:
                 logger.exception('Proactive message failed')
             await asyncio.sleep(Proactive.INTERVAL_MINUTES * 60)
+
+    async def _emote_spam_loop(self) -> None:
+        await asyncio.sleep(Emote.SPAM_INTERVAL_MINUTES * 60)
+        while True:
+            try:
+                emotes = Emote.get_list()
+                if emotes:
+                    count = random.randint(1, 5)
+                    sample = random.sample(emotes, min(count, len(emotes))) if len(emotes) >= count else random.choices(emotes, k=count)
+                    await self._send_chat_message(' '.join(sample))
+            except Exception:
+                logger.exception('Emote spam failed')
+            await asyncio.sleep(Emote.SPAM_INTERVAL_MINUTES * 60)
 
     async def _subscribe_to_chat(self) -> None:
         if not self._channel_id:
@@ -173,6 +204,9 @@ class ChatComponent(commands.Component):
         self._registry = CommandRegistry()
         self._registry.add(HELP_TRIGGER,    self._handle_help)
         self._registry.add(STATS_TRIGGER,   self._handle_stats)
+        self._registry.add(ROLL_TRIGGER,      self._handle_roll)
+        self._registry.add(ROLL_INFO_TRIGGER, self._handle_roll_info)
+        self._registry.add(EMOTE_TRIGGER,     self._handle_emote)
         self._registry.add(SUMMARY_TRIGGER, self._handle_summary)
         self._registry.add(WHO_TRIGGER,     self._handle_who,    prefix=True)
         self._registry.add(VERSUS_TRIGGER,  self._handle_versus, prefix=True)
@@ -196,7 +230,6 @@ class ChatComponent(commands.Component):
         is_sosur = bool(SOSUR_RE.search(message.text))
         reply = getattr(message, 'reply', None)
         is_reply = reply is not None and str(getattr(reply, 'parent_user_id', '')) == str(self.bot.bot_id)
-
         if not (is_mention or is_sosur or is_reply):
             return
 
@@ -243,6 +276,9 @@ class ChatComponent(commands.Component):
         self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
         await ctx.message.respond(
             f'@{ctx.user}: '
+            '!roll — ролл 1-100 (кто меньше — залупа стрима) | '
+            '!roll-info — текущая залупа стрима | '
+            '!emote — рандомный эмот | '
             '!fact <факт> — запомнить | '
             '!defact <факт> — забыть | '
             '!ask <вопрос> — ответ по факту | '
@@ -264,6 +300,41 @@ class ChatComponent(commands.Component):
             f'всего за {total_sessions} сессий — '
             f'сообщений: {total_msgs}, обращений: {total_interactions}'
         )
+
+    async def _handle_roll(self, ctx: CommandContext) -> None:
+        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
+        value = random.randint(1, 100)
+        await save_roll(ctx.session_id, ctx.user, value)
+        loser = await get_session_loser(ctx.session_id)
+        if loser is None:
+            await ctx.message.respond(f'@{ctx.user}, ошибка при сохранении ролла.')
+            return
+        loser_name, loser_val = loser
+        if loser_name == ctx.user:
+            text = Roll.LOSER_SELF.format(user=ctx.user, value=value)
+        else:
+            text = Roll.LOSER_OTHER.format(user=ctx.user, value=value, loser=loser_name, loser_val=loser_val)
+        await ctx.message.respond(text)
+
+    async def _handle_roll_info(self, ctx: CommandContext) -> None:
+        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
+        loser = await get_session_loser(ctx.session_id)
+        if loser is None:
+            await ctx.message.respond(f'@{ctx.user}, {Roll.INFO_NO_ROLLS}')
+        else:
+            loser_name, loser_val = loser
+            text = Roll.INFO_LOSER.format(loser=loser_name, loser_val=loser_val)
+            await ctx.message.respond(f'@{ctx.user}, {text}')
+
+    async def _handle_emote(self, ctx: CommandContext) -> None:
+        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
+        emotes = Emote.get_list()
+        if not emotes:
+            await ctx.message.respond(f'@{ctx.user}, emotes.txt пустой или не найден')
+            return
+        emote = random.choice(emotes)
+        count = random.randint(1, 5)
+        await self.bot._send_chat_message(' '.join([emote] * count))
 
     async def _handle_summary(self, ctx: CommandContext) -> None:
         self.bot._cooldowns[ctx.user] = time.time() + Cooldown.COMMAND_SECONDS
@@ -333,6 +404,7 @@ class ChatComponent(commands.Component):
                 return
             if is_caps(ctx.original_text) or random.random() < Caps.PROBABILITY:
                 text = caps_preserve_mentions(text)
+            text = _maybe_add_emote(text, WHO_VERSUS_MAX)
             await ctx.message.respond(f'@{ctx.user}: {text}')
             await save_bot_interaction(ctx.session_id, ctx.user, f'[who] {target}', text)
         except Exception:
@@ -379,6 +451,7 @@ class ChatComponent(commands.Component):
                 return
             if is_caps(ctx.original_text) or random.random() < Caps.PROBABILITY:
                 text = caps_preserve_mentions(text)
+            text = _maybe_add_emote(text, WHO_VERSUS_MAX)
             await ctx.message.respond(f'@{ctx.user}: {text}')
             await save_bot_interaction(ctx.session_id, ctx.user, f'[versus] {nick1} vs {nick2}', text)
         except Exception:
@@ -453,6 +526,7 @@ class ChatComponent(commands.Component):
             if text:
                 if is_caps(ctx.original_text) or random.random() < Caps.PROBABILITY:
                     text = caps_preserve_mentions(text)
+                text = _maybe_add_emote(text)
                 await ctx.message.respond(f'@{ctx.user}: {text}')
                 await save_bot_interaction(ctx.session_id, ctx.user, ctx.prompt, text)
             else:

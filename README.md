@@ -137,6 +137,9 @@ Proactive messages enabled (every 15 min)
 |---|---|
 | `!help` | Выводит список доступных команд в чат |
 | `!stat` | Показывает статистику текущей сессии (сообщений, обращений) и общую за все сессии |
+| `!roll` | Бросает кубик 1–100. Кто набрал меньше всех в текущей сессии — залупа непричесанная. Каждый новый ролл перезаписывает предыдущий результат игрока |
+| `!roll-info` | Показывает текущую залупу стрима (игрок с минимальным роллом в сессии) |
+| `!emote` | Отправляет в чат 1–5 одинаковых случайных эмотов из `emotes.txt` |
 | `!fact <факт>` | Сохраняет факт о пользователе навсегда. **Только для VIP, модераторов и стримера.** Дублирующие факты игнорируются |
 | `!defact <текст>` | Удаляет факт по подстроке. **Только для VIP, модераторов и стримера.** Удалить можно только свои факты |
 | `!ask <вопрос>` | Фактический ответ без персонажа бота. Gemini отвечает как обычная модель — без системного промпта, plain text, до 3 сообщений подряд |
@@ -168,7 +171,32 @@ Proactive messages enabled (every 15 min)
 - С вероятностью 50% обращается к случайному активному пользователю из последних 20 сообщений, 50% — общий комментарий
 - Использует полный контекст: `[Последние сообщения в чате]` + `[Язык чата]`
 - CAPS с вероятностью `CAPS_PROBABILITY`
+- С вероятностью `EMOTE_PROBABILITY` добавляет случайный эмот в конец сообщения
 - Отправляется через HTTP API (без reply-контекста)
+
+---
+
+## Эмоты
+
+### Список эмотов
+
+Хранится в `emotes.txt` в корне проекта — один эмот на строку, `#` для комментариев. Поддерживает hot-reload без перезапуска бота (как `prompt.txt`).
+
+Для заполнения списка эмотов канала из BTTV, 7TV, FFZ и Twitch API:
+
+```bash
+./venv/bin/python3 fetch_emotes.py
+```
+
+Скрипт использует `TWITCH_CHANNEL`, `TWITCH_CLIENT_ID`, `TWITCH_BOT_TOKEN` из `.env`. Дозаписывает только новые эмоты в файл, не затирая существующие.
+
+### Случайный эмот в ответах
+
+С вероятностью `EMOTE_PROBABILITY` бот добавляет случайный эмот из `emotes.txt` в конец обычных ответов Gemini (`_handle_default`, `!who`, `!versus`, проактив).
+
+### Спам эмотами
+
+Если `EMOTE_SPAM_ENABLED=true` — бот раз в `EMOTE_SPAM_INTERVAL_MINUTES` минут самостоятельно отправляет в чат 1–5 случайных разных эмотов (независимый фоновый цикл, аналогично проактивным сообщениям).
 
 ---
 
@@ -223,6 +251,7 @@ SQLite-файл `chat_history.db` в WAL-режиме. Используется 
 | `bot_interactions` | обычная | Пары вопрос-ответ. Поля: `session_id`, `username`, `user_message`, `bot_response`, `created_at` |
 | `facts` | обычная | Факты через `!fact` / `!defact`. Unique constraint на `username+fact` |
 | `knowledge` | обычная | Импортированный лор, мемы, история. Unique index на `content` |
+| `rolls` | обычная | Результаты `!roll` по сессиям. Unique constraint на `session_id+username` — каждый ролл перезаписывает предыдущий |
 | `chat_fts` | FTS5 | Зеркало `chat_messages`, синхронизируется триггерами |
 | `knowledge_fts` | FTS5 | Зеркало `knowledge`, синхронизируется триггерами |
 
@@ -273,18 +302,26 @@ SQLite-файл `chat_history.db` в WAL-режиме. Используется 
 | `CONTEXT_VERSUS_MESSAGES` | `30` | Сообщений на юзера для `!versus` |
 | `PROACTIVE_ENABLED` | `true` | Включить проактивные сообщения |
 | `PROACTIVE_INTERVAL_MINUTES` | `15` | Интервал проактивных сообщений (минуты) |
+| `EMOTE_PROBABILITY` | `10` | Вероятность добавить эмот в конец ответа (0–100, целое, %) |
+| `EMOTE_SPAM_ENABLED` | `false` | Включить автоматический спам эмотами |
+| `EMOTE_SPAM_INTERVAL_MINUTES` | `10` | Интервал спама эмотами (минуты) |
+| `ROLL_LOSER_SELF` | `@{user} выбил {value} из 100 — ЗАЛУПА...` | Текст когда роллящий стал залупой. Плейсхолдеры: `{user}`, `{value}` |
+| `ROLL_LOSER_OTHER` | `@{user} выбил {value}...` | Текст когда залупа — другой. Плейсхолдеры: `{user}`, `{value}`, `{loser}`, `{loser_val}` |
+| `ROLL_INFO_LOSER` | `Залупа стрима...` | Текст для `!roll-info`. Плейсхолдеры: `{loser}`, `{loser_val}` |
+| `ROLL_INFO_NO_ROLLS` | `В этой сессии ещё никто не катал.` | Текст для `!roll-info` когда нет роллов |
 
 ---
 
 ## Структура проекта
 
 ```
-├── bot.py                 # Точка входа. Bot (twitchio) + ChatComponent + proactive loop
+├── bot.py                 # Точка входа. Bot (twitchio) + ChatComponent + фоновые циклы
 ├── prompt.txt             # System prompt для Gemini (hot-reload без перезапуска)
+├── emotes.txt             # Список Twitch-эмотов для !emote и спама (hot-reload, один эмот на строку)
 ├── src/
 │   ├── cli.py             # CLI: argparse, --upload-lore, --clear-lore, --list-facts
 │   ├── commands.py        # CommandRegistry, CommandContext, CommandEntry — роутинг команд
-│   ├── config.py          # Настройки: Twitch, Gemini, Caps, Cooldown, Context, Proactive
+│   ├── config.py          # Настройки: Twitch, Gemini, Caps, Cooldown, Context, Proactive, Emote, Roll
 │   ├── context.py         # ContextBuilder: сборка секционированных промптов для Gemini
 │   ├── database.py        # SQLite: таблицы, FTS5 (content= + триггеры), индексы, CRUD, WAL
 │   ├── gemini.py          # Gemini-клиент, generate() с семафором и таймаутом, make_gen_config(), SAFETY_OFF

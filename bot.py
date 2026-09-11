@@ -236,7 +236,9 @@ class ChatComponent(commands.Component):
         user = message.chatter.name
         now = time.time()
 
-        if not message.chatter.broadcaster and user in self.bot._cooldowns:
+        chatter = message.chatter
+        is_privileged = chatter.broadcaster or chatter.moderator or chatter.vip
+        if not is_privileged and user in self.bot._cooldowns:
             remaining = self.bot._cooldowns[user] - now
             if remaining > 0:
                 await message.respond(

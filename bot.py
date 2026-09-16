@@ -1,53 +1,32 @@
 import asyncio
 import logging
-import random
 import re
 import signal
 import time
-import twitchio
 
-from google.genai import types
+import twitchio
 from twitchio import eventsub
 from twitchio.ext import commands
-from src.config import Twitch, Gemini, Cooldown, Context, Caps, Proactive, Emote, Roll, validate_config
-from src.database import (
-    init_db, close_db, save_chat_message, save_bot_interaction, save_fact, delete_fact,
-    get_relevant_facts, get_recent_chat, search_context,
-    get_random_knowledge, get_session_stats, get_total_stats,
-    get_user_messages, get_user_interactions,
-    save_roll, get_session_loser,
-)
-from src.commands import CommandContext, CommandRegistry
-from src.context import ContextBuilder
-from src.gemini import generate, make_gen_config, SAFETY_OFF
-from src.utils import (
-    is_caps, caps_preserve_mentions, strip_markdown, split_into_chunks,
-    cleanup_response, TWITCH_MSG_MAX, WHO_VERSUS_MAX, CHUNK_SEND_DELAY,
-)
+
+from src.core.component import ChatComponent
+from src.core.config import Emote, Proactive, Rewards, Roll, Twitch, validate_config
+from src.core.content import Content, validate_content
+from src.core.database import close_db, init_db
+from src.core.logging_setup import setup_logging
+from src.core.stream import StreamTracker, watch_stream
+from src.gemini.proactive import proactive_loop
+from src.local.emote_spam import emote_spam_loop
+from src.local.roll import perks
+from src.local.roll.announce import curse_lift_loop
+from src.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
 
 logger = logging.getLogger(__name__)
 
-FACT_TRIGGER = '!fact'
-DEFACT_TRIGGER = '!defact'
-STATS_TRIGGER = '!stat'
-HELP_TRIGGER = '!help'
-ASK_TRIGGER = '!ask'
-SUMMARY_TRIGGER = '!summary'
-WHO_TRIGGER = '!who'
-VERSUS_TRIGGER = '!versus'
-ROLL_TRIGGER = '!roll'
-ROLL_INFO_TRIGGER = '!roll-info'
-EMOTE_TRIGGER = '!emote'
-SOSUR_RE = re.compile(r'сосур\w*', re.IGNORECASE | re.UNICODE)
+OAUTH_SCOPES = 'user:read:chat+user:write:chat+user:bot'
+OAUTH_SCOPES_FOLLOWS = f'{OAUTH_SCOPES}+moderator:read:followers'
 
-
-def _maybe_add_emote(text: str, max_len: int = TWITCH_MSG_MAX) -> str:
-    emotes = Emote.get_list()
-    if emotes and random.random() < Emote.PROBABILITY:
-        emote = random.choice(emotes)
-        if len(text) + len(emote) + 1 <= max_len:
-            return f'{text} {emote}'
-    return text
+# Запись эфира узнаётся по времени начала: у VOD оно совпадает со стартом стрима
+VOD_MATCH_SECONDS = 300
 
 
 class Bot(commands.Bot):
@@ -64,10 +43,58 @@ class Bot(commands.Bot):
         self._channel_id: str | None = None
         self._proactive_task: asyncio.Task | None = None
         self._emote_spam_task: asyncio.Task | None = None
+        self._curse_lift_task: asyncio.Task | None = None
+        self._rewards = RewardService(self)
+        self._broadcaster_token = False
+        self._stream_watch_task: asyncio.Task | None = None
+        self.stream = StreamTracker(end_lookup=self._stream_end_from_vod)
 
     @property
     def session_id(self) -> str:
-        return time.strftime('%Y-%m-%d')
+        """Эфир, пока идёт стрим, иначе текущая дата. См. src/core/stream.py."""
+        return self.stream.session_id
+
+    @property
+    def stream_live(self) -> bool:
+        return self.stream.live
+
+    @property
+    def bot_name(self) -> str | None:
+        return self._bot_name
+
+    @property
+    def rewards_active(self) -> bool:
+        return self._rewards.active
+
+    # --- кулдауны ---------------------------------------------------------
+
+    # Области независимы: отсидка за Gemini-команду не мешает жать !help.
+    # Область — это класс команды (KIND_LOCAL / KIND_GEMINI), передаётся явно.
+    def cooldown_remaining(self, user: str, scope: str) -> float:
+        expiry = self._cooldowns.get(f'{scope}:{user}')
+        if expiry is None:
+            return 0.0
+        return max(0.0, expiry - time.time())
+
+    def set_cooldown(self, user: str, seconds: int, scope: str) -> None:
+        now = time.time()
+        if len(self._cooldowns) > 500:
+            self._cooldowns = {k: e for k, e in self._cooldowns.items() if e > now}
+        self._cooldowns[f'{scope}:{user}'] = now + seconds
+
+    def clear_cooldown(self, user: str, scope: str) -> None:
+        self._cooldowns.pop(f'{scope}:{user}', None)
+
+    async def process_commands(self, payload) -> None:
+        """Встроенный разбор команд twitchio выключен.
+
+        Команды разбирает свой реестр в src/core/component.py, у twitchio их
+        нет. Без этого twitchio на каждое «!…» в чате и на каждый выкуп награды
+        искал бы команду у себя и писал в лог CommandNotFound с трейсбеком.
+        Слушатели компонентов получают события отдельно и этим не задеты.
+        """
+
+    # --- жизненный цикл ---------------------------------------------------
 
     async def setup_hook(self) -> None:
         await init_db()
@@ -76,29 +103,174 @@ class Bot(commands.Bot):
         users = await self.fetch_users(logins=[Twitch.CHANNEL])
         if users:
             self._channel_id = str(users[0].id)
+            await self._add_broadcaster_token()
+            await self._sync_stream()
+        else:
+            logger.error('Канал %s не найден — проактив и отправка в чат работать не будут', Twitch.CHANNEL)
         await self.add_component(ChatComponent(self))
+        await self.add_component(RewardComponent(self._rewards))
+
+    async def _add_broadcaster_token(self) -> None:
+        """Токен канала для наград. Проверяем, что он того канала и с нужным правом.
+
+        Сначала берём то, что twitchio уже загрузил из .tio.tokens.json: после
+        авторизации по ссылке токен попадает туда при штатной остановке, и он
+        свежее значений в .env, которые twitchio после обновления не трогает.
+        Там пусто — берём из .env.
+
+        Без проверки чужой или урезанный токен всплыл бы только при первом
+        выкупе — невнятной ошибкой Twitch посреди эфира.
+        """
+        if not Rewards.ENABLED:
+            return
+        stored = self._http._tokens.get(self._channel_id)
+        if stored:
+            token, refresh = stored['token'], stored['refresh']
+        elif Twitch.BROADCASTER_TOKEN and Twitch.BROADCASTER_REFRESH:
+            token, refresh = Twitch.BROADCASTER_TOKEN, Twitch.BROADCASTER_REFRESH
+        else:
+            return
+        try:
+            payload = await self.add_token(token, refresh)
+        except Exception as e:
+            logger.warning('Токен канала не принят, награды за баллы выключены: %s', e)
+            return
+        if str(payload.user_id) != self._channel_id:
+            logger.warning(
+                'TWITCH_BROADCASTER_TOKEN выдан аккаунту %s, а не каналу %s — награды за баллы выключены',
+                payload.login, Twitch.CHANNEL,
+            )
+            return
+        if REWARDS_SCOPE not in payload.scopes:
+            logger.warning('В токене канала нет права %s — награды за баллы выключены', REWARDS_SCOPE)
+            return
+        self._broadcaster_token = True
+
+    # --- эфир -------------------------------------------------------------
+
+    async def fetch_live_stream(self) -> tuple[str, float] | None:
+        """Идущий эфир канала по данным Twitch: (id, начало) или None. Ошибки не глотает."""
+        streams = await self.fetch_streams(user_ids=[self._channel_id], type='live')
+        if not streams:
+            return None
+        return streams[0].id, streams[0].started_at.timestamp()
+
+    async def _sync_stream(self) -> None:
+        """Идёт ли эфир прямо сейчас.
+
+        События о том, что случилось, пока бот был выключен, уже не придут:
+        стрим мог начаться или закончиться без него. Ошибка запроса — считаем,
+        что эфира нет, а сверка watch_stream() поправит через несколько минут.
+        """
+        try:
+            live = await self.fetch_live_stream()
+        except Exception:
+            logger.exception('Не удалось узнать, идёт ли эфир — считаю, что нет, сверка поправит')
+            return
+        if live:
+            await self.stream.online(*live)
+        else:
+            await self.stream.settle_missed_end()
+
+    async def stream_went_online(self, stream_id: str, started_at: float) -> None:
+        """Эфир идёт: сессия эфира, награды открыты, бонусы по итогам прошлого."""
+        await self.stream.online(stream_id, started_at)
+        await self._rewards.set_open(True)
+        await perks.on_stream_start(self, self.session_id)
+
+    async def stream_went_offline(self) -> None:
+        """Эфир закончился: сессия по дате, игра закрыта, награды на паузе."""
+        await self.stream.offline()
+        await self._rewards.set_open(False)
+
+    async def _stream_end_from_vod(self, stream_id: str, started_at: float) -> float | None:
+        """Конец эфира по его записи в Twitch: начало записи плюс длительность.
+
+        twitchio не отдаёт у видео id эфира, поэтому запись узнаётся по времени
+        начала. Записи нет (VOD выключены) — None, трекер оценит конец по чату.
+        """
+        videos = await self.fetch_videos(user_id=self._channel_id, type='archive', first=5)
+        for video in videos:
+            if abs(video.created_at.timestamp() - started_at) <= VOD_MATCH_SECONDS:
+                return video.created_at.timestamp() + _duration_seconds(video.duration)
+        return None
+
+    async def event_stream_online(self, payload) -> None:
+        # Повтор трансляции и премьера — не эфир со стримером
+        if payload.type != 'live':
+            return
+        try:
+            await self.stream_went_online(payload.id, payload.started_at.timestamp())
+        except Exception:
+            logger.exception('Начало эфира не обработано')
+
+    async def event_stream_offline(self, payload) -> None:
+        try:
+            await self.stream_went_offline()
+        except Exception:
+            logger.exception('Конец эфира не обработан')
 
     async def event_ready(self) -> None:
         users = await self.fetch_users(ids=[self.bot_id])
         if users:
             self._bot_name = users[0].name
-        logger.info('Bot started | Username: %s | Session: %s', self._bot_name or self.bot_id, self.session_id)
+        logger.info('Бот запущен | Ник: %s | Сессия: %s', self._bot_name or self.bot_id, self.session_id)
         try:
             await self._subscribe_to_chat()
         except Exception as e:
-            logger.warning('Failed to subscribe to chat: %s', e)
-            logger.info(
-                'No token found. Open in browser and log in as the bot account:\n'
-                'http://localhost:4343/oauth?scopes=user:read:chat+user:write:chat+user:bot&force_verify=true'
+            logger.warning('Не удалось подписаться на чат: %s', e)
+            logger.warning(
+                'Токена нет. Открой в браузере и войди под аккаунтом бота:\n'
+                'http://localhost:4343/oauth?scopes=%s&force_verify=true', OAUTH_SCOPES,
             )
-        if Proactive.ENABLED and self._channel_id:
-            if not (self._proactive_task and not self._proactive_task.done()):
-                self._proactive_task = asyncio.create_task(self._proactive_loop())
-                logger.info('Proactive messages enabled (every %d min)', Proactive.INTERVAL_MINUTES)
-        if Emote.SPAM_ENABLED and self._channel_id and Emote.get_list():
-            if not (self._emote_spam_task and not self._emote_spam_task.done()):
-                self._emote_spam_task = asyncio.create_task(self._emote_spam_loop())
-                logger.info('Emote spam enabled (every %d min)', Emote.SPAM_INTERVAL_MINUTES)
+        self._start_background_tasks()
+        await self._start_rewards()
+        if self.stream_live:
+            # Бонусы по итогам прошлого эфира. Выданное второй раз не выдаётся,
+            # поэтому перезапуск и переподключение посреди стрима их не задвоят
+            await perks.on_stream_start(self, self.session_id)
+
+    def _start_background_tasks(self) -> None:
+        if not self._channel_id:
+            if Proactive.ENABLED or Emote.SPAM_ENABLED or Rewards.ENABLED:
+                logger.warning('ID канала не получен — фоновые задачи не запущены')
+            return
+        # Сверка с Twitch ловит пропущенные начало и конец эфира
+        if not _running(self._stream_watch_task):
+            self._stream_watch_task = asyncio.create_task(watch_stream(self))
+        if Proactive.ENABLED and not _running(self._proactive_task):
+            self._proactive_task = asyncio.create_task(proactive_loop(self))
+            logger.info('Проактивные сообщения включены (раз в %d мин)', Proactive.INTERVAL_MINUTES)
+        # Проклятия бывают от наград и от итогов прошлого эфира
+        if (Rewards.ENABLED or Roll.PERKS_ENABLED) and not _running(self._curse_lift_task):
+            self._curse_lift_task = asyncio.create_task(curse_lift_loop(self))
+            logger.info('Оповещения о снятии проклятий включены')
+        if Emote.SPAM_ENABLED and not _running(self._emote_spam_task):
+            if Content.items('emotes'):
+                self._emote_spam_task = asyncio.create_task(emote_spam_loop(self))
+                logger.info('Спам эмотами включён (раз в %d мин)', Emote.SPAM_INTERVAL_MINUTES)
+            else:
+                logger.warning(
+                    'EMOTE_SPAM_ENABLED=true, но список эмотов в CONTENT.md пуст — '
+                    'задача не запущена'
+                )
+
+    async def _start_rewards(self) -> None:
+        # event_ready приходит и после переподключения — start() это переживает
+        if not Rewards.ENABLED or self._rewards.active or not self._channel_id:
+            return
+        if not self._broadcaster_token:
+            logger.warning(
+                'Награды за баллы канала выключены: нет токена канала. Открой в браузере '
+                'и войди под аккаунтом канала %s:\n'
+                'http://localhost:4343/oauth?scopes=%s&force_verify=true',
+                Twitch.CHANNEL, REWARDS_SCOPE,
+            )
+            return
+        try:
+            await self._rewards.start(self._channel_id, open_=self.stream_live)
+        except Exception:
+            logger.exception('Награды за баллы канала не запущены')
 
     async def event_oauth_authorized(self, payload: twitchio.authentication.UserTokenPayload):
         await self.add_token(payload.access_token, payload.refresh_token)
@@ -110,77 +282,48 @@ class Bot(commands.Bot):
             )
             if self._channel_id:
                 await self._subscribe_to_chat()
+        elif self._channel_id and str(payload.user_id) == self._channel_id:
+            print(
+                f'\nAdd to .env:\n'
+                f'TWITCH_BROADCASTER_TOKEN={payload.access_token}\n'
+                f'TWITCH_BROADCASTER_REFRESH={payload.refresh_token}\n'
+            )
+            self._broadcaster_token = True
+            await self._start_rewards()
 
-    async def _send_chat_message(self, text: str) -> None:
-        await self._http.post_chat_message(
-            broadcaster_id=self._channel_id,
-            sender_id=str(self.bot_id),
-            message=text,
-            token_for=str(self.bot_id),
-        )
+    async def close(self, **options) -> None:
+        # Награды на паузу до закрытия HTTP-сессии: без бота выкуп списал бы
+        # баллы, а применить его было бы некому
+        await self._rewards.stop()
+        await super().close(**options)
 
-    async def _proactive_loop(self) -> None:
-        await asyncio.sleep(Proactive.INTERVAL_MINUTES * 60)
-        while True:
-            try:
-                recent_chat = await get_recent_chat(self.session_id, Context.CHAT_MESSAGES)
-                if not recent_chat:
-                    await asyncio.sleep(Proactive.INTERVAL_MINUTES * 60)
-                    continue
-
-                random_knowledge = await get_random_knowledge(Context.KNOWLEDGE_RANDOM)
-                active_users = list({u for u, _ in recent_chat[-20:]})
-                target_user = random.choice(active_users) if active_users else None
-
-                if target_user and random.random() < 0.5:
-                    event_prompt = f'Прокомментируй что-то про @{target_user} на основе того что он писал в чате. Коротко, 1 предложение.'
-                else:
-                    event_prompt = 'Скажи что-то в чат от себя. Можешь прокомментировать обсуждение или сказать что-то рандомное. 1 предложение.'
-
-                ctx = (
-                    ContextBuilder()
-                    .add_chat(recent_chat)
-                    .add_lines('Язык чата', random_knowledge)
-                    .add_raw(event_prompt)
-                )
-                gen_config = make_gen_config()
-                text = await generate(ctx.build(), gen_config)
-                if text:
-                    text = re.sub(r'\s{2,}', ' ', text).strip()
-                    if len(text) > TWITCH_MSG_MAX:
-                        text = text[:TWITCH_MSG_MAX - 3] + '...'
-                    if random.random() < Caps.PROBABILITY:
-                        text = caps_preserve_mentions(text)
-                    text = _maybe_add_emote(text)
-                    await self._send_chat_message(text)
-                    await save_bot_interaction(self.session_id, '_proactive_', event_prompt, text)
-            except Exception:
-                logger.exception('Proactive message failed')
-            await asyncio.sleep(Proactive.INTERVAL_MINUTES * 60)
-
-    async def _emote_spam_loop(self) -> None:
-        await asyncio.sleep(Emote.SPAM_INTERVAL_MINUTES * 60)
-        while True:
-            try:
-                emotes = Emote.get_list()
-                if emotes:
-                    count = random.randint(1, 5)
-                    sample = random.sample(emotes, min(count, len(emotes))) if len(emotes) >= count else random.choices(emotes, k=count)
-                    await self._send_chat_message(' '.join(sample))
-            except Exception:
-                logger.exception('Emote spam failed')
-            await asyncio.sleep(Emote.SPAM_INTERVAL_MINUTES * 60)
+    async def send_chat_message(self, text: str) -> bool:
+        """Отправка без реплая (HTTP API). True — если ушло."""
+        if not self._channel_id:
+            logger.warning('Отправка невозможна: ID канала не получен')
+            return False
+        try:
+            await self._http.post_chat_message(
+                broadcaster_id=self._channel_id,
+                sender_id=str(self.bot_id),
+                message=text,
+                token_for=str(self.bot_id),
+            )
+            return True
+        except Exception:
+            logger.exception('Не удалось отправить сообщение в чат')
+            return False
 
     async def _subscribe_to_chat(self) -> None:
         if not self._channel_id:
-            logger.error('Failed to get channel ID')
+            logger.error('ID канала не получен, подписка невозможна')
             return
         sub = eventsub.ChatMessageSubscription(
             broadcaster_user_id=self._channel_id,
             user_id=str(self.bot_id),
         )
         await self.subscribe_websocket(sub, as_bot=True)
-        logger.info('Subscribed to chat #%s', Twitch.CHANNEL)
+        logger.info('Подписка на чат #%s', Twitch.CHANNEL)
 
         try:
             follow_sub = eventsub.ChannelFollowSubscription(
@@ -188,395 +331,42 @@ class Bot(commands.Bot):
                 moderator_user_id=str(self.bot_id),
             )
             await self.subscribe_websocket(follow_sub, as_bot=True)
-            logger.info('Subscribed to follow events')
+            logger.info('Подписка на фоловы')
         except Exception as e:
             logger.warning(
-                'Failed to subscribe to follows: %s\n'
-                'Re-auth: http://localhost:4343/oauth?scopes=user:read:chat+user:write:chat+user:bot+moderator:read:followers&force_verify=true',
-                e,
+                'Не удалось подписаться на фоловы: %s\n'
+                'Переавторизация: http://localhost:4343/oauth?scopes=%s&force_verify=true',
+                e, OAUTH_SCOPES_FOLLOWS,
             )
-
-
-class ChatComponent(commands.Component):
-
-    def __init__(self, bot: Bot):
-        self.bot = bot
-        self._registry = CommandRegistry()
-        self._registry.add(HELP_TRIGGER,    self._handle_help)
-        self._registry.add(STATS_TRIGGER,   self._handle_stats)
-        self._registry.add(ROLL_TRIGGER,      self._handle_roll)
-        self._registry.add(ROLL_INFO_TRIGGER, self._handle_roll_info)
-        self._registry.add(EMOTE_TRIGGER,     self._handle_emote)
-        self._registry.add(SUMMARY_TRIGGER, self._handle_summary)
-        self._registry.add(WHO_TRIGGER,     self._handle_who,    prefix=True)
-        self._registry.add(VERSUS_TRIGGER,  self._handle_versus, prefix=True)
-        self._registry.add(DEFACT_TRIGGER,  self._handle_defact, prefix=True, role='vip_mod_broadcaster')
-        self._registry.add(FACT_TRIGGER,    self._handle_fact,   prefix=True, role='vip_mod_broadcaster')
-        self._registry.add(ASK_TRIGGER,     self._handle_ask,    prefix=True)
-
-    @commands.Component.listener()
-    async def event_message(self, message: twitchio.ChatMessage) -> None:
-        if str(message.chatter.id) == str(self.bot.bot_id):
-            return
-
-        if not self.bot._bot_name:
-            return
-
-        session_id = self.bot.session_id
-        await save_chat_message(session_id, message.chatter.name, message.text)
-
-        bot_tag = f'@{self.bot._bot_name}'
-        is_mention = bot_tag.lower() in message.text.lower()
-        is_sosur = bool(SOSUR_RE.search(message.text))
-        reply = getattr(message, 'reply', None)
-        is_reply = reply is not None and str(getattr(reply, 'parent_user_id', '')) == str(self.bot.bot_id)
-        if not (is_mention or is_sosur or is_reply):
-            return
-
-        user = message.chatter.name
-        now = time.time()
-
-        if not message.chatter.broadcaster and user in self.bot._cooldowns:
-            remaining = self.bot._cooldowns[user] - now
-            if remaining > 0:
-                await message.respond(
-                    f'@{user}, {Cooldown.MESSAGE.format(seconds=int(remaining) + 1)}'
-                )
-                return
-
-        original_text = message.text
-        prompt = message.text.lower()
-        prompt = re.sub(re.escape(bot_tag.lower()), '', prompt)
-        prompt = SOSUR_RE.sub('', prompt).strip()
-        if not prompt:
-            prompt = message.text.lower().strip()
-
-        ctx = CommandContext(
-            message=message,
-            user=user,
-            prompt=prompt,
-            original_text=original_text,
-            session_id=session_id,
-            bot=self.bot,
-        )
-
-        entry = self._registry.resolve(prompt)
-        if entry:
-            if entry.role == 'vip_mod_broadcaster':
-                chatter = message.chatter
-                if not (chatter.vip or chatter.moderator or chatter.broadcaster):
-                    await message.respond(f'@{user}, факты доступны только VIP, модераторам и стримеру.')
-                    return
-            await entry.handler(ctx)
-            return
-
-        await self._handle_default(ctx)
-
-    async def _handle_help(self, ctx: CommandContext) -> None:
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
-        await ctx.message.respond(
-            f'@{ctx.user}: '
-            '!roll — ролл 1-100 (кто меньше — залупа стрима) | '
-            '!roll-info — текущая залупа стрима | '
-            '!emote — рандомный эмот | '
-            '!fact <факт> — запомнить | '
-            '!defact <факт> — забыть | '
-            '!ask <вопрос> — ответ по факту | '
-            '!stat — статистика | '
-            '!summary — саммари чата | '
-            '!who <ник> — досье на юзера | '
-            '!versus <ник1> <ник2> — баттл'
-        )
-
-    async def _handle_stats(self, ctx: CommandContext) -> None:
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
-        (msgs, interactions), (total_msgs, total_interactions, total_sessions) = await asyncio.gather(
-            get_session_stats(ctx.session_id),
-            get_total_stats(),
-        )
-        await ctx.message.respond(
-            f'@{ctx.user}: сессия {ctx.session_id} — '
-            f'сообщений: {msgs}, обращений: {interactions} | '
-            f'всего за {total_sessions} сессий — '
-            f'сообщений: {total_msgs}, обращений: {total_interactions}'
-        )
-
-    async def _handle_roll(self, ctx: CommandContext) -> None:
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
-        value = random.randint(1, 100)
-        await save_roll(ctx.session_id, ctx.user, value)
-        loser = await get_session_loser(ctx.session_id)
-        if loser is None:
-            await ctx.message.respond(f'@{ctx.user}, ошибка при сохранении ролла.')
-            return
-        loser_name, loser_val = loser
-        if loser_name == ctx.user:
-            text = Roll.LOSER_SELF.format(user=ctx.user, value=value)
-        else:
-            text = Roll.LOSER_OTHER.format(user=ctx.user, value=value, loser=loser_name, loser_val=loser_val)
-        await ctx.message.respond(text)
-
-    async def _handle_roll_info(self, ctx: CommandContext) -> None:
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
-        loser = await get_session_loser(ctx.session_id)
-        if loser is None:
-            await ctx.message.respond(f'@{ctx.user}, {Roll.INFO_NO_ROLLS}')
-        else:
-            loser_name, loser_val = loser
-            text = Roll.INFO_LOSER.format(loser=loser_name, loser_val=loser_val)
-            await ctx.message.respond(f'@{ctx.user}, {text}')
-
-    async def _handle_emote(self, ctx: CommandContext) -> None:
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
-        emotes = Emote.get_list()
-        if not emotes:
-            await ctx.message.respond(f'@{ctx.user}, emotes.txt пустой или не найден')
-            return
-        emote = random.choice(emotes)
-        count = random.randint(1, 5)
-        await self.bot._send_chat_message(' '.join([emote] * count))
-
-    async def _handle_summary(self, ctx: CommandContext) -> None:
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.COMMAND_SECONDS
-        try:
-            recent_chat = await get_recent_chat(ctx.session_id, 500)
-            if not recent_chat:
-                await ctx.message.respond(f'@{ctx.user}, в этой сессии пока нет сообщений.')
-                return
-            chat_lines = '\n'.join(f'{u}: {m}' for u, m in recent_chat)
-            base_prompt = Gemini.get_system_instruction() or ''
-            summary_instruction = (
-                f'{base_prompt}\n\n'
-                '--- РЕЖИМ САММАРИ ---\n'
-                'Сейчас ты делаешь саммари чата за сессию. '
-                'Сохраняй свой стиль и характер, но при этом саммари должно быть по делу. '
-                'Перечисли основные темы, ключевые моменты и кто что обсуждал. '
-                'Можешь добавить свои комментарии в своём стиле, но факты должны быть точными. '
-                'Plain text, без markdown. Максимум 900 символов.'
-            )
-            summary_config = types.GenerateContentConfig(
-                system_instruction=summary_instruction,
-                temperature=1.2,
-                safety_settings=SAFETY_OFF,
-            )
-            text = await generate(
-                f'Сделай краткое саммари этого чата стрима (сессия {ctx.session_id}, {len(recent_chat)} сообщений):\n\n{chat_lines}',
-                summary_config,
-            )
-            await self._send_chunked(ctx.message, ctx.user, text, '[summary]', ctx.session_id)
-        except Exception:
-            logger.exception('Gemini !summary failed for user %s', ctx.user)
-            await ctx.message.respond(f'@{ctx.user}, ошибка при генерации саммари.')
-
-    async def _handle_who(self, ctx: CommandContext) -> None:
-        who_args = ctx.prompt[len(WHO_TRIGGER):].lstrip(':').strip().split()
-        target = who_args[0].lstrip('@') if who_args else ''
-        if not target:
-            await ctx.message.respond(f'@{ctx.user}, укажи ник: !who <ник>')
-            return
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.COMMAND_SECONDS
-        try:
-            target_facts, target_msgs, target_interactions = await asyncio.gather(
-                get_relevant_facts(target, ''),
-                get_user_messages(target, Context.WHO_MESSAGES),
-                get_user_interactions(target, 10),
-            )
-            if not target_facts and not target_msgs and not target_interactions:
-                await ctx.message.respond(f'@{ctx.user}, не знаю ничего про @{target}.')
-                return
-            prompt_ctx = (
-                ContextBuilder()
-                .add_facts(target_facts, f'Факты про {target}')
-                .add_user_messages(f'Сообщения {target} в чате', target_msgs)
-                .add_interactions(f'Прошлые обращения {target} к боту', target, target_interactions)
-                .add_raw(
-                    f'{ctx.user} спрашивает: составь досье на @{target}. '
-                    f'Опиши его личность, интересы, стиль общения, о чём пишет в чате. '
-                    f'Будь конкретным — ссылайся на реальные сообщения и факты. '
-                    f'Ужми всё в 1-3 предложения, максимум 400 символов.'
-                )
-            )
-            text = await generate(prompt_ctx.build(), make_gen_config())
-            if text:
-                text = cleanup_response(text, ctx.user, WHO_VERSUS_MAX)
-            if not text:
-                await ctx.message.respond(f'@{ctx.user}, не удалось описать @{target}.')
-                return
-            if is_caps(ctx.original_text) or random.random() < Caps.PROBABILITY:
-                text = caps_preserve_mentions(text)
-            text = _maybe_add_emote(text, WHO_VERSUS_MAX)
-            await ctx.message.respond(f'@{ctx.user}: {text}')
-            await save_bot_interaction(ctx.session_id, ctx.user, f'[who] {target}', text)
-        except Exception:
-            logger.exception('Gemini !who failed for user %s', ctx.user)
-            await ctx.message.respond(f'@{ctx.user}, ошибка при генерации.')
-
-    async def _handle_versus(self, ctx: CommandContext) -> None:
-        args = ctx.prompt[len(VERSUS_TRIGGER):].lstrip(':').strip().split()
-        nicks = list(dict.fromkeys(a.lstrip('@') for a in args if a.lstrip('@')))
-        if len(nicks) < 2:
-            await ctx.message.respond(f'@{ctx.user}, нужны два разных ника: !versus <ник1> <ник2>')
-            return
-        nick1, nick2 = nicks[0], nicks[1]
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.COMMAND_SECONDS
-        try:
-            facts1, msgs1, interactions1, facts2, msgs2, interactions2 = await asyncio.gather(
-                get_relevant_facts(nick1, ''),
-                get_user_messages(nick1, Context.VERSUS_MESSAGES),
-                get_user_interactions(nick1, 10),
-                get_relevant_facts(nick2, ''),
-                get_user_messages(nick2, Context.VERSUS_MESSAGES),
-                get_user_interactions(nick2, 10),
-            )
-            if not any([facts1, msgs1, interactions1, facts2, msgs2, interactions2]):
-                await ctx.message.respond(f'@{ctx.user}, нет данных ни про @{nick1}, ни про @{nick2}.')
-                return
-            prompt_ctx = ContextBuilder()
-            for nick, facts, msgs, ints in [(nick1, facts1, msgs1, interactions1),
-                                            (nick2, facts2, msgs2, interactions2)]:
-                prompt_ctx.add_facts(facts, f'Факты про {nick}')
-                prompt_ctx.add_user_messages(f'Сообщения {nick} в чате', msgs)
-                prompt_ctx.add_interactions(f'Прошлые обращения {nick} к боту', nick, ints)
-            prompt_ctx.add_raw(
-                f'{ctx.user} спрашивает: сравни @{nick1} и @{nick2}. '
-                f'Опиши каждого — личность, интересы, стиль общения, о чём пишут в чате. '
-                f'Ссылайся на конкретные сообщения и факты. '
-                f'Выбери победителя и объясни почему. Максимум 420 символов.'
-            )
-            text = await generate(prompt_ctx.build(), make_gen_config())
-            if text:
-                text = cleanup_response(text, ctx.user, WHO_VERSUS_MAX)
-            if not text:
-                await ctx.message.respond(f'@{ctx.user}, не удалось сравнить.')
-                return
-            if is_caps(ctx.original_text) or random.random() < Caps.PROBABILITY:
-                text = caps_preserve_mentions(text)
-            text = _maybe_add_emote(text, WHO_VERSUS_MAX)
-            await ctx.message.respond(f'@{ctx.user}: {text}')
-            await save_bot_interaction(ctx.session_id, ctx.user, f'[versus] {nick1} vs {nick2}', text)
-        except Exception:
-            logger.exception('Gemini !versus failed for user %s', ctx.user)
-            await ctx.message.respond(f'@{ctx.user}, ошибка при генерации.')
-
-    async def _handle_defact(self, ctx: CommandContext) -> None:
-        query = ctx.prompt[len(DEFACT_TRIGGER):].lstrip(':').strip()
-        if query:
-            result = await delete_fact(ctx.user, query)
-            if result is None:
-                await ctx.message.respond(f'@{ctx.user}, такого факта нет.')
-            elif isinstance(result, list):
-                preview = ' | '.join(f[:50] for f in result[:5])
-                await ctx.message.respond(f'@{ctx.user}, нашёл {len(result)} фактов, уточни: {preview}')
-            else:
-                await ctx.message.respond(f'@{ctx.user}, забыл: {result[:80]}')
-
-    async def _handle_fact(self, ctx: CommandContext) -> None:
-        fact = ctx.prompt[len(FACT_TRIGGER):].lstrip(':').strip()
-        if fact:
-            await save_fact(ctx.user, fact)
-            await ctx.message.respond(f'@{ctx.user}, запомнил.')
-
-    async def _handle_ask(self, ctx: CommandContext) -> None:
-        ask_prompt = ctx.prompt[len(ASK_TRIGGER):].lstrip(':').strip()
-        if not ask_prompt:
-            return
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.COMMAND_SECONDS
-        try:
-            ask_config = types.GenerateContentConfig(
-                system_instruction=(
-                    'Отвечай кратко и по существу, plain text без форматирования. '
-                    'ЗАПРЕЩЕНО: markdown, звёздочки, решётки, списки, нумерация, буллеты. '
-                    'Пиши сплошным текстом. Максимум 900 символов.'
-                ),
-                temperature=Gemini.TEMPERATURE,
-                safety_settings=SAFETY_OFF,
-            )
-            text = await generate(ask_prompt, ask_config)
-            await self._send_chunked(ctx.message, ctx.user, text, f'[ask] {ask_prompt}', ctx.session_id)
-        except Exception:
-            logger.exception('Gemini !ask failed for user %s', ctx.user)
-            await ctx.message.respond(f'@{ctx.user}, ошибка при генерации ответа.')
-
-    async def _handle_default(self, ctx: CommandContext) -> None:
-        self.bot._cooldowns[ctx.user] = time.time() + Cooldown.SECONDS
-        facts, recent_chat, context_results, random_knowledge = await asyncio.gather(
-            get_relevant_facts(ctx.user, ctx.prompt),
-            get_recent_chat(ctx.session_id, Context.CHAT_MESSAGES),
-            search_context(ctx.prompt, Context.SEARCH_RESULTS),
-            get_random_knowledge(Context.KNOWLEDGE_RANDOM),
-        )
-
-        prompt_ctx = (
-            ContextBuilder()
-            .add_facts(facts)
-            .add_chat(recent_chat)
-            .add_lines('Контекст канала', context_results)
-            .add_lines('Язык чата', random_knowledge)
-            .add_prompt(ctx.user, ctx.prompt)
-        )
 
         try:
-            gen_config = make_gen_config()
-            text = await generate(prompt_ctx.build(), gen_config)
-            if not text:
-                logger.warning('Empty response for user %s, retrying without knowledge context', ctx.user)
-                text = await generate(prompt_ctx.build_without('Язык чата', 'Контекст канала'), gen_config)
-            if text:
-                text = cleanup_response(text, ctx.user, TWITCH_MSG_MAX)
-            if text:
-                if is_caps(ctx.original_text) or random.random() < Caps.PROBABILITY:
-                    text = caps_preserve_mentions(text)
-                text = _maybe_add_emote(text)
-                await ctx.message.respond(f'@{ctx.user}: {text}')
-                await save_bot_interaction(ctx.session_id, ctx.user, ctx.prompt, text)
-            else:
-                logger.warning('Empty response after retry for user %s, prompt: %s', ctx.user, ctx.prompt[:100])
-                await ctx.message.respond(f'@{ctx.user}, не удалось получить ответ.')
-        except Exception:
-            logger.exception('Gemini generation failed for user %s', ctx.user)
-            await ctx.message.respond(f'@{ctx.user}, произошла ошибка при генерации ответа.')
+            for stream_sub in (
+                eventsub.StreamOnlineSubscription(broadcaster_user_id=self._channel_id),
+                eventsub.StreamOfflineSubscription(broadcaster_user_id=self._channel_id),
+            ):
+                await self.subscribe_websocket(stream_sub, as_bot=True)
+            logger.info('Подписка на начало и конец эфира')
+        except Exception as e:
+            logger.warning(
+                'Не удалось подписаться на начало и конец эфира: %s — '
+                'сессия переключится только при перезапуске бота', e,
+            )
 
-    async def _send_chunked(self, message: twitchio.ChatMessage, user: str,
-                            text: str | None, interaction_tag: str,
-                            session_id: str) -> None:
-        if not text:
-            await message.respond(f'@{user}, не удалось получить ответ.')
-            return
-        text = strip_markdown(text)
-        chunks = split_into_chunks(text)
-        sent_chunks = []
-        for i, chunk in enumerate(chunks):
-            try:
-                if i == 0:
-                    await message.respond(f'@{user}: {chunk}')
-                else:
-                    await asyncio.sleep(CHUNK_SEND_DELAY)
-                    await self.bot._send_chat_message(chunk)
-                sent_chunks.append(chunk)
-            except Exception:
-                logger.exception('Failed to send chunk %d/%d for %s', i + 1, len(chunks), interaction_tag)
-        if sent_chunks:
-            await save_bot_interaction(session_id, user, interaction_tag, ' '.join(sent_chunks))
 
-    FOLLOW_MESSAGES = [
-        '@{user} ЗАЛЕТЕЛ НА КАНАЛ. СОСУРИТИ, ФИКСИРУЕМ ПРОНИКНОВЕНИЕ',
-        '@{user} ЗАФИКСИРОВАН В СИСТЕМЕ. ДОБРО ПОЖАЛОВАТЬ В РОДНУЮ ГАВАНЬ',
-        '@{user} ТЕПЕРЬ В КИТЕЖ-ГРАДЕ. ОБРАТНОЙ ДОРОГИ НЕТ',
-    ]
+def _running(task: asyncio.Task | None) -> bool:
+    return task is not None and not task.done()
 
-    @commands.Component.listener()
-    async def event_follow(self, payload: twitchio.ChannelFollow) -> None:
-        try:
-            user = payload.user.name
-            text = random.choice(self.FOLLOW_MESSAGES).format(user=user)
-            await payload.respond(text)
-            await save_bot_interaction(self.bot.session_id, user, '[follow]', text)
-        except Exception:
-            logger.exception('event_follow failed')
+
+def _duration_seconds(duration: str) -> int:
+    """Длительность видео Twitch вида «3h8m33s» в секундах."""
+    units = {'h': 3600, 'm': 60, 's': 1}
+    return sum(int(value) * units[unit] for value, unit in re.findall(r'(\d+)([hms])', duration))
 
 
 async def run_bot() -> None:
+    setup_logging('INFO')
     validate_config()
+    validate_content()
     shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
     loop.add_signal_handler(signal.SIGTERM, shutdown_event.set)
@@ -589,7 +379,7 @@ async def run_bot() -> None:
                 [bot_task, shutdown_task], return_when=asyncio.FIRST_COMPLETED,
             )
             if shutdown_task in done:
-                logger.info('Shutdown signal received, stopping...')
+                logger.info('Получен сигнал остановки, завершаюсь...')
                 bot_task.cancel()
                 try:
                     await bot_task
@@ -600,7 +390,7 @@ async def run_bot() -> None:
 
 
 if __name__ == '__main__':
-    from src.cli import main as cli_main
+    from src.cli.main import main as cli_main
     if not cli_main():
         try:
             asyncio.run(run_bot())

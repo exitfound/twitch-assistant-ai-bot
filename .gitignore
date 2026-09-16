@@ -10,3 +10,5 @@ ChatExport*.zip
 import_tg_*.py
 .claude/settings.local.json
 .claude/memory/
+chat_history.backup-*.db
+*.log

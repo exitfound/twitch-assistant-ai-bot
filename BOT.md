@@ -10,6 +10,8 @@
 
 Точка входа — `bot.py`, функция `run_bot()`. Бот запускается через `asyncio.run()`.
 
+`bot.py` содержит только класс `Bot` и запуск. Остальное разнесено по модулям: диспетчер сообщений — `src/core/component.py`, обработчики команд — `src/local/commands.py`, `src/gemini/commands.py` и `src/local/roll/command.py`, фоновые циклы — `src/gemini/proactive.py`, `src/local/emote_spam.py` и `src/local/roll/announce.py`, отправка ответа — `src/gemini/responder.py`. Пакеты разложены по назначению: `core` — каркас, `gemini` — всё с запросом к Gemini, `local` — возможности сосуряна без Gemini, включая игру `local/roll` со своими таблицами и наградами, `cli` — команды командной строки.
+
 ```
 asyncio.run(run_bot())
   └─ Bot() — создание экземпляра
@@ -18,38 +20,50 @@ asyncio.run(run_bot())
 ```
 
 При создании `Bot()` инициализируются:
-- `_cooldowns = {}` — словарь `{username: expiry_time}` для per-user кулдаунов (хранит время истечения, не время начала)
+- `_cooldowns = {}` — словарь `{область:username → expiry_time}` для per-user кулдаунов (хранит время истечения, не время начала). Область — класс команды: `local` или `gemini`
 - `_bot_name = None` — имя бота (заполняется позже из Twitch API)
 - `_channel_id = None` — числовой ID канала стримера (заполняется позже)
 - `_proactive_task = None` — ссылка на asyncio-таск проактивного цикла (для reconnect guard)
 - `_emote_spam_task = None` — ссылка на asyncio-таск спама эмотами (для reconnect guard)
+- `_curse_lift_task = None` — ссылка на asyncio-таск оповещений о снятии проклятия (для reconnect guard)
+- `_rewards = RewardService(self)` — награды за баллы канала, см. [Награды за баллы канала](#награды-за-баллы-канала)
+- `_broadcaster_token = False` — принят ли токен владельца канала
 
 ### setup_hook (до подключения к Twitch)
 
-1. **`init_db()`** — открывает SQLite-подключение, создаёт таблицы если их нет
+1. **`init_db()`** — открывает SQLite-подключение, создаёт таблицы если их нет, прогоняет миграции
 2. **Загрузка токена** — если `TWITCH_BOT_TOKEN` и `TWITCH_BOT_REFRESH` заданы в `.env`, добавляет их в twitchio через `add_token()`
 3. **Получение ID канала** — `fetch_users(logins=[CHANNEL])` → сохраняет числовой ID стримера в `_channel_id`
-4. **Регистрация ChatComponent** — `add_component(ChatComponent(self))`
+4. **Токен канала** — `_add_broadcaster_token()`: токен канала берётся из хранилища twitchio (оно загружено из `.tio.tokens.json` ещё до `setup_hook`), а если там его нет — из `TWITCH_BROADCASTER_TOKEN` и `_REFRESH`. Файл в приоритете: twitchio пишет туда обновлённый токен, а `.env` не трогает. Токен добавляется и проверяется — владелец должен совпасть с каналом, в правах должен быть `channel:manage:redemptions`. Чужой или урезанный токен иначе всплыл бы только при первом выкупе, невнятной ошибкой посреди эфира
+4а. **Эфир** — `_sync_stream()`: `fetch_streams(type='live')`. Стрим идёт — `StreamTracker.online()` с id эфира: знакомый id (перезапуск) и новый id вскоре после конца прошлого (обрыв) продолжают прежнюю сессию. Стрима нет — `settle_missed_end()` закрывает эфир, конец которого бот не видел, по записи эфира в Twitch, а без неё — по последнему сообщению чата в его сессии
+5. **Регистрация компонентов** — `add_component(ChatComponent(self))` и `add_component(RewardComponent(self._rewards))`
 
 ### event_ready (после подключения к Twitch)
 
 1. **Получение имени бота** — `fetch_users(ids=[bot_id])` → сохраняет ник в `_bot_name`
 2. **Подписка на чат и события** — `_subscribe_to_chat()` создаёт `ChatMessageSubscription` + `ChannelFollowSubscription` через EventSub WebSocket
-3. **Запуск проактивного цикла** — если `PROACTIVE_ENABLED=true` и `_channel_id` известен, создаёт `asyncio.create_task(_proactive_loop())`. Reconnect guard: если таск уже запущен (`_proactive_task.done() == False`), повторный `event_ready` не создаёт дубликат
-4. **Запуск цикла спама эмотами** — если `EMOTE_SPAM_ENABLED=true`, `_channel_id` известен и `emotes.txt` непустой, создаёт `asyncio.create_task(_emote_spam_loop())`. Аналогичный reconnect guard через `_emote_spam_task`. Оба таска стартуют **независимо** друг от друга
+3. **Запуск фоновых задач** — `_start_background_tasks()`. Четыре независимых цикла: `proactive_loop` при `PROACTIVE_ENABLED=true`, `curse_lift_loop` при `REWARDS_ENABLED=true` или `ROLL_PERKS_ENABLED=true`, `watch_stream` (сверка эфира с Twitch, `src/core/stream.py`) всегда, `emote_spam_loop` при `EMOTE_SPAM_ENABLED=true` и непустом списке `lists.emotes`. Все требуют известного `_channel_id` и стартуют **независимо** друг от друга
+4. **Reconnect guard** — если таск уже запущен (`task.done() == False`), повторный `event_ready` не создаёт дубликат. Если `_channel_id` не получен или список эмотов пуст, в лог пишется предупреждение, а не тишина
+5. **Запуск наград** — `_start_rewards()`: при `REWARDS_ENABLED=true` и принятом токене канала вызывает `RewardService.start()`. Токена нет — в лог уходит OAuth-ссылка для аккаунта канала. Повторный `event_ready` награды заново не запускает Награды открываются, только если идёт эфир
+6. **Итоги прошлого эфира** — если стрим идёт, `perks.on_stream_start()` выдаёт бонусы. Выданное второй раз не выдаётся, поэтому переподключение и перезапуск не задваивают объявление
+
+`event_oauth_authorized` различает аккаунты: для бота печатает `TWITCH_BOT_TOKEN` / `TWITCH_BOT_REFRESH` и подписывается на чат, для канала — `TWITCH_BROADCASTER_TOKEN` / `TWITCH_BROADCASTER_REFRESH` и сразу запускает награды.
 
 ### Подписка на события
 
-`_subscribe_to_chat()` подписывается на два типа EventSub-событий:
+`_subscribe_to_chat()` подписывается на три группы EventSub-событий:
 
 1. **`ChatMessageSubscription`** — сообщения чата (обязательно, `as_bot=True`)
 2. **`ChannelFollowSubscription`** — новые фолловеры (`moderator:read:followers` scope, `as_bot=True`)
+3. **`StreamOnlineSubscription`** и **`StreamOfflineSubscription`** — начало и конец эфира (`as_bot=True`, особых прав не требуют). `Bot.event_stream_online` / `event_stream_offline` переключают сессию, открывают и закрывают награды, выдают бонусы. Повтор трансляции и премьера (`type != 'live'`) эфиром не считаются
+
+Третья подписка оформляется отдельно, в `RewardService.start()`: **`ChannelPointsRedeemAddSubscription`** — выкупы наград за баллы. Она идёт токеном канала (`as_bot=False, token_for=channel_id`), поэтому twitchio держит под неё отдельный WebSocket.
 
 ### Завершение
 
-`Ctrl+C` → `KeyboardInterrupt` → блок `finally` в `run_bot()` → `close_db()` закрывает SQLite-подключение.
+`SIGINT` (`Ctrl+C`) и `SIGTERM` (от `kill`, `systemd stop`, `docker stop`) обрабатываются одинаково: `loop.add_signal_handler()` выставляет `asyncio.Event`, `run_bot()` отменяет задачу бота и через блок `finally` вызывает `close_db()`. Фоновые циклы получают `CancelledError` и пишут в лог, что остановлены.
 
-`SIGTERM` (от `kill`, `systemd stop`, `docker stop`) → `loop.stop()` через `signal handler` → корректное завершение через `finally` → `close_db()`.
+`Bot.close()` первым делом ставит награды за баллы на паузу (`RewardService.stop()`) и только потом закрывает twitchio — пока HTTP-сессия ещё жива. Без паузы выкуп при выключенном боте списал бы баллы, а применить его было бы некому.
 
 `SIGKILL` — не перехватывается (OS-level). WAL может остаться несинхронизированным, но SQLite корректно обрабатывает это при следующем подключении.
 
@@ -67,102 +81,111 @@ asyncio.run(run_bot())
 
 ### Шаг 3: Сохранение в БД
 
-Вычисляется `session_id` как локальная переменная (один раз за обработку). Передаётся параметром во все хэндлеры — не хранится как атрибут инстанса (предотвращает race condition между конкурентными корутинами в полночь).
+Вычисляется `session_id` как локальная переменная (один раз за обработку). Передаётся параметром во все хэндлеры — не хранится как атрибут инстанса: сессия переключается в момент начала и конца эфира, а корутины живут дольше. Сразу после сохранения — `perks.on_chat()`: первое сообщение игрока с бонусом запускает его отсчёт
 
 **Каждое** сообщение (кроме ботовых) сохраняется в `chat_messages` + `chat_fts` (через триггер). Безусловно, даже если не адресовано боту.
 
 ### Шаг 4: Определение триггера
 
+Сначала `_route()` ищет команду прямо в тексте сообщения (приведённом к нижнему регистру). Нашлась — это она, обращение к боту не нужно, аргументы берутся как написаны: `!who securityexpert` сохраняет ник, а не срезает его как `secur*`.
+
+Команды нет — нужен один из триггеров:
+
 1. **Mention** — `@botname` в тексте (регистронезависимо)
-2. **Сосур** — regex `сосур\w*` (регистронезависимо, Unicode)
+2. **Сосур** — regex `(?:сосур|secur)\w*` (регистронезависимо, Unicode). Список вариантов — константа `SOSUR_VARIANTS` рядом с регуляркой, новый добавляется одной строкой
 3. **Реплай** — ответ на сообщение бота (`reply.parent_user_id == bot_id`)
 
 Если ни один триггер не сработал — выход.
 
 ### Шаг 5: Кулдаун
 
-Проверяется in-memory словарь `_cooldowns` (сбрасывается при перезапуске). **Broadcaster (владелец канала) пропускает кулдаун.** Для остальных: если `expiry_time > now` — бот отвечает оставшимся временем и выходит. Два уровня кулдауна: `COOLDOWN_SECONDS` (обычные сообщения) и `COOLDOWN_COMMAND_SECONDS` (`!ask`, `!summary`, `!who`, `!versus`).
+Проверяется in-memory словарь `_cooldowns` на `Bot` (сбрасывается при перезапуске, чистится от просроченных записей при переполнении). Ключ — `область:пользователь`, где область — это **класс команды**: `local` или `gemini`. Счётчики независимы, поэтому отсидка после `!ask` не мешает нажать `!help`.
+
+Длительность зависит **только от статуса зрителя** — одна лесенка на оба класса, её считает `_cooldown_seconds()`. Статус определяет `_status_of()` в порядке broadcaster → moderator → subscriber (фаундер засчитывается) → vip → regular: саб проверяется раньше VIP, чтобы человеку с обоими значками досталась более щадящая пауза.
+
+| Статус | Пауза (оба класса) |
+|---|---|
+| broadcaster, moderator | — |
+| subscriber (и фаундер) | — |
+| vip | `COOLDOWN_VIP` (10) |
+| regular | `COOLDOWN_REGULAR` (30) |
+
+Стример, модератор и подписчик не ждут никогда: для них в конфиге нет значений, это правило, а не параметр. Значения настраиваются только для VIP и для зрителя без значков.
+
+Свободное обращение к боту (без команды) относится к классу `gemini` — оно уходит в API наравне с `!ask`, поэтому и счётчик у него общий с Gemini-командами.
+
+Обработчик, отвергающий кривой ввод, снимает кулдаун через `ctx.clear_cooldown()` — область берётся из самого `CommandContext` (поле `kind`), поэтому перепутать её нельзя.
 
 ### Шаг 6: Извлечение промпта
 
-Из текста удаляются триггеры (`@botname` и `сосур*`). Промпт приводится к нижнему регистру. Если пусто — используется исходный текст.
+Только для сообщений, где команда не нашлась в самом тексте: из него удаляются триггеры (`@botname`, `сосур*`, `secur*`), после чего команда ищется ещё раз — так работает `сосурян !who ник`. Промпт приводится к нижнему регистру. Если пусто — используется исходный текст.
 
 ### Шаг 7: Роутинг команд
 
-Строится `CommandContext(message, user, prompt, original_text, session_id, bot)` и передаётся в `CommandRegistry.resolve(prompt)`.
+`_route()` определяет команду и текст запроса, затем строится `CommandContext(message, user, prompt, original_text, session_id, bot, kind, args)`.
 
-Реестр заполняется в `ChatComponent.__init__` — 11 записей в порядке приоритета:
+Реестр заполняется в `ChatComponent.__init__` — 9 записей в порядке приоритета:
 
-| Триггер | Тип | Роль | Кулдаун |
+| Триггер | Тип | Роль | Класс |
 |---|---|---|---|
-| `!help` | exact | — | `COOLDOWN_SECONDS` |
-| `!stat` | exact | — | `COOLDOWN_SECONDS` |
-| `!roll` | exact | — | `COOLDOWN_SECONDS` |
-| `!roll-info` | exact | — | `COOLDOWN_SECONDS` |
-| `!emote` | exact | — | `COOLDOWN_SECONDS` |
-| `!summary` | exact | — | `COOLDOWN_COMMAND_SECONDS` |
-| `!who` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
-| `!versus` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
-| `!defact` | prefix | vip/mod/broadcaster | — |
-| `!fact` | prefix | vip/mod/broadcaster | — |
-| `!ask` | prefix | — | `COOLDOWN_COMMAND_SECONDS` |
+| `!help` | exact | — | local |
+| `!stat` | exact | — | local |
+| `!roll` | exact | — | local |
+| `!summary` | exact | — | **gemini** |
+| `!who` | prefix | — | **gemini** |
+| `!versus` | prefix | — | **gemini** |
+| `!defact` | prefix | vip/mod/broadcaster | local |
+| `!fact` | prefix | vip/mod/broadcaster | local |
+| `!ask` | prefix | — | **gemini** |
 
-`resolve()` сканирует записи по порядку: exact-match (`prompt == trigger`) или prefix-match (`prompt.startswith(trigger)`). Если ничего не нашлось — вызывается `_handle_default(ctx)`.
+Все команды работают голыми: матчатся прямо на исходном тексте, до проверки обращения к боту. Gemini-команды тоже — от лишних запросов к API защищает только кулдаун.
 
-Проверка роли (`vip_mod_broadcaster`) выполняется **в диспетчере** (`event_message`), а не внутри хендлера. Все хендлеры принимают единый `CommandContext` вместо разрозненных аргументов.
+`resolve()` сканирует записи по порядку: exact-match (`prompt == trigger`) либо prefix-match с проверкой границы слова — после триггера должен идти конец строки или один из разделителей ` `, `:`, `,`. Поэтому `!who ник` и `!ask:вопрос` совпадают, а `!whoever` — нет. Если ничего не нашлось, вызывается `handle_default(ctx)`.
 
-Добавление новой команды = одна строка `_registry.add(...)` в `__init__` + один метод `_handle_*`.
+Проверка роли и установка кулдауна выполняются **в диспетчере**, а не внутри обработчика: класс объявлен полем `kind` у записи реестра (`KIND_LOCAL` по умолчанию, `KIND_GEMINI` у всего, что зовёт API), и он же служит областью кулдауна. Все обработчики принимают единый `CommandContext`, аргументы команды уже вырезаны в `ctx.args`.
+
+Добавление новой команды = одна строка `add(...)` в `ChatComponent.__init__` + одна функция `handle_*` в пакете по назначению: с Gemini — `src/gemini/commands.py`, без — `src/local/commands.py`, часть большой фичи — в её подпапке внутри своего пакета (как `src/local/roll/command.py`).
 
 ### Шаг 7а: Команда `!roll`
 
 Игра «залупа стрима»:
-1. Кулдаун ставится сразу (`COOLDOWN_SECONDS`)
-2. Генерируется случайное число 1–100
-3. Сохраняется в таблицу `rolls` через `save_roll()` — `ON CONFLICT DO UPDATE` перезаписывает предыдущий результат пользователя
-4. Запрашивается текущий минимум через `get_session_loser()` — `ORDER BY roll_value ASC, rolled_at ASC` (при ничьей — кто первый скатился)
-5. Если пользователь стал залупой — ответ из `ROLL_LOSER_SELF`, иначе из `ROLL_LOSER_OTHER`
-6. В BD **не сохраняется** (нет вызова Gemini, аналогично `!stat`)
+1. Кулдаун ставится сразу (область `local`)
+2. `game.free_throw()` (`src/local/roll/game.py`) под общей блокировкой читает строку игрока из `rolls` и сверяет `free_throws` с `ROLL_FREE_PER_SESSION` (3). Стримеру хендлер передаёт `unlimited=True` (по `chatter.broadcaster`): лимит не проверяется, бросок всё равно идёт в `free_throws`, чтобы доп. ролл за баллы у него работал как у всех, а `Outcome.free_left` равен `None`
+3. Бесплатные кончились — ответ `texts.roll_no_free_reward` (награды работают, в тексте название доп. ролла) или `texts.roll_no_free`. Ролл не меняется. Стримеру этот ответ не приходит никогда
+4. Иначе генерируется число `ROLL_MIN`–`ROLL_MAX` (у проклятого — не выше его потолка, и потолок опускается, см. [Проклятие](#проклятие)) и пишется через `save_roll(..., free_throw=True)` — `ON CONFLICT DO UPDATE` перезаписывает предыдущий результат и прибавляет 1 к `free_throws`
+5. Там же, под блокировкой, запрашивается текущий минимум `get_session_loser()` — `ORDER BY roll_value ASC, rolled_at ASC, id ASC` (при ничьей — кто первый скатился)
+6. Ответ: `texts.roll_loser_self` или `texts.roll_loser_other` (у проклятого — `texts.roll_cursed_self` / `texts.roll_cursed_other`, где «из» — его потолок), через пробел — `texts.roll_free_left` (сколько бесплатных осталось; стримеру не дописывается) и, если игрок проклят, `texts.roll_curse_step` / `texts.roll_curse_hold`. Сразу после основного текста — `texts.roll_champion`: китежанин стрима, самый высокий ролл сессии (`get_session_champion()`, тайбрейк как у залупы). Его нет, если китежанин и залупа — один человек
+7. В БД `bot_interactions` **не сохраняется** (нет вызова Gemini, аналогично `!stat`)
 
-### Шаг 7б: Команда `!roll-info`
+Блокировка нужна из-за наград: переброс чужого ролла приходит не из чата, и без неё запись между чтением и записью `!roll` затёрла бы один из результатов. Проверено на копии базы: из 10 одновременных `!roll` одного игрока проходят ровно `ROLL_FREE_PER_SESSION` (при лимите 3 — три).
 
-Информация о текущей залупе:
-1. Кулдаун ставится сразу (`COOLDOWN_SECONDS`)
-2. `get_session_loser()` возвращает текущего лидера по минимуму
-3. Если роллов нет — ответ из `ROLL_INFO_NO_ROLLS`, иначе из `ROLL_INFO_LOSER`
+`roll_free_left` — отдельный ключ, а не плейсхолдер внутри `roll_loser_*`: работающий бот перечитывает `CONTENT.md` на лету, и новый плейсхолдер в старом ключе до перезапуска отправил бы в чат сырой шаблон.
 
-### Шаг 7в: Команда `!emote`
-
-Случайный эмот из `emotes.txt`:
-1. Кулдаун ставится сразу (`COOLDOWN_SECONDS`)
-2. Если список пуст — сообщение об ошибке
-3. Выбирается случайный эмот, повторяется случайное количество раз (1–5)
-4. Отправляется через `_send_chat_message()` (HTTP API) — **без ника**, просто эмоты
-
-### Шаг 7г: Команда `!summary`
+### Шаг 7в: Команда `!summary`
 
 Саммари чата текущей сессии:
 1. Кулдаун ставится сразу
 2. Загружает до 500 сообщений текущей сессии через `get_recent_chat(session_id, 500)`
 3. Если сообщений нет — «нет сообщений», return
-4. Вызов Gemini с `GenerateContentConfig`: system instruction = `prompt.txt` + дополнительный блок «РЕЖИМ САММАРИ» (основные темы, ключевые моменты, plain text, до 900 символов). Температура `1.2`. Бот сохраняет свой стиль, но факты точные
+4. Вызов Gemini с `GenerateContentConfig`: system instruction = `prompts.system` + наложенный сверху `prompts.summary` («РЕЖИМ САММАРИ») (основные темы, ключевые моменты, plain text, до 900 символов). Температура `1.2`. Бот сохраняет свой стиль, но факты точные
 5. Постобработка и chunking идентичны `!ask` (markdown strip, до 3 чанков по 450 символов)
 6. Сохраняется в `bot_interactions` с `[summary]` в `user_message`
 
-### Шаг 7д: Команда `!ask`
+### Шаг 7г: Команда `!ask`
 
 Фактический режим — Gemini без персонажа бота:
 1. Кулдаун ставится сразу
-2. Вызов Gemini с отдельным `GenerateContentConfig`: инструкция «кратко, plain text, без markdown, до 900 символов». Без `prompt.txt`, без контекстных секций
+2. Вызов Gemini с отдельным `GenerateContentConfig`: инструкция «кратко, plain text, без markdown, до 900 символов». Без `prompts.system`, без контекстных секций
 3. Из ответа удаляются: `**`, `##`, `_`, `` ` ``, буллеты (`-`, `•`), нумерация (`1.`, `2)`)
 4. Переносы строк заменяются пробелами
 5. Если ответ > 1350 символов — обрезается с `...`
 6. Разбивается на куски до 450 символов по пробелам (до 3 кусков)
 7. Первый кусок отправляется через `message.respond()` (reply с значком «Чат-бот»)
-8. Последующие куски — через `_send_chat_message()` (HTTP API) с паузой 1.5 сек
+8. Последующие куски — через `send_chat_message()` (HTTP API) с паузой 1.5 сек
 9. Каждый кусок отправляется в отдельном try/except с логированием
 10. Сохраняется в `bot_interactions` с `[ask]` префиксом в `user_message`
 
-### Шаг 7е: Команда `!who`
+### Шаг 7д: Команда `!who`
 
 Досье на юзера:
 1. Кулдаун ставится сразу
@@ -170,11 +193,11 @@ asyncio.run(run_bot())
 3. Параллельно загружает: факты (`get_relevant_facts`), сообщения за всё время (`get_user_messages`, `CONTEXT_WHO_MESSAGES`), прошлые обращения к боту (`get_user_interactions`, 10 записей)
 4. Если данных нет — «не знаю ничего», return
 5. Формирует промпт через `ContextBuilder`: секции `[Факты про {target}]`, `[Сообщения {target} в чате]`, `[Прошлые обращения {target} к боту]` + инструкция через `add_raw()`: личность, интересы, стиль, со ссылками на конкретные сообщения, 1-3 предложения, максимум 400 символов
-6. Вызов Gemini через `make_gen_config()` из `src/gemini.py` (с `prompt.txt`)
+6. Вызов Gemini через `make_gen_config()` из `src/gemini/client.py` (с `prompts.system`)
 7. `cleanup_response()` — очистка + обрезка до 420 символов. Если после cleanup пусто — «не удалось описать». CAPS по стандартным правилам
 8. Сохраняется в `bot_interactions` с `[who]` префиксом
 
-### Шаг 7ж: Команда `!versus`
+### Шаг 7е: Команда `!versus`
 
 Баттл двух юзеров:
 1. Кулдаун ставится сразу
@@ -182,7 +205,7 @@ asyncio.run(run_bot())
 3. Параллельно загружает для каждого юзера: факты (`get_relevant_facts`), сообщения за всё время (`get_user_messages`, `CONTEXT_VERSUS_MESSAGES`), прошлые обращения к боту (`get_user_interactions`, 10 записей)
 4. Если данных нет ни про одного — «нет данных», return
 5. Формирует промпт через `ContextBuilder`: для каждого юзера добавляет секции `[Факты про {nick}]`, `[Сообщения {nick} в чате]`, `[Прошлые обращения {nick} к боту]` + инструкция через `add_raw()`: описать личность/интересы/стиль каждого, сослаться на конкретные сообщения, выбрать победителя, максимум 420 символов
-6. Вызов Gemini через `make_gen_config()` из `src/gemini.py` (с `prompt.txt`)
+6. Вызов Gemini через `make_gen_config()` из `src/gemini/client.py` (с `prompts.system`)
 7. `cleanup_response()` — очистка + обрезка до 420 символов. Если после cleanup пусто — «не удалось сравнить». CAPS по стандартным правилам
 8. Сохраняется в `bot_interactions` с `[versus]` префиксом
 
@@ -199,21 +222,23 @@ facts, recent_chat, context_results, random_knowledge = await asyncio.gather(
 )
 ```
 
-После сбора данные передаются в `ContextBuilder` из `src/context.py`, который собирает итоговый промпт:
+После сбора данные передаются в `ContextBuilder` из `src/gemini/context.py`, который собирает итоговый промпт:
 
 ```python
 ctx = (
     ContextBuilder()
-    .add_facts(facts)
-    .add_chat(recent_chat)
-    .add_lines('Контекст канала', context_results)
-    .add_lines('Язык чата', random_knowledge)
-    .add_prompt(user, prompt)
+    .add_facts(Content.label('facts'), facts)
+    .add_chat(Content.label('chat'), recent_chat)
+    .add_lines(Content.label('channel'), context_results)
+    .add_lines(Content.label('language'), random_knowledge)
+    .add_raw(Content.prompt('user_question', user=user, prompt=prompt))
 )
 full_prompt = ctx.build()
 ```
 
-Пустые секции пропускаются автоматически. Fallback-запрос использует `ctx.build_without('Язык чата', 'Контекст канала')` вместо ручной фильтрации списка.
+`ContextBuilder` отвечает только за структуру: все названия меток приходят из `## labels` в `CONTENT.md`, потому что на них ссылается `prompts.system`.
+
+Пустые секции пропускаются автоматически. Fallback-запрос использует `ctx.build_without(Content.label('language'), Content.label('channel'))` вместо ручной фильтрации списка.
 
 ### Шаг 9: Установка кулдауна
 
@@ -221,19 +246,20 @@ full_prompt = ctx.build()
 
 ### Шаг 10: Вызов Gemini
 
-Нативный async API `google-genai` SDK. Клиент инициализируется лениво при первом вызове. System prompt читается из `prompt.txt` при каждом вызове (hot-reload).
+Нативный async API `google-genai` SDK. Клиент инициализируется лениво при первом вызове. System prompt берётся из `prompts.system` в `CONTENT.md` через mtime-кеш (hot-reload).
 
-`generate()` в `src/gemini.py` защищён двумя механизмами:
-- `asyncio.Semaphore(5)` — не более 5 параллельных запросов. Если пришли одновременно 10 команд, 5 встанут в очередь вместо того, чтобы получить ошибку rate-limit
-- `asyncio.wait_for(..., timeout=60)` — зависший запрос прерывается через 60 секунд и возвращает `None`
+`generate()` в `src/gemini/client.py` защищён тремя механизмами:
+- `asyncio.Semaphore(GEMINI_CONCURRENCY)` (по умолчанию 5) — не более N параллельных запросов. Если пришли одновременно 10 команд, лишние встанут в очередь вместо ошибки rate-limit
+- `asyncio.wait_for(..., timeout=GEMINI_TIMEOUT)` (по умолчанию 60 с) — зависший запрос прерывается и возвращает `None`
+- `GEMINI_RETRIES` (по умолчанию 2) повторов с экспоненциальной паузой на транзиентных ошибках: 5xx, 429, сетевые сбои. **Таймаут намеренно не повторяется** — зритель в чате уже прождал полный таймаут
 
 ### Шаг 11: Постобработка ответа
 
 1. Удаление `@username:` / `@username,` из начала ответа (`.lstrip(':,')`)
 2. Удаление всех оставшихся `@username` адресата из тела (другие ники не затрагиваются)
 3. Обрезка до 450 символов
-4. CAPS — если входное сообщение капсом ИЛИ `random() < CAPS_PROBABILITY`. `@упоминания` сохраняют оригинальный регистр (`caps_preserve_mentions()` из `src/utils.py`)
-4а. Эмот — с вероятностью `EMOTE_PROBABILITY` добавляется случайный эмот из `emotes.txt` в конец текста (если помещается в лимит символов)
+4. CAPS — если входное сообщение капсом ИЛИ `random() < CAPS_PROBABILITY`. `@упоминания` сохраняют оригинальный регистр (`caps_preserve_mentions()` из `src/core/utils.py`)
+4а. Эмот — с вероятностью `EMOTE_PROBABILITY` добавляется случайный эмот из `lists.emotes` в конец текста (если помещается в лимит символов)
 5. Отправка `@username: <текст>`
 6. Сохранение в `bot_interactions`
 
@@ -243,7 +269,7 @@ full_prompt = ctx.build()
 
 ## Проактивные сообщения
 
-Фоновая задача `_proactive_loop()`, запускается как `asyncio.create_task` в `event_ready`. Ссылка на таск хранится в `Bot._proactive_task`. Reconnect guard: повторный вызов `event_ready` не создаёт дубликат, если предыдущий таск жив.
+Фоновая задача `proactive_loop()` из `src/gemini/proactive.py`, запускается через `_start_background_tasks()` в `event_ready`. Ссылка на таск хранится в `Bot._proactive_task`. Reconnect guard: повторный вызов `event_ready` не создаёт дубликат, если предыдущий таск жив.
 
 ### Логика
 
@@ -253,11 +279,11 @@ full_prompt = ctx.build()
 4. Собирает уникальных пользователей из последних 20 сообщений
 5. С вероятностью 50% — обращение к случайному активному пользователю, 50% — общий комментарий
 6. Формирует промпт через `ContextBuilder`: `add_chat(recent_chat)` + `add_lines('Язык чата', random_knowledge)` + `add_raw(event_prompt)`
-7. Вызывает Gemini через `make_gen_config()` из `src/gemini.py` (с system prompt из `prompt.txt`)
+7. Вызывает Gemini через `make_gen_config()` из `src/gemini/client.py` (с system prompt из `prompts.system`)
 8. Обрезает до 450 символов
 9. С вероятностью `CAPS_PROBABILITY` — CAPS (с сохранением `@ников`)
 10. С вероятностью `EMOTE_PROBABILITY` — добавляет случайный эмот в конец
-11. Отправляет через `_send_chat_message()` (HTTP API, без reply-контекста)
+11. Отправляет через `send_chat_message()` (HTTP API, без reply-контекста)
 12. Сохраняет в `bot_interactions` с `_proactive_` как username
 
 ### Отказоустойчивость
@@ -266,16 +292,99 @@ full_prompt = ctx.build()
 
 ---
 
+## Награды за баллы канала
+
+Три слоя, у каждого одна ответственность:
+
+| Модуль | Отвечает за |
+|---|---|
+| `src/local/roll/rewards.py` | Twitch: создание и обновление наград, подписка, статусы выкупов, пауза, зависшие выкупы |
+| `src/local/roll/redemption.py` | Ответ: применить через `game`, выбрать текст, решить — подтвердить или вернуть баллы |
+| `src/local/roll/game.py` | Игра: все изменения `rolls` и журнал `roll_actions` под одной блокировкой |
+
+| Действие | Ввод | Цена | Лимит на зрителя за эфир |
+|---|---|---|---|
+| `extra` | — | `REWARD_COST_EXTRA` (100) | — |
+| `reroll` | ник | `REWARD_COST_REROLL` (250) | `REWARD_ATTACK_MAX_PER_USER` (3) |
+| `curse` | ник | `REWARD_COST_CURSE` (1000) | `REWARD_ATTACK_MAX_PER_USER` (3) |
+| `shield` | — | `REWARD_COST_SHIELD` (500) | — |
+
+Названия — `texts.reward_<действие>_title` (до 45 символов), описания — `texts.reward_<действие>_prompt` (до 200). В Twitch описание награды и поле ввода — одно и то же, поэтому у `extra` и `shield` описаний нет.
+
+### Запуск (`RewardService.start`)
+
+1. Запоминается момент старта: всё, что выкуплено до подписки, событием уже не придёт
+2. `_sync()` — награды приложения (`fetch_custom_rewards(manageable=True)`) сверяются со спецификацией. Поиск по id из таблицы `rewards`, а без него — по названию, так переживается и потеря таблицы. Награды нет — `create_custom_reward()`. Есть — `_changes()` собирает только разошедшиеся поля (название, цена, поле ввода, описание, лимит, включённость), и `update_custom_reward()` зовётся, только если набор не пуст
+3. Подписка `ChannelPointsRedeemAddSubscription` токеном канала
+4. Снимаются паузы
+5. `_settle_stale()` — выкупы в статусе UNFULFILLED, сделанные до старта. В журнале `ok` — FULFILLED, иначе CANCELED. Список собирается целиком до смены статусов: смена статуса выкидывает выкуп из выборки и сбила бы постраничный обход
+
+### Выкуп (`event_custom_redemption_add`)
+
+1. `RewardComponent` передаёт событие в `RewardService.on_redemption()`. Награда не из наших — игнор
+2. `handle_redemption()` вызывает `game.redeem(action, session_id, user, user_input, redemption_id)`
+3. `redeem()` под блокировкой: выкуп уже в журнале — `DUPLICATE`, иначе действие применяется и в `roll_actions` пишется строка
+4. Текст: успех — `texts.reward_<действие>_done`, отказ — `texts.reward_refund_*`, исключение — `texts.reward_error`. Уходит через `send_chat_message()`, пишется в `bot_interactions` под `_reward_` с тегом `[reward:<действие>]`. К итогам доп. ролла, переброса и проклятия дописывается `texts.roll_champion`
+5. Статус: успех — FULFILLED, отказ и ошибка — CANCELED (баллы возвращаются), дубль — не трогается
+
+Статус ставится напрямую через `_http.patch_custom_reward_redemption()`: у `CustomRewardRedemption.fulfill()` в twitchio 3.x вместо id выкупа уходит id канала.
+
+### Правила действий (`src/local/roll/game.py`)
+
+| Итог | Когда |
+|---|---|
+| `free_left` | `extra`, пока `free_throws < ROLL_FREE_PER_SESSION`: платить за бросок, который и так бесплатный, — почти наверняка промах |
+| `bad_target` | ник не разобран. `parse_nick()` берёт первое слово, срезает `@` и хвостовую пунктуацию, ждёт `[a-z0-9_]{1,25}` |
+| `self_target` | переброс или проклятие себя |
+| `not_rolled` | проклятие цели, у которой нет ролла в этой сессии — иначе оно создавало бы ролл человеку вне игры. Переброс за такую цель проходит и заводит ей ролл, текст — `texts.reward_reroll_first` |
+| `unknown_target` | переброс за ник без ролла, который ни разу не писал в чате (`has_chatted()` в `src/core/database.py`) — почти наверняка опечатка, иначе появился бы ролл несуществующего игрока |
+| `shielded` | переброс цели, у которой есть `ok`-запись `shield` в этой сессии. На проклятие не распространяется |
+| `protected` | переброс цели, которую успешно перебросили меньше `REWARD_REROLL_PROTECT_MINUTES` (3) минут назад. Время считает SQLite по последней `ok`-записи `reroll` в `roll_actions`; отклонённые перебросы окно не продлевают. Нужна потому, что лимит Twitch на зрителя считает каждого атакующего отдельно. Проклятие защиту пробивает. Текст — `texts.reward_refund_protected` |
+| `already_shielded` | повторный щит |
+| `already_cursed` | проклятие цели, которая уже проклята: новое вернуло бы потолок наверх |
+
+Оба броска за другого пишут `save_roll(..., free_throw=False)`: жертва не теряет бесплатные броски и может ими ответить. `rolled_at` при этом обновляется, поэтому при ничьей с другим минимумом залупой остаётся тот, кто выбросил это число раньше.
+
+### Проклятие
+
+Состояние — две колонки в строке жертвы: `curse_ceiling` (потолок **ближайшего** броска, `NULL` — не проклят) и `curse_floor_at` (`time.time()`, когда потолок встал на дно).
+
+| Событие | Потолок броска | Что пишется в строку |
+|---|---|---|
+| Проклятие | `REWARD_CURSE_CEILING` (75) | `curse_ceiling` = 75 − `STEP` |
+| Любой бросок по жертве: свой `!roll`, `extra` или чужой `reroll` | `curse_ceiling` | `curse_ceiling` = max(`FLOOR`, потолок − `STEP`) |
+| Потолок впервые встал на `FLOOR` | — | `curse_floor_at` = сейчас, дальше не сдвигается |
+
+`_curse_of()` считает строку проклятой, пока `curse_ceiling` не `NULL` и с `curse_floor_at` прошло меньше `REWARD_CURSE_HOLD_MINUTES`. Для механики этого достаточно: истёкшее проклятие просто перестаёт читаться, а новая сессия — это новая строка. Чтобы бот сказал о снятии в чат, фоновый `curse_lift_loop()` (`src/local/roll/announce.py`) раз в минуту вызывает `game.lift_expired_curses()`: под общей блокировкой она находит проклятия текущей сессии, чей потолок пробыл на дне дольше `REWARD_CURSE_HOLD_MINUTES`, и обнуляет `curse_ceiling` и `curse_floor_at`. Каждое снятие объявляется текстом `texts.roll_curse_lifted` и пишется в `bot_interactions` под `_roll_` с тегом `[curse-lifted]`. Сначала снятие, потом сообщение: не ушедшее сообщение не повторяется, зато одно снятие никогда не объявляется дважды. Проклятие, не дошедшее до дна, молча уходит вместе с сессией. Щит не проверяется вовсе: проклятие его пробивает, в этом его отличие от переброса.
+
+Собственный бросок проклятого отвечает отдельными текстами, где «из» — это его потолок, а не `ROLL_MAX`: `texts.roll_cursed_self` / `texts.roll_cursed_other` для `!roll` и `texts.reward_extra_cursed` для доп. ролла. Хвост выбирает `curse_note()`: после любого броска по проклятому — своего или чужого переброса — `texts.roll_curse_step` (следующий потолок), а когда потолок на дне — `texts.roll_curse_hold` с числом минут до снятия. Описание награды в Twitch (`texts.reward_curse_prompt`) получает числа из `.env` через плейсхолдеры `{ceiling}`, `{step}`, `{floor}`, `{hold}`.
+
+### Итоги прошлого эфира
+
+В начале эфира `game.grant_perks()` берёт сессию предыдущего эфира (`get_previous_stream_session()` по таблице `streams`) и выдаёт в таблицу `roll_perks` щит её китежанину и проклятие её залупе. `INSERT OR IGNORE`, поэтому повторный вызов ничего не выдаёт и не объявляет. Китежанин и залупа — один человек: только проклятие. Прошлый эфир прошёл без роллов — бонусов нет, более ранние эфиры не в счёт. Для первого эфира после перехода на сессии-эфиры, когда раньше эфиров не записано, итоги берутся по последней старой сессии-дате, броски в которой закончились до начала этого эфира (`get_last_roll_session_before()`).
+
+| Что | Как работает |
+|---|---|
+| Отсчёт | `active_from` / `active_until`: с первого сообщения игрока в эфире (`perks.on_chat()` → `game.appear()`, объявление `texts.roll_perk_*_on`) или с первого броска по нему (молча, внутри игры). Длится `ROLL_PERK_MINUTES` (30) |
+| Щит | `_perk_shield_left()` в `_reroll()` после купленного щита: отказ `perk_shielded`, текст `texts.reward_refund_perk_shield`. Проклятие пробивает |
+| Проклятие | `_take_perk_curse()` в `_throw_for()`: на первый бросок по залупе внутри окна — потолок `REWARD_CURSE_CEILING`, дальше обычная лестница, плюс жёсткий срок `rolls.curse_until` = конец окна. Выдаётся один раз (`consumed`), не бросали внутри окна — сгорело. Снятие по сроку объявляет `curse_lift_loop` |
+
+Кэш `perks._pending` хранит, у кого в сессии бонус ещё не запущен, чтобы не ходить в базу на каждое сообщение. Устаревание безвредно: если отсчёт уже запустил бросок, вызов вернёт пусто.
+
+### Остановка
+
+`Bot.close()` → `RewardService.stop()` ставит все награды на паузу до закрытия HTTP-сессии. Повторный `stop()` ничего не делает.
+
 ## Спам эмотами
 
-Фоновая задача `_emote_spam_loop()`, запускается независимо от `_proactive_loop` в `event_ready`. Активна если `EMOTE_SPAM_ENABLED=true` и `emotes.txt` непустой.
+Фоновая задача `emote_spam_loop()` из `src/local/emote_spam.py`, запускается независимо от проактивного цикла. Активна если `EMOTE_SPAM_ENABLED=true` и список `lists.emotes` непустой.
 
 ### Логика
 
 1. Ждёт `EMOTE_SPAM_INTERVAL_MINUTES` после старта
-2. Читает актуальный список из `emotes.txt` (hot-reload через mtime)
+2. Читает актуальный список из `lists.emotes` (hot-reload через mtime)
 3. Выбирает случайное количество (1–5) разных эмотов через `random.sample` (если список ≥ count) или `random.choices` (если меньше)
-4. Отправляет через `_send_chat_message()` (HTTP API)
+4. Отправляет через `send_chat_message()` (HTTP API)
 5. Ошибки логируются, цикл продолжается
 
 ---
@@ -348,7 +457,9 @@ username спрашивает: prompt    ← всегда
 
 ## System prompt
 
-Хранится в `prompt.txt` в корне проекта. Читается при каждом вызове Gemini через `Gemini.get_system_instruction()` → `_load_prompt()`. Можно редактировать без перезапуска бота (hot-reload).
+Хранится в `CONTENT.md`, ключ `prompts.system`. Читается через `Content.prompt('system')` → `_ContentFile` с проверкой mtime: файл перечитывается только при изменении, поэтому редактировать можно без перезапуска бота.
+
+Промпты отдельных режимов лежат в той же секции (`who`, `versus`, `summary`, `summary_request`, `ask`, `proactive_user`, `proactive_general`, `user_question`, `interaction_line`) и читаются тем же `Content.prompt(name, **values)`. Подстановка плейсхолдеров — через `safe_format()`, чтобы битый шаблон не ронял обработчик.
 
 Отправляется как `system_instruction` в `GenerateContentConfig`.
 
@@ -383,7 +494,23 @@ username спрашивает: prompt    ← всегда
 
 #### rolls
 
-Результаты `!roll` по сессиям. `UNIQUE(session_id, username)` + `ON CONFLICT DO UPDATE` — ролл перезаписывает предыдущий результат. Залупа определяется через `ORDER BY roll_value ASC, rolled_at ASC LIMIT 1`.
+Результаты `!roll` по сессиям. `UNIQUE(session_id, username)` + `ON CONFLICT DO UPDATE` — ролл перезаписывает предыдущий результат. Залупа определяется через `ORDER BY roll_value ASC, rolled_at ASC, id ASC LIMIT 1`. `free_throws` — сколько бесплатных бросков потрачено, `curse_ceiling` и `curse_floor_at` — проклятие (см. [Проклятие](#проклятие)). Колонки добавляет `_migrate_rolls()` по списку `_ROLLS_COLUMNS`; у старых строк 0 и `NULL`.
+
+#### rewards
+
+`action → reward_id`: какие награды за баллы бот уже создал в Twitch. Нужна, чтобы при переименовании награды в `CONTENT.md` не создавался дубль.
+
+#### roll_actions
+
+Журнал выкупов: `redemption_id` (UNIQUE), `session_id`, `action`, `actor`, `user_input`, `target`, `old_value`, `new_value`, `status`. Уникальный `redemption_id` защищает от повторной обработки, а щит — это просто строка с `action='shield'` и `status='ok'`. Индекс `idx_roll_actions_target` на `(session_id, target, action)`.
+
+#### streams
+
+Эфиры канала: `stream_id` (id в Twitch, PK), `session_id`, `started_at`, `ended_at` (`time.time()`). Знакомый id — перезапуск бота, новый id в течение `STREAM_RESUME_MINUTES` после конца прошлого — обрыв; в обоих случаях сессия прежняя.
+
+#### roll_perks
+
+Бонусы по итогам прошлого эфира: PK `(session_id, username, perk)`, `from_session`, `active_from` / `active_until` — отсчёт, `consumed` — проклятие уже легло на бросок.
 
 #### facts
 
@@ -414,19 +541,60 @@ knowledge_fts USING fts5(content, content=knowledge, content_rowid=id, tokenize=
 
 ---
 
-## Список эмотов (emotes.txt)
+## CONTENT.md — тексты бота
 
-Хранится в корне проекта. Формат: один эмот на строку, `#` — комментарии, пустые строки игнорируются. Читается через `_load_emotes_sync()` с mtime-кешем (hot-reload без перезапуска, аналогично `prompt.txt`).
+Всё, что бот произносит, лежит в одном Markdown-файле в корне проекта и читается через `src/core/content.py`. Разделение: `.env` — секреты, числа и флаги, `CONTENT.md` — текст.
 
-`Emote.get_list()` вызывается на каждый запрос — подхватывает изменения файла автоматически.
+Формат: `## секция` → `### ключ` → значение до следующего заголовка. Кавычек и экранирования нет — русская проза лежит как есть.
 
-Для заполнения из внешних API:
+| Секция | Аксессор | Содержимое |
+|---|---|---|
+| `## prompts` | `Content.prompt(name, **values)` | Инструкции для Gemini, включая `system` — личность бота |
+| `## labels` | `Content.label(name, **values)` | Заголовки секций контекста, которые видит модель: `[Сохранённые факты]`, `[Контекст канала]`, `[Язык чата]` и т.д. |
+| `## texts` | `Content.text(name, **values)` | Все реплики в чат: команды, кулдаун (`cooldown_local` / `cooldown_gemini`), отказ по роли, подсказки, ошибки |
+| `## lists` | `Content.items(name)` | `emotes`, `follow`, `banned` — по записи на строку, `#` — комментарий |
 
-```bash
-./venv/bin/python3 fetch_emotes.py
+**Загрузчик `_ContentFile`:**
+
+1. `stat().st_mtime` на каждое обращение; файл парсится только если mtime изменился
+2. Разбор построчный: `## …` открывает секцию, `### …` — ключ, остальное копится в значение. Строки `<!-- … -->` и текст между `##` и первым `###` отбрасываются
+3. Дубль ключа — `logger.error` с именем ключа, побеждает последнее определение
+4. Если секций не нашлось вовсе (снесли разметку) — `logger.error` и **возврат прошлой валидной версии**: правка в эфире не оставляет бота без текстов
+5. mtime запоминается и при ошибке, чтобы не дёргать парсер на каждое сообщение
+6. Значения отдаются обрезанными по краям; плейсхолдеры подставляются через `safe_format()`
+
+**Проверка на старте.** `validate_content()` вызывается в `run_bot()` сразу за `validate_config()` и сверяет файл со словарём `REQUIRED` в `src/core/content.py`. Нет ключа — бот не стартует и печатает список недостающих. Незнакомый заголовок — `logger.warning`: именно так обнаруживается опечатка в `###`, которая иначе просто создала бы лишний ключ. Добавляя текст, добавь ключ и в `REQUIRED`.
+
+**Списки.** Хранятся многострочным значением, по записи на строку — формат ровно тот же, каким был у отдельных txt-файлов:
+
+```markdown
+## lists
+
+### emotes
+<!-- Один эмот на строку. Строка, начинающаяся с #, — комментарий. -->
+
+Kappa
+PogChamp
+LUL
 ```
 
-Скрипт дёргает BTTV Global/Channel, 7TV Global/Channel, FFZ Channel, Twitch Global/Channel. Дозаписывает только новые эмоты, разбитые по секциям с комментариями. Если канал не подключён к сервису — пропускает без ошибки.
+**Синхронизация списка.** `--sync-emotes` (`src/cli/emotes.py`) тянет эмоты через Twitch Helix и дописывает недостающие в блок `### emotes`:
+
+```bash
+./venv/bin/python3 bot.py --sync-emotes                          # channel (по умолчанию)
+./venv/bin/python3 bot.py --sync-emotes channel global --dry-run
+./venv/bin/python3 bot.py --sync-emotes --replace-emotes
+```
+
+- Авторизация — app access token по `client_credentials`, пользовательские скоупы не нужны
+- Источники объявлены в `SOURCES`: `channel` (`/helix/chat/emotes`) и `global` (`/helix/chat/emotes/global`). Новый источник — одна async-функция плюс строка в словаре
+- Слияние неразрушающее: существующие строки не трогаются, новые падают в конец своей группы, дубли пропускаются. Повторный запуск — no-op
+- `--replace-emotes` пересобирает блок с нуля и удаляет всё, чего нет в выдаче, включая добавленное вручную
+- Эмоты канала раскладываются по группам-комментариям: фолловерские, сабские tier 1/2/3, за биты
+
+Эмот отображается картинкой, только если доступен отправителю: сабские — при активной подписке бот-аккаунта нужного тира, фолловерские — при фолове. Иначе в чат уходит текст кода.
+
+Эмотов из BTTV/7TV/FFZ у канала нет (все три API отдают 404), поэтому кода под них нет — добавляется по той же схеме, если появятся.
 
 ---
 
@@ -459,32 +627,32 @@ knowledge_fts USING fts5(content, content=knowledge, content_rowid=id, tokenize=
 
 Порог: 85% букв в верхнем регистре, минимум 3 буквы. Если входящее сообщение CAPS → ответ CAPS. Дополнительно: с вероятностью `CAPS_PROBABILITY` (30%) любой ответ переводится в CAPS.
 
-При переводе в CAPS `@упоминания` сохраняют оригинальный регистр: `"ТЕКСТ КАПСОМ @username ЕЩЁ ТЕКСТ"`. Реализация — `caps_preserve_mentions()` в `src/utils.py`, которая разбивает текст по `@\S+`, uppercasит только промежутки.
+При переводе в CAPS `@упоминания` сохраняют оригинальный регистр: `"ТЕКСТ КАПСОМ @username ЕЩЁ ТЕКСТ"`. Реализация — `caps_preserve_mentions()` в `src/core/utils.py`, которая разбивает текст по `@\S+`, uppercasит только промежутки.
 
 ---
 
 ## Сессии
 
-```python
-@property
-def session_id(self):
-    return time.strftime('%Y-%m-%d')
-```
+Сессия — это **эфир**. Пока стрим идёт, `Bot.session_id` возвращает сессию эфира: дату и время его начала по местным часам (`2026-09-16 19:00`). Пока стрима нет — текущую дату (`2026-09-16`), как раньше. Состояние держит `StreamTracker` (`src/core/stream.py`), эфиры с их сессиями записаны в таблицу `streams`.
 
-Вычисляется при каждом обращении. Автоматически меняется в полночь. Не кешируется.
+- **Начало эфира** — `stream.online` или запуск бота посреди стрима (`_sync_stream()`). Знакомый id эфира продолжает свою сессию, новый id в течение `STREAM_RESUME_MINUTES` (15) после конца прошлого — тоже
+- **Конец эфира** — `stream.offline`: сессия снова по дате, награды на паузе, `!roll` закрыт
+- **Сверка** — `watch_stream()` раз в 2 минуты спрашивает Twitch (`Bot.fetch_live_stream()`). Расхождение с трекером применяется, только если держится 3 проверки подряд и указывает на одно и то же; совпадение сбрасывает счётчик, ошибка запроса не считается. Так ловятся потерянные события и перемены, пока бот был выключен, а задержка списка эфиров в Twitch не переключает сессию туда-обратно. События, запуск и сверка идут через одни и те же `Bot.stream_went_online()` / `stream_went_offline()`
+- **Эфир, конец которого бот не видел**, закрывается на старте: без эфира — `settle_missed_end()`, при уже идущем следующем — внутри `online()`. Время конца — из записи эфира (`Bot._stream_end_from_vod()`: архив с `created_at` в пределах 5 минут от начала эфира плюс `duration`), без записи — последнее сообщение чата в сессии. От него зависит, продолжит ли следующий эфир сессию. Ограничение: без VOD и после долгого простоя бота перезапущенный вскоре стрим может стать новой сессией
+- **Ошибочно закрытый эфир** — Twitch снова показывает его живым — открывается обратно (`reopen_stream()`), сессия та же
+- **Старые записи** остались с сессиями-датами. Строки обоих форматов сортируются по времени, `COUNT(DISTINCT session_id)` в `!stat` считает и дни без эфира, и эфиры
 
 Влияние:
-- `get_recent_chat` — только текущая сессия. В полночь окно обнуляется
-- `get_session_stats` — статистика текущей сессии
-- `get_user_messages` — сообщения конкретного юзера за всё время (без привязки к сессии)
-- `get_user_interactions` — прошлые обращения юзера к боту (без служебных `[ask]`, `[summary]` и т.д.)
-- `search_context` (FTS) — ищет по **всей** истории, не ограничен сессией
+- `get_recent_chat` и `!summary` — только текущий эфир. С началом стрима окно чата начинается заново
+- `get_session_stats` — статистика текущего эфира
+- игра `!roll`, награды, щиты, проклятия и бонусы — в рамках эфира
+- `get_user_messages`, `get_user_interactions`, `search_context` (FTS) — за всё время, сессия на них не влияет
 
 ---
 
 ## Follow-события
 
-При новом фолловере бот отвечает случайным сообщением из 3 шаблонов (`FOLLOW_MESSAGES`):
+При новом фолловере бот отвечает случайным шаблоном из `lists.follow` в `CONTENT.md` (правится на лету):
 
 ```
 {user} ЗАЛЕТЕЛ НА КАНАЛ. СОСУРИТИ, ФИКСИРУЕМ ПРОНИКНОВЕНИЕ
@@ -492,7 +660,7 @@ def session_id(self):
 {user} ТЕПЕРЬ В КИТЕЖ-ГРАДЕ. ОБРАТНОЙ ДОРОГИ НЕТ
 ```
 
-Без вызова Gemini. Сохраняется в `bot_interactions` с `[follow]` как `user_message`.
+Подстановка `{user}` — через `safe_format()`. Без вызова Gemini. Сохраняется в `bot_interactions` с `[follow]` как `user_message`.
 
 ---
 
@@ -534,9 +702,11 @@ exitfound упал с велика на стриме 15 февраля 2025
 
 ## Логирование
 
-Уровень `WARNING`. В лог попадают:
-- `logger.warning()` — неудачный FTS-поиск, FTS-миграция, неудачная подписка, пустой ответ Gemini
-- `logger.exception()` — ошибки Gemini, ошибки отправки `!ask` чанков, ошибки проактивного цикла
-- `logger.info()` — отправка `!ask` чанков (количество, размер)
+Настраивается в `src/core/logging_setup.py` через `setup_logging()`: `run_bot()` вызывает её с уровнем `INFO`, CLI-команды — с `WARNING`. Переопределяется переменной `LOG_LEVEL`. Если задан `LOG_FILE`, добавляется файловый обработчик с ротацией (`LOG_FILE_MAX_BYTES`, `LOG_FILE_BACKUPS`).
 
-Обычные операции не логируются.
+В лог попадают:
+- `logger.info()` — старт бота, подписки, запуск и остановка фоновых циклов, отправка чанков (количество и размер), повтор запроса к Gemini
+- `logger.warning()` — неудачный FTS-поиск, FTS-миграция, удаление legacy-объектов БД, неудачная подписка, пустой ответ Gemini, срабатывание стоп-листа, некорректные значения env
+- `logger.exception()` — ошибки Gemini, ошибки отправки в чат, ошибки фоновых циклов
+
+Раньше уровень жёстко выставлялся в `WARNING` внутри CLI, из-за чего стартовые сообщения и подсказка с OAuth-ссылкой не доходили до консоли вообще.

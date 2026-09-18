@@ -2,12 +2,12 @@
 
 Источники объявлены в SOURCES: каждый возвращает эмоты, разложенные по
 группам, а группа становится строкой-комментарием в списке. Добавить новый
-источник (7TV, BTTV, FFZ) — это одна async-функция и одна строка в SOURCES;
+источник (7TV, BTTV, FFZ) – это одна async-функция и одна строка в SOURCES;
 на момент написания у канала эмотов в этих сервисах нет, поэтому кода под
 них здесь нет.
 
 Слияние неразрушающее: существующие строки не трогаются, новые дописываются
-в конец своей группы. Полная перезапись — только по явному флагу.
+в конец своей группы. Полная перезапись – только по явному флагу.
 """
 import logging
 import re
@@ -23,11 +23,11 @@ HELIX = 'https://api.twitch.tv/helix'
 TIMEOUT = 20
 
 # Заголовки групп внутри списка эмотов. Совпадают с теми, что уже лежат
-# в CONTENT.md, — иначе повторный синк создал бы вторую такую же группу.
+# в CONTENT.md, – иначе повторный синк создал бы вторую такую же группу.
 GROUP_GLOBAL = 'Глобальные эмоты Twitch'
-GROUP_FOLLOWER = 'Эмоты канала — фолловерские'
-GROUP_BITS = 'Эмоты канала — за биты'
-GROUP_OTHER = 'Эмоты канала — прочие'
+GROUP_FOLLOWER = 'Эмоты канала – фолловерские'
+GROUP_BITS = 'Эмоты канала – за биты'
+GROUP_OTHER = 'Эмоты канала – прочие'
 TIER_NAMES = {'1000': 1, '2000': 2, '3000': 3}
 
 
@@ -65,7 +65,7 @@ def _channel_group(emote: dict) -> str:
         return GROUP_BITS
     if kind == 'subscriptions':
         tier = TIER_NAMES.get(str(emote.get('tier') or ''))
-        return f'Эмоты канала — сабские tier {tier}' if tier else GROUP_OTHER
+        return f'Эмоты канала – сабские tier {tier}' if tier else GROUP_OTHER
     return GROUP_OTHER
 
 
@@ -83,7 +83,7 @@ async def fetch_channel(client: httpx.AsyncClient, headers: dict, channel: str) 
 
 
 async def fetch_global(client: httpx.AsyncClient, headers: dict, channel: str) -> dict[str, list[str]]:
-    """Глобальные эмоты Twitch — доступны всем и всегда отображаются."""
+    """Глобальные эмоты Twitch – доступны всем и всегда отображаются."""
     response = await client.get(f'{HELIX}/chat/emotes/global', headers=headers)
     if response.status_code != 200:
         raise SyncError(f'Не удалось получить глобальные эмоты (HTTP {response.status_code})')

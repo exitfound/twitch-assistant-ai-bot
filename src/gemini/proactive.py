@@ -7,7 +7,7 @@ import re
 from src.core.config import Context, Proactive
 from src.core.content import Content
 from src.core.database import get_random_knowledge, get_recent_chat, save_bot_interaction
-from src.core.utils import TWITCH_MSG_MAX
+from src.core.utils import TWITCH_MSG_MAX, random_delay
 from src.gemini.client import generate, make_gen_config
 from src.gemini.context import ContextBuilder
 from src.gemini.responder import apply_caps, maybe_add_emote, passes_moderation
@@ -19,7 +19,9 @@ async def proactive_loop(bot) -> None:
     """Периодическая реплика в чат от себя."""
     try:
         while True:
-            await asyncio.sleep(Proactive.INTERVAL_MINUTES * 60)
+            delay = random_delay(Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
+            logger.debug('Следующая проактивная реплика через %.1f мин', delay / 60)
+            await asyncio.sleep(delay)
             try:
                 await _send_proactive(bot)
             except Exception:

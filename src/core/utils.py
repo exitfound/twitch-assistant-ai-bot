@@ -1,9 +1,19 @@
 import logging
+import random
 import re
 
 logger = logging.getLogger(__name__)
 
 MENTION_RE = re.compile(r'@\S+')
+
+# Обращение к боту словом: «сосур» кириллицей и «secur» латиницей.
+# Новый вариант добавляется одной строкой в список.
+# Лежит здесь, а не в диспетчере: тем же выражением src/core/database.py
+# разово помечает обращения в старых сообщениях чата.
+SOSUR_VARIANTS = ('сосур', 'secur')
+SOSUR_RE = re.compile(
+    r'(?:{})\w*'.format('|'.join(SOSUR_VARIANTS)), re.IGNORECASE | re.UNICODE
+)
 
 # Twitch message limits
 TWITCH_MSG_MAX = 450
@@ -16,6 +26,15 @@ WHO_VERSUS_MAX = 420
 
 MIN_CAPS_LETTERS = 3
 CAPS_THRESHOLD = 0.85
+
+
+def random_delay(min_minutes: float, max_minutes: float) -> float:
+    """Случайная пауза в секундах между min и max минутами.
+
+    Ровный интервал в чате читается как расписание: зритель запоминает, что бот
+    пишет раз в N минут. Разброс делает его живее.
+    """
+    return random.uniform(min(min_minutes, max_minutes), max(min_minutes, max_minutes)) * 60
 
 
 def is_caps(text: str) -> bool:

@@ -15,7 +15,7 @@ async def handle_follow(bot, payload: twitchio.ChannelFollow) -> None:
     try:
         messages = Content.items('follow')
         if not messages:
-            logger.warning('Список фолов в CONTENT.md пуст — на фолов не отвечаем')
+            logger.warning('Список фолов в CONTENT.md пуст – на фолов не отвечаем')
             return
         user = payload.user.name
         text = safe_format(random.choice(messages), user=user)

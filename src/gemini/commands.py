@@ -62,7 +62,7 @@ async def handle_default(ctx: CommandContext) -> None:
 
 async def handle_ask(ctx: CommandContext) -> None:
     if not ctx.args:
-        ctx.clear_cooldown()
+        await ctx.refuse()
         await ctx.message.respond(Content.text('ask_usage', user=ctx.user))
         return
     try:
@@ -82,7 +82,7 @@ async def handle_summary(ctx: CommandContext) -> None:
     try:
         recent_chat = await get_recent_chat(ctx.session_id, Context.SUMMARY_MESSAGES)
         if not recent_chat:
-            ctx.clear_cooldown()
+            await ctx.refuse()
             await ctx.message.respond(Content.text('summary_empty', user=ctx.user))
             return
         chat_lines = '\n'.join(f'{u}: {m}' for u, m in recent_chat)
@@ -105,7 +105,7 @@ async def handle_who(ctx: CommandContext) -> None:
     args = ctx.args.split()
     target = args[0].lstrip('@') if args else ''
     if not target:
-        ctx.clear_cooldown()
+        await ctx.refuse()
         await ctx.message.respond(Content.text('who_usage', user=ctx.user))
         return
     try:
@@ -139,7 +139,7 @@ async def handle_versus(ctx: CommandContext) -> None:
     args = ctx.args.split()
     nicks = list(dict.fromkeys(a.lstrip('@') for a in args if a.lstrip('@')))
     if len(nicks) < 2:
-        ctx.clear_cooldown()
+        await ctx.refuse()
         await ctx.message.respond(Content.text('versus_usage', user=ctx.user))
         return
     nick1, nick2 = nicks[0], nicks[1]

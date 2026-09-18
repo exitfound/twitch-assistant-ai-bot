@@ -1,17 +1,17 @@
 """Тексты бота: один CONTENT.md с горячей перезагрузкой по mtime.
 
 Разделение ответственности: src/core/config.py читает окружение (секреты, числа,
-флаги), этот модуль — всё, что бот произносит. Промпты, заголовки секций
+флаги), этот модуль – всё, что бот произносит. Промпты, заголовки секций
 контекста, ответы в чат, списки эмотов и фолов лежат в одном файле и
 правятся без перезапуска.
 
-Формат — Markdown, чтобы русская проза лежала без кавычек и экранирования:
+Формат – Markdown, чтобы русская проза лежала без кавычек и экранирования:
 
     ## секция
     ### ключ
     значение до следующего заголовка
 
-Всё до первого `###` внутри секции — примечания, они игнорируются, как и
+Всё до первого `###` внутри секции – примечания, они игнорируются, как и
 комментарии `<!-- ... -->`, в том числе многострочные.
 
 Синтаксически сломать такой файл почти нельзя, поэтому вместо разбора
@@ -32,10 +32,11 @@ CONTENT_PATH = Path(__file__).resolve().parents[2] / 'CONTENT.md'
 SECTION_RE = re.compile(r'^##\s+(\S+)\s*$')
 KEY_RE = re.compile(r'^###\s+(\S+)\s*$')
 
-# Ключи, без которых бот работать не может — проверяются при запуске.
+# Ключи, без которых бот работать не может – проверяются при запуске.
 REQUIRED = {
     'prompts': (
         'system', 'ask', 'summary', 'summary_request', 'who', 'versus',
+        'picture',
         'proactive_user', 'proactive_general',
         'user_question', 'interaction_line',
     ),
@@ -44,7 +45,10 @@ REQUIRED = {
         'user_facts', 'user_messages', 'user_interactions',
     ),
     'texts': (
-        'help', 'stats', 'cooldown_local', 'cooldown_gemini', 'role_denied',
+        'help', 'help_announce', 'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
+        'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',
+        'cooldown_local', 'cooldown_gemini', 'role_denied', 'role_denied_sub',
+        'follow_required', 'quota_exceeded',
         'roll_loser_self', 'roll_loser_other', 'roll_free_left', 'roll_champion',
         'roll_cursed_self', 'roll_cursed_other',
         'roll_curse_step', 'roll_curse_hold', 'roll_curse_lifted',
@@ -62,6 +66,8 @@ REQUIRED = {
         'fact_usage', 'fact_saved',
         'defact_usage', 'defact_missing', 'defact_ambiguous', 'defact_done',
         'ask_usage', 'ask_error',
+        'ascii_usage', 'ascii_bad_url', 'ascii_failed', 'ascii_too_big',
+        'ascii_blocked', 'ascii_unchecked', 'ascii_no_left',
         'summary_empty', 'summary_error',
         'who_usage', 'who_unknown', 'who_failed',
         'versus_usage', 'versus_unknown', 'versus_failed',
@@ -74,7 +80,7 @@ REQUIRED = {
 def parse(raw: str) -> dict[str, dict[str, str]]:
     """Разобрать CONTENT.md в {секция: {ключ: значение}}.
 
-    Дубли ключей логируются; побеждает последнее определение — при правке
+    Дубли ключей логируются; побеждает последнее определение – при правке
     обычно дописывают ниже.
     """
     data: dict[str, dict[str, str]] = {}
@@ -141,13 +147,13 @@ class _ContentFile:
             raw = self._path.read_text(encoding='utf-8')
         except OSError as e:
             self._mtime = mtime
-            self._log_once('Не удалось прочитать %s: %s — остаюсь на прошлой версии', self._path, e)
+            self._log_once('Не удалось прочитать %s: %s – остаюсь на прошлой версии', self._path, e)
             return self._data
         data = parse(raw)
         if not data:
-            # Пустой разбор — скорее всего снесли заголовки; прошлая версия лучше.
+            # Пустой разбор – скорее всего снесли заголовки; прошлая версия лучше.
             self._mtime = mtime
-            self._log_once('%s не содержит секций — остаюсь на прошлой версии', self._path)
+            self._log_once('%s не содержит секций – остаюсь на прошлой версии', self._path)
             return self._data
         self._data = data
         self._mtime = mtime
@@ -203,7 +209,7 @@ class Content:
 def validate_content() -> None:
     """Проверить структуру файла. Вызывается на старте бота.
 
-    Отсутствующий ключ — ошибка запуска. Лишний ключ или секция — почти
+    Отсутствующий ключ – ошибка запуска. Лишний ключ или секция – почти
     всегда опечатка в заголовке, поэтому о них предупреждаем: сам по себе
     такой заголовок молча ничего бы не сломал, но нужный текст при этом
     остался бы недоступным.
@@ -212,7 +218,7 @@ def validate_content() -> None:
         raise FileNotFoundError(f'Не найден {CONTENT_PATH}')
     data = _content.get()
     if not data:
-        raise ValueError(f'{CONTENT_PATH.name} пуст или не разобран — смотри лог')
+        raise ValueError(f'{CONTENT_PATH.name} пуст или не разобран – смотри лог')
 
     missing = [
         f'{section}.{key}'

@@ -1,4 +1,4 @@
-"""!roll — бесплатный бросок из чата."""
+"""!roll – бесплатный бросок из чата."""
 import logging
 
 from src.core.commands import CommandContext
@@ -10,24 +10,40 @@ from src.local.roll.texts import champion_note, curse_note, reward_title
 logger = logging.getLogger(__name__)
 
 
+def free_limit_for(chatter) -> int:
+    """Сколько бесплатных бросков положено зрителю по его значкам.
+
+    Лестница та же, что у кулдауна и квоты: подписка и модераторка дают
+    больше всего, випка – середину, остальным базовый лимит. Стример катает
+    без лимита и сюда не попадает, не фолловер до игры не доходит вовсе.
+    """
+    if chatter.moderator or chatter.subscriber or chatter.founder:
+        return Roll.FREE_SUB
+    if chatter.vip:
+        return Roll.FREE_VIP
+    return Roll.FREE_PER_SESSION
+
+
 async def handle_roll(ctx: CommandContext) -> None:
     if not ctx.bot.stream_live:
         # Игра живёт в рамках эфира: без стрима броски не принимаются
         ctx.clear_cooldown()
         await ctx.message.respond(Content.text('roll_offline', user=ctx.user))
         return
-    # Стример катает без лимита и без приписки об остатке бесплатных
+    # Стример катает без лимита и без приписки об остатке бесплатных,
+    # остальным лимит считается по значкам
+    limit = free_limit_for(ctx.message.chatter)
     result = await game.free_throw(
-        ctx.session_id, ctx.user, unlimited=ctx.message.chatter.broadcaster,
+        ctx.session_id, ctx.user, limit=limit, unlimited=ctx.message.chatter.broadcaster,
     )
     if result.status == game.NO_FREE_LEFT:
         if ctx.bot.rewards_active:
             text = Content.text(
-                'roll_no_free_reward', user=ctx.user, limit=Roll.FREE_PER_SESSION,
+                'roll_no_free_reward', user=ctx.user, limit=limit,
                 reward=reward_title(game.ACTION_EXTRA),
             )
         else:
-            text = Content.text('roll_no_free', user=ctx.user, limit=Roll.FREE_PER_SESSION)
+            text = Content.text('roll_no_free', user=ctx.user, limit=limit)
         await ctx.message.respond(text)
         return
     if result.loser is None:
@@ -35,7 +51,7 @@ async def handle_roll(ctx: CommandContext) -> None:
         await ctx.message.respond(Content.text('roll_error', user=ctx.user))
         return
     loser_name, loser_val = result.loser
-    # У проклятого «из» — это его потолок, а не верхняя граница ролла
+    # У проклятого «из» – это его потолок, а не верхняя граница ролла
     cursed = result.ceiling is not None
     if loser_name == ctx.user:
         key = 'roll_cursed_self' if cursed else 'roll_loser_self'

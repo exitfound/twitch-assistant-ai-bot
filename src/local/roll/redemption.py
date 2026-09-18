@@ -1,6 +1,6 @@
 """Ответ на выкуп награды за баллы канала.
 
-Twitch-сторона — создание наград, подтверждение, возврат баллов — живёт в
+Twitch-сторона – создание наград, подтверждение, возврат баллов – живёт в
 src/local/roll/rewards.py. Здесь только игра: применить награду через game и
 сказать в чат, что вышло.
 """
@@ -46,8 +46,8 @@ async def handle_redemption(
 ) -> bool | None:
     """Применить награду и сообщить в чат.
 
-    Возвращает, что сделать с выкупом в Twitch: True — подтвердить,
-    False — вернуть баллы, None — это повтор уже обработанного выкупа,
+    Возвращает, что сделать с выкупом в Twitch: True – подтвердить,
+    False – вернуть баллы, None – это повтор уже обработанного выкупа,
     статус не трогать.
     """
     session_id = bot.session_id
@@ -75,10 +75,10 @@ async def handle_redemption(
 def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> str:
     if outcome.ok:
         key = _DONE[action]
-        # У проклятого «из» — это его потолок, а не верхняя граница ролла
+        # У проклятого «из» – это его потолок, а не верхняя граница ролла
         if action == game.ACTION_EXTRA and outcome.ceiling is not None:
             key = 'reward_extra_cursed'
-        # Цель ещё не катала: «было — стало» писать не про что
+        # Цель ещё не катала: «было – стало» писать не про что
         elif action == game.ACTION_REROLL and outcome.old_value is None:
             key = 'reward_reroll_first'
     else:
@@ -93,7 +93,7 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
         minutes=outcome.curse_minutes_left, protect=outcome.protect_minutes_left,
         **curse_values(),
     )
-    # Щит ролл не меняет — китежанина и проклятие к нему не дописываем
+    # Щит ролл не меняет – китежанина и проклятие к нему не дописываем
     if outcome.ok and action != game.ACTION_SHIELD:
         note = ''
         if action in _WITH_CURSE_NOTE:

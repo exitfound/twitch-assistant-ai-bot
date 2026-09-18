@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from src.core.config import Context
+from src.core.utils import SOSUR_RE
 
 logger = logging.getLogger(__name__)
 
@@ -44,9 +45,11 @@ async def init_db() -> None:
             session_id TEXT NOT NULL,
             username   TEXT NOT NULL,
             message    TEXT NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            addressed  INTEGER NOT NULL DEFAULT 0
         )
     ''')
+    await _migrate_chat_messages(db)
     await db.execute('''
         CREATE TABLE IF NOT EXISTS bot_interactions (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,8 +76,21 @@ async def init_db() -> None:
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+    # Журнал обращений к Gemini: по нему считается часовая квота зрителя.
+    # В базе, а не в памяти, чтобы перезапуск бота не обнулял лимиты
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS bot_uses (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            username   TEXT NOT NULL,
+            kind       TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_bot_uses_user_time ON bot_uses(username, created_at)'
+    )
     # Таблицы игры !roll: rolls, rewards, roll_actions, roll_perks. Схема и миграции здесь,
-    # вместе со всеми, запросы к ним — в src/local/roll/storage.py
+    # вместе со всеми, запросы к ним – в src/local/roll/storage.py
     await db.execute('''
         CREATE TABLE IF NOT EXISTS rolls (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -86,6 +102,7 @@ async def init_db() -> None:
             curse_ceiling  INTEGER,
             curse_floor_at REAL,
             curse_until    REAL,
+            free_limit     INTEGER,
             UNIQUE(session_id, username)
         )
     ''')
@@ -99,7 +116,7 @@ async def init_db() -> None:
         )
     ''')
     # Журнал купленных наград: кто, кого, чем, что было и что стало. Он же
-    # защищает от повторной обработки и хранит щиты — щит это успешная запись
+    # защищает от повторной обработки и хранит щиты – щит это успешная запись
     await db.execute('''
         CREATE TABLE IF NOT EXISTS roll_actions (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -119,7 +136,7 @@ async def init_db() -> None:
         'CREATE INDEX IF NOT EXISTS idx_roll_actions_target ON roll_actions(session_id, target, action)'
     )
     # Бонусы игры по итогам прошлого эфира: щит китежанину, проклятие залупе.
-    # active_from — первое появление в эфире, от него идёт отсчёт
+    # active_from – первое появление в эфире, от него идёт отсчёт
     await db.execute('''
         CREATE TABLE IF NOT EXISTS roll_perks (
             session_id   TEXT NOT NULL,
@@ -132,7 +149,7 @@ async def init_db() -> None:
             PRIMARY KEY (session_id, username, perk)
         )
     ''')
-    # Эфиры канала. Сессия бота — это эфир, а не календарный день: id эфира
+    # Эфиры канала. Сессия бота – это эфир, а не календарный день: id эфира
     # привязан к сессии, поэтому перезапуск посреди стрима продолжает её же.
     # Короткий обрыв даёт новый id, но ту же сессию
     await db.execute('''
@@ -159,7 +176,7 @@ async def init_db() -> None:
         'CREATE INDEX IF NOT EXISTS idx_bot_interactions_username ON bot_interactions(username)'
     )
     # Живые БД, созданные до появления UNIQUE(username, fact), опираются на этот
-    # индекс — создаём его всегда, чтобы гарантия дедупа не зависела от возраста БД.
+    # индекс – создаём его всегда, чтобы гарантия дедупа не зависела от возраста БД.
     await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_username_fact ON facts(username, fact)'
     )
@@ -173,14 +190,42 @@ _ROLLS_COLUMNS = {
     # Счётчик бесплатных бросков. Старые строки получают 0: прошлые сессии
     # закрыты, а в текущей каждый начинает с полного запаса
     'free_throws': 'INTEGER NOT NULL DEFAULT 0',
-    # Проклятие: потолок ближайшего броска (NULL — не проклят) и момент
-    # по time.time(), когда потолок встал на дно, — от него считается снятие
+    # Проклятие: потолок ближайшего броска (NULL – не проклят) и момент
+    # по time.time(), когда потолок встал на дно, – от него считается снятие
     'curse_ceiling': 'INTEGER',
     'curse_floor_at': 'REAL',
     # Жёсткий срок проклятия по time.time(): у проклятия залупы прошлого эфира
-    # он есть, у купленного — NULL
+    # он есть, у купленного – NULL
     'curse_until': 'REAL',
+    # Сколько бесплатных бросков положено этому игроку в этой сессии: зависит
+    # от его статуса, а награду за баллы он выкупает без значков в событии
+    'free_limit': 'INTEGER',
 }
+
+
+async def _migrate_chat_messages(db: aiosqlite.Connection) -> None:
+    """Колонка addressed: было ли сообщение обращением к боту.
+
+    Обращение – это слово сосур*/secur*, упоминание @ника бота или реплай на
+    его сообщение; ставит флаг диспетчер, который всё это и так определяет.
+    Историю помечаем разово по тексту: слово в сообщении видно, а вот реплаи и
+    упоминания прошлых сессий восстановить нечем, поэтому старые числа –
+    оценка снизу.
+    """
+    async with db.execute('PRAGMA table_info(chat_messages)') as cursor:
+        columns = {row[1] for row in await cursor.fetchall()}
+    if 'addressed' in columns:
+        return
+    await db.execute('ALTER TABLE chat_messages ADD COLUMN addressed INTEGER NOT NULL DEFAULT 0')
+    async with db.execute('SELECT id, message FROM chat_messages') as cursor:
+        rows = await cursor.fetchall()
+    hits = [(row_id,) for row_id, message in rows if SOSUR_RE.search(message or '')]
+    if hits:
+        await db.executemany('UPDATE chat_messages SET addressed = 1 WHERE id = ?', hits)
+    logger.warning(
+        'В chat_messages добавлена колонка addressed; по истории помечено обращений: %d из %d',
+        len(hits), len(rows),
+    )
 
 
 async def _migrate_rolls(db: aiosqlite.Connection) -> None:
@@ -269,11 +314,14 @@ async def _create_fts_triggers(db: aiosqlite.Connection) -> None:
         ''')
 
 
-async def save_chat_message(session_id: str, username: str, message: str) -> None:
+async def save_chat_message(
+    session_id: str, username: str, message: str, *, addressed: bool = False,
+) -> None:
+    """Сохранить сообщение чата. addressed – было ли оно обращением к боту."""
     db = await get_db()
     await db.execute(
-        'INSERT INTO chat_messages (session_id, username, message) VALUES (?, ?, ?)',
-        (session_id, username, message),
+        'INSERT INTO chat_messages (session_id, username, message, addressed) VALUES (?, ?, ?, ?)',
+        (session_id, username, message, int(addressed)),
     )
     await db.commit()
 
@@ -309,9 +357,9 @@ async def delete_fact(username: str, query: str) -> str | list[str] | None:
     """Удалить факт по подстроке.
 
     Возвращает:
-        str — текст удалённого факта (одно совпадение)
-        list[str] — несколько совпадений (нужно уточнить запрос)
-        None — не найдено
+        str – текст удалённого факта (одно совпадение)
+        list[str] – несколько совпадений (нужно уточнить запрос)
+        None – не найдено
     """
     db = await get_db()
     async with db.execute(
@@ -367,6 +415,23 @@ async def get_recent_chat(session_id: str, limit: int = 20) -> list[tuple[str, s
 
 
 
+async def get_recent_links(session_id: str, limit: int = 10) -> list[str]:
+    """Последние сообщения сессии, где есть ссылка – свежие первыми.
+
+    Нужно для !ascii без аргумента: кто-то кинул картинку, кто-то другой
+    ответил командой, и адрес копировать не приходится. Отбор по подстроке
+    грубый, настоящую ссылку из текста достаёт уже вызывающий.
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT message FROM chat_messages "
+        "WHERE session_id = ? AND message LIKE '%http%' ORDER BY id DESC LIMIT ?",
+        (session_id, limit),
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return [row[0] for row in rows]
+
+
 async def get_user_messages(username: str, limit: int = 30) -> list[str]:
     db = await get_db()
     async with db.execute(
@@ -397,30 +462,64 @@ async def get_user_interactions(username: str, limit: int = 10) -> list[tuple[st
     return list(reversed(rows))
 
 
+# Обращение к боту считается по самим сообщениям чата (колонка addressed), а не
+# по ответам в bot_interactions: обращением человек считает и реплай, и оклик
+# словом, и упоминание – даже если бот промолчал (пустой ответ, стоп-лист,
+# кулдаун) или если за окликом шла команда вроде «сосурити !roll».
+# В bot_interactions к тому же лежит и то, что бот сказал сам.
+
+
 async def get_session_stats(session_id: str) -> tuple[int, int]:
+    """Сообщений в сессии и обращений к боту в ней."""
     db = await get_db()
     async with db.execute(
-        'SELECT COUNT(*) FROM chat_messages WHERE session_id = ?', (session_id,)
+        'SELECT COUNT(*), COALESCE(SUM(addressed), 0) FROM chat_messages WHERE session_id = ?',
+        (session_id,),
     ) as cursor:
-        msgs = (await cursor.fetchone())[0]
-    async with db.execute(
-        'SELECT COUNT(*) FROM bot_interactions WHERE session_id = ?', (session_id,)
-    ) as cursor:
-        interactions = (await cursor.fetchone())[0]
+        msgs, interactions = await cursor.fetchone()
     return msgs, interactions
 
 
-async def get_total_stats() -> tuple[int, int, int]:
+async def get_total_stats() -> tuple[int, int, int, int]:
+    """Сообщений, обращений, эфиров и дней вне эфира за всё время.
+
+    Сессии двух видов, и складывать их в одно число нечестно: до перехода на
+    сессии-эфиры сессией был календарный день (`2026-09-16`), теперь – эфир
+    (`2026-09-16 19:00`). Различаем по длине идентификатора.
+    """
     db = await get_db()
     async with db.execute('SELECT COUNT(*) FROM chat_messages') as cursor:
         msgs = (await cursor.fetchone())[0]
-    async with db.execute('SELECT COUNT(*) FROM bot_interactions') as cursor:
+    async with db.execute('SELECT COALESCE(SUM(addressed), 0) FROM chat_messages') as cursor:
         interactions = (await cursor.fetchone())[0]
     async with db.execute(
-        'SELECT COUNT(DISTINCT session_id) FROM chat_messages'
+        'SELECT COALESCE(SUM(LENGTH(session_id) > 10), 0), COALESCE(SUM(LENGTH(session_id) = 10), 0)'
+        ' FROM (SELECT DISTINCT session_id FROM chat_messages)'
     ) as cursor:
-        sessions = (await cursor.fetchone())[0]
-    return msgs, interactions, sessions
+        streams, days = await cursor.fetchone()
+    return msgs, interactions, streams, days
+
+
+async def get_user_stats(session_id: str, username: str) -> tuple[int, int, int, int] | None:
+    """Статистика зрителя: (сообщений в сессии, обращений в сессии, сообщений всего, обращений всего).
+
+    None – ник в чате не встречался: считать нечего, и это почти всегда опечатка.
+    """
+    db = await get_db()
+    async with db.execute(
+        'SELECT COUNT(*), COALESCE(SUM(addressed), 0) FROM chat_messages WHERE username = ?',
+        (username,),
+    ) as cursor:
+        total_msgs, total_interactions = await cursor.fetchone()
+    if not total_msgs:
+        return None
+    async with db.execute(
+        'SELECT COUNT(*), COALESCE(SUM(addressed), 0) FROM chat_messages'
+        ' WHERE session_id = ? AND username = ?',
+        (session_id, username),
+    ) as cursor:
+        session_msgs, session_interactions = await cursor.fetchone()
+    return session_msgs, session_interactions, total_msgs, total_interactions
 
 
 
@@ -492,7 +591,7 @@ async def _knowledge_max(db: aiosqlite.Connection) -> int:
 async def get_random_knowledge(limit: int = 10) -> list[str]:
     """Случайная выборка из лора.
 
-    ORDER BY RANDOM() сканировал всю таблицу (при 96k записей — около 19 мс
+    ORDER BY RANDOM() сканировал всю таблицу (при 96k записей – около 19 мс
     на каждый ответ бота). Вместо этого берём случайные id и добираем
     ближайшую запись: время не зависит от размера таблицы.
     """
@@ -547,6 +646,72 @@ async def vacuum_db() -> None:
     await db.commit()
 
 
+async def record_bot_use(username: str, kind: str) -> None:
+    """Отметить обращение к боту: по журналу считается часовая квота."""
+    db = await get_db()
+    await db.execute('INSERT INTO bot_uses (username, kind) VALUES (?, ?)', (username, kind))
+    await db.commit()
+
+
+async def forget_bot_use(username: str, kind: str) -> None:
+    """Снять последнее записанное обращение: хендлер отказал по формату.
+
+    Парная к record_bot_use: диспетчер отмечает обращение до вызова хендлера,
+    а хендлер, который ничего не сгенерировал, возвращает место в квоте –
+    так же, как возвращает кулдаун.
+    """
+    db = await get_db()
+    await db.execute(
+        'DELETE FROM bot_uses WHERE id = (SELECT MAX(id) FROM bot_uses WHERE username = ? AND kind = ?)',
+        (username, kind),
+    )
+    await db.commit()
+
+
+async def count_bot_uses_since(username: str, kind: str, since: float) -> int:
+    """Сколько обращений этого вида зритель сделал с момента since (time.time()).
+
+    Нужно для лимитов, которые считаются за эфир, а не за скользящее окно:
+    начало эфира берётся из streams, дальше считаем по журналу.
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM bot_uses WHERE username = ? AND kind = ?"
+        " AND created_at > datetime(?, 'unixepoch')",
+        (username, kind, since),
+    ) as cursor:
+        return (await cursor.fetchone())[0]
+
+
+async def count_bot_uses(username: str, kind: str, window_minutes: int) -> int:
+    """Сколько обращений этого вида зритель сделал за последние window_minutes.
+
+    Время считает SQLite: created_at пишется её CURRENT_TIMESTAMP в UTC.
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM bot_uses WHERE username = ? AND kind = ?"
+        " AND created_at > datetime('now', ?)",
+        (username, kind, f'-{window_minutes} minutes'),
+    ) as cursor:
+        return (await cursor.fetchone())[0]
+
+
+async def oldest_bot_use_age(username: str, kind: str, window_minutes: int) -> int | None:
+    """Сколько секунд назад было самое раннее обращение внутри окна. None – их нет.
+
+    По нему считается, через сколько освободится место под новый запрос.
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT CAST(strftime('%s','now') - strftime('%s', MIN(created_at)) AS INTEGER)"
+        " FROM bot_uses WHERE username = ? AND kind = ? AND created_at > datetime('now', ?)",
+        (username, kind, f'-{window_minutes} minutes'),
+    ) as cursor:
+        (value,) = await cursor.fetchone()
+    return value
+
+
 class StreamRow(NamedTuple):
     stream_id: str
     session_id: str
@@ -592,7 +757,7 @@ async def end_stream(stream_id: str, ended_at: float) -> None:
 
 
 async def last_chat_time(session_id: str) -> float | None:
-    """time.time() последнего сообщения чата в сессии. None — сообщений не было."""
+    """time.time() последнего сообщения чата в сессии. None – сообщений не было."""
     db = await get_db()
     async with db.execute(
         "SELECT CAST(strftime('%s', MAX(created_at)) AS REAL) FROM chat_messages WHERE session_id = ?",
@@ -603,14 +768,14 @@ async def last_chat_time(session_id: str) -> float | None:
 
 
 async def reopen_stream(stream_id: str) -> None:
-    """Эфир снова идёт: его закрыли по ошибке — пропущенное событие или задержка Twitch."""
+    """Эфир снова идёт: его закрыли по ошибке – пропущенное событие или задержка Twitch."""
     db = await get_db()
     await db.execute('UPDATE streams SET ended_at = NULL WHERE stream_id = ?', (stream_id,))
     await db.commit()
 
 
 async def get_session_start(session_id: str) -> float | None:
-    """Начало сессии-эфира: старт её первого эфира. None — сессия не эфир, а дата."""
+    """Начало сессии-эфира: старт её первого эфира. None – сессия не эфир, а дата."""
     db = await get_db()
     async with db.execute('SELECT MIN(started_at) FROM streams WHERE session_id = ?', (session_id,)) as cursor:
         (value,) = await cursor.fetchone()
@@ -618,7 +783,7 @@ async def get_session_start(session_id: str) -> float | None:
 
 
 async def get_previous_stream_session(session_id: str) -> str | None:
-    """Сессия эфира, шедшего перед этой. None — более ранних эфиров не записано."""
+    """Сессия эфира, шедшего перед этой. None – более ранних эфиров не записано."""
     start = await get_session_start(session_id)
     db = await get_db()
     async with db.execute(

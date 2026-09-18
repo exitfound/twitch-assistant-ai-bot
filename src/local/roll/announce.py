@@ -23,7 +23,7 @@ async def curse_lift_loop(bot) -> None:
 
     Проклятие спадает, когда потолок пробыл на дне REWARD_CURSE_HOLD_MINUTES.
     Проклятие, не дошедшее до дна, живёт до конца сессии и молча уходит вместе
-    с ней — сообщать тут нечего, новая сессия и так начинается без проклятий.
+    с ней – сообщать тут нечего, новая сессия и так начинается без проклятий.
     """
     try:
         while True:
@@ -43,6 +43,6 @@ async def _announce_curse_lifts(bot) -> None:
     for user in await game.lift_expired_curses(session_id):
         text = Content.text('roll_curse_lifted', user=user, max=Roll.MAX)
         # Проклятие уже снято и в выборку больше не попадёт: если сообщение
-        # не ушло, повторять его не будем — игра от этого не ломается
+        # не ушло, повторять его не будем – игра от этого не ломается
         if text and await bot.send_chat_message(text):
             await save_bot_interaction(session_id, '_roll_', '[curse-lifted]', text)

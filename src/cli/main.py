@@ -53,7 +53,7 @@ async def sync_emotes(sources: list[str], replace: bool, dry_run: bool):
         return
 
     total = sum(len(names) for names in groups.values())
-    print(f'Источники: {", ".join(sources)} — получено {total} эмот(ов)')
+    print(f'Источники: {", ".join(sources)} – получено {total} эмот(ов)')
     for group, names in groups.items():
         print(f'  {group}: {len(names)}')
     if not total:
@@ -72,7 +72,7 @@ async def sync_emotes(sources: list[str], replace: bool, dry_run: bool):
     if added:
         print('  ' + ' '.join(added))
     if replace and not dry_run:
-        print('Список пересобран заново — вручную добавленные эмоты удалены.')
+        print('Список пересобран заново – вручную добавленные эмоты удалены.')
 
 
 async def list_facts():

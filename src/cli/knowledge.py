@@ -5,7 +5,7 @@ logger = logging.getLogger(__name__)
 
 
 def parse_lore_file(path: str) -> list[str]:
-    """Парсинг txt файла с лором. Одна запись на строку, # — комментарии."""
+    """Парсинг txt файла с лором. Одна запись на строку, # – комментарии."""
     with open(path, encoding='utf-8') as f:
         raw = f.read()
     entries = []

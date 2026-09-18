@@ -8,18 +8,26 @@ from typing import NamedTuple
 from src.core.database import get_db
 
 
-async def save_roll(session_id: str, username: str, value: int, *, free_throw: bool) -> None:
-    """Записать ролл. free_throw=True — бросок идёт в счёт бесплатных.
+async def save_roll(
+    session_id: str, username: str, value: int, *, free_throw: bool, limit: int | None = None,
+) -> None:
+    """Записать ролл. free_throw=True – бросок идёт в счёт бесплатных.
 
     Платный бросок, переброс и проклятие счётчик не трогают: жертва саботажа
     не должна терять свои бесплатные броски из-за чужих баллов.
+
+    limit – сколько бесплатных бросков положено игроку по его статусу. Он
+    известен только когда человек катает из чата: в событии выкупа награды
+    значков нет, поэтому лимит запоминается в строке.
     """
     db = await get_db()
     await db.execute(
-        'INSERT INTO rolls (session_id, username, roll_value, free_throws) VALUES (?, ?, ?, ?)'
+        'INSERT INTO rolls (session_id, username, roll_value, free_throws, free_limit)'
+        ' VALUES (?, ?, ?, ?, ?)'
         ' ON CONFLICT(session_id, username) DO UPDATE SET roll_value = excluded.roll_value,'
-        ' rolled_at = CURRENT_TIMESTAMP, free_throws = free_throws + excluded.free_throws',
-        (session_id, username, value, int(free_throw)),
+        ' rolled_at = CURRENT_TIMESTAMP, free_throws = free_throws + excluded.free_throws,'
+        ' free_limit = COALESCE(excluded.free_limit, free_limit)',
+        (session_id, username, value, int(free_throw), limit),
     )
     await db.commit()
 
@@ -30,13 +38,14 @@ class RollRow(NamedTuple):
     curse_ceiling: int | None
     curse_floor_at: float | None
     curse_until: float | None
+    free_limit: int | None      # лимит по статусу, запомненный на броске из чата
 
 
 async def get_roll(session_id: str, username: str) -> RollRow | None:
     """Строка игрока в сессии или None, если он не катал."""
     db = await get_db()
     async with db.execute(
-        'SELECT roll_value, free_throws, curse_ceiling, curse_floor_at, curse_until FROM rolls'
+        'SELECT roll_value, free_throws, curse_ceiling, curse_floor_at, curse_until, free_limit FROM rolls'
         ' WHERE session_id = ? AND username = ?',
         (session_id, username),
     ) as cursor:
@@ -60,7 +69,7 @@ async def set_curse(
 async def get_expired_curses(session_id: str, floor_before: float, now: float) -> list[str]:
     """Кто в сессии всё ещё числится проклятым, хотя проклятие уже кончилось.
 
-    Кончилось — это потолок встал на дно до floor_before или вышел жёсткий срок
+    Кончилось – это потолок встал на дно до floor_before или вышел жёсткий срок
     curse_until у проклятия залупы прошлого эфира.
     """
     db = await get_db()
@@ -74,7 +83,7 @@ async def get_expired_curses(session_id: str, floor_before: float, now: float) -
 
 
 async def get_reward_ids() -> dict[str, str]:
-    """{действие: id награды в Twitch} — какие награды бот уже создал."""
+    """{действие: id награды в Twitch} – какие награды бот уже создал."""
     db = await get_db()
     async with db.execute('SELECT action, reward_id FROM rewards') as cursor:
         rows = await cursor.fetchall()
@@ -112,7 +121,7 @@ async def has_action(session_id: str, action: str, target: str, status: str) -> 
 
 
 async def seconds_since_action(session_id: str, action: str, target: str, status: str) -> int | None:
-    """Сколько секунд прошло с последнего такого действия над целью. None — его не было.
+    """Сколько секунд прошло с последнего такого действия над целью. None – его не было.
 
     Время считает сама SQLite: created_at пишется её CURRENT_TIMESTAMP в UTC,
     и сравнивать его с часами Python значило бы следить за часовыми поясами.
@@ -144,7 +153,7 @@ async def get_session_loser(session_id: str) -> tuple[str, int] | None:
     """Returns (username, roll_value) of the current session залупа (minimum roll).
 
     При равных минимумах побеждает тот, кто откатал раньше. У rolled_at
-    точность до секунды, поэтому финальный тайбрейк — по id: иначе два
+    точность до секунды, поэтому финальный тайбрейк – по id: иначе два
     одинаковых ролла в одну секунду давали бы разный ответ от запроса
     к запросу.
     """
@@ -159,10 +168,10 @@ async def get_session_loser(session_id: str) -> tuple[str, int] | None:
 
 
 async def get_session_champion(session_id: str) -> tuple[str, int] | None:
-    """(username, roll_value) китежанина сессии — самого высокого ролла.
+    """(username, roll_value) китежанина сессии – самого высокого ролла.
 
     Зеркало get_session_loser(): при равных максимумах титул у того, кто
-    выбросил раньше, финальный тайбрейк — по id.
+    выбросил раньше, финальный тайбрейк – по id.
     """
     db = await get_db()
     async with db.execute(
@@ -200,7 +209,7 @@ class PerkRow(NamedTuple):
 
 
 async def add_perk(session_id: str, username: str, perk: str, from_session: str) -> bool:
-    """Выдать бонус. False — такой бонус в этой сессии уже выдан."""
+    """Выдать бонус. False – такой бонус в этой сессии уже выдан."""
     db = await get_db()
     cursor = await db.execute(
         'INSERT OR IGNORE INTO roll_perks (session_id, username, perk, from_session) VALUES (?, ?, ?, ?)',

@@ -9,13 +9,14 @@ from twitchio import eventsub
 from twitchio.ext import commands
 
 from src.core.component import ChatComponent
-from src.core.config import Emote, Proactive, Rewards, Roll, Twitch, validate_config
+from src.core.config import Emote, Help, Proactive, Rewards, Roll, Twitch, validate_config
 from src.core.content import Content, validate_content
 from src.core.database import close_db, init_db
 from src.core.logging_setup import setup_logging
 from src.core.stream import StreamTracker, watch_stream
 from src.gemini.proactive import proactive_loop
 from src.local.emote_spam import emote_spam_loop
+from src.local.help_announce import help_loop
 from src.local.roll import perks
 from src.local.roll.announce import curse_lift_loop
 from src.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
@@ -43,6 +44,7 @@ class Bot(commands.Bot):
         self._channel_id: str | None = None
         self._proactive_task: asyncio.Task | None = None
         self._emote_spam_task: asyncio.Task | None = None
+        self._help_task: asyncio.Task | None = None
         self._curse_lift_task: asyncio.Task | None = None
         self._rewards = RewardService(self)
         self._broadcaster_token = False
@@ -63,13 +65,17 @@ class Bot(commands.Bot):
         return self._bot_name
 
     @property
+    def channel_id(self) -> str | None:
+        return self._channel_id
+
+    @property
     def rewards_active(self) -> bool:
         return self._rewards.active
 
     # --- кулдауны ---------------------------------------------------------
 
-    # Области независимы: отсидка за Gemini-команду не мешает жать !help.
-    # Область — это класс команды (KIND_LOCAL / KIND_GEMINI), передаётся явно.
+    # Области независимы: отсидка за Gemini-команду не мешает жать !help-bot.
+    # Область – это класс команды (KIND_LOCAL / KIND_GEMINI), передаётся явно.
     def cooldown_remaining(self, user: str, scope: str) -> float:
         expiry = self._cooldowns.get(f'{scope}:{user}')
         if expiry is None:
@@ -106,7 +112,7 @@ class Bot(commands.Bot):
             await self._add_broadcaster_token()
             await self._sync_stream()
         else:
-            logger.error('Канал %s не найден — проактив и отправка в чат работать не будут', Twitch.CHANNEL)
+            logger.error('Канал %s не найден – проактив и отправка в чат работать не будут', Twitch.CHANNEL)
         await self.add_component(ChatComponent(self))
         await self.add_component(RewardComponent(self._rewards))
 
@@ -116,10 +122,10 @@ class Bot(commands.Bot):
         Сначала берём то, что twitchio уже загрузил из .tio.tokens.json: после
         авторизации по ссылке токен попадает туда при штатной остановке, и он
         свежее значений в .env, которые twitchio после обновления не трогает.
-        Там пусто — берём из .env.
+        Там пусто – берём из .env.
 
         Без проверки чужой или урезанный токен всплыл бы только при первом
-        выкупе — невнятной ошибкой Twitch посреди эфира.
+        выкупе – невнятной ошибкой Twitch посреди эфира.
         """
         if not Rewards.ENABLED:
             return
@@ -137,12 +143,12 @@ class Bot(commands.Bot):
             return
         if str(payload.user_id) != self._channel_id:
             logger.warning(
-                'TWITCH_BROADCASTER_TOKEN выдан аккаунту %s, а не каналу %s — награды за баллы выключены',
+                'TWITCH_BROADCASTER_TOKEN выдан аккаунту %s, а не каналу %s – награды за баллы выключены',
                 payload.login, Twitch.CHANNEL,
             )
             return
         if REWARDS_SCOPE not in payload.scopes:
-            logger.warning('В токене канала нет права %s — награды за баллы выключены', REWARDS_SCOPE)
+            logger.warning('В токене канала нет права %s – награды за баллы выключены', REWARDS_SCOPE)
             return
         self._broadcaster_token = True
 
@@ -159,13 +165,13 @@ class Bot(commands.Bot):
         """Идёт ли эфир прямо сейчас.
 
         События о том, что случилось, пока бот был выключен, уже не придут:
-        стрим мог начаться или закончиться без него. Ошибка запроса — считаем,
+        стрим мог начаться или закончиться без него. Ошибка запроса – считаем,
         что эфира нет, а сверка watch_stream() поправит через несколько минут.
         """
         try:
             live = await self.fetch_live_stream()
         except Exception:
-            logger.exception('Не удалось узнать, идёт ли эфир — считаю, что нет, сверка поправит')
+            logger.exception('Не удалось узнать, идёт ли эфир – считаю, что нет, сверка поправит')
             return
         if live:
             await self.stream.online(*live)
@@ -187,7 +193,7 @@ class Bot(commands.Bot):
         """Конец эфира по его записи в Twitch: начало записи плюс длительность.
 
         twitchio не отдаёт у видео id эфира, поэтому запись узнаётся по времени
-        начала. Записи нет (VOD выключены) — None, трекер оценит конец по чату.
+        начала. Записи нет (VOD выключены) – None, трекер оценит конец по чату.
         """
         videos = await self.fetch_videos(user_id=self._channel_id, type='archive', first=5)
         for video in videos:
@@ -196,7 +202,7 @@ class Bot(commands.Bot):
         return None
 
     async def event_stream_online(self, payload) -> None:
-        # Повтор трансляции и премьера — не эфир со стримером
+        # Повтор трансляции и премьера – не эфир со стримером
         if payload.type != 'live':
             return
         try:
@@ -233,30 +239,35 @@ class Bot(commands.Bot):
     def _start_background_tasks(self) -> None:
         if not self._channel_id:
             if Proactive.ENABLED or Emote.SPAM_ENABLED or Rewards.ENABLED:
-                logger.warning('ID канала не получен — фоновые задачи не запущены')
+                logger.warning('ID канала не получен – фоновые задачи не запущены')
             return
         # Сверка с Twitch ловит пропущенные начало и конец эфира
         if not _running(self._stream_watch_task):
             self._stream_watch_task = asyncio.create_task(watch_stream(self))
         if Proactive.ENABLED and not _running(self._proactive_task):
             self._proactive_task = asyncio.create_task(proactive_loop(self))
-            logger.info('Проактивные сообщения включены (раз в %d мин)', Proactive.INTERVAL_MINUTES)
+            logger.info('Проактивные сообщения включены (раз в %d–%d мин)',
+                        Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
         # Проклятия бывают от наград и от итогов прошлого эфира
         if (Rewards.ENABLED or Roll.PERKS_ENABLED) and not _running(self._curse_lift_task):
             self._curse_lift_task = asyncio.create_task(curse_lift_loop(self))
             logger.info('Оповещения о снятии проклятий включены')
+        if Help.ANNOUNCE_ENABLED and not _running(self._help_task):
+            self._help_task = asyncio.create_task(help_loop(self))
+            logger.info('Напоминания о командах включены (раз в %d мин)', Help.ANNOUNCE_INTERVAL_MINUTES)
         if Emote.SPAM_ENABLED and not _running(self._emote_spam_task):
             if Content.items('emotes'):
                 self._emote_spam_task = asyncio.create_task(emote_spam_loop(self))
-                logger.info('Спам эмотами включён (раз в %d мин)', Emote.SPAM_INTERVAL_MINUTES)
+                logger.info('Спам эмотами включён (раз в %d–%d мин)',
+                            Emote.SPAM_INTERVAL_MIN_MINUTES, Emote.SPAM_INTERVAL_MAX_MINUTES)
             else:
                 logger.warning(
-                    'EMOTE_SPAM_ENABLED=true, но список эмотов в CONTENT.md пуст — '
+                    'EMOTE_SPAM_ENABLED=true, но список эмотов в CONTENT.md пуст – '
                     'задача не запущена'
                 )
 
     async def _start_rewards(self) -> None:
-        # event_ready приходит и после переподключения — start() это переживает
+        # event_ready приходит и после переподключения – start() это переживает
         if not Rewards.ENABLED or self._rewards.active or not self._channel_id:
             return
         if not self._broadcaster_token:
@@ -298,7 +309,7 @@ class Bot(commands.Bot):
         await super().close(**options)
 
     async def send_chat_message(self, text: str) -> bool:
-        """Отправка без реплая (HTTP API). True — если ушло."""
+        """Отправка без реплая (HTTP API). True – если ушло."""
         if not self._channel_id:
             logger.warning('Отправка невозможна: ID канала не получен')
             return False
@@ -348,7 +359,7 @@ class Bot(commands.Bot):
             logger.info('Подписка на начало и конец эфира')
         except Exception as e:
             logger.warning(
-                'Не удалось подписаться на начало и конец эфира: %s — '
+                'Не удалось подписаться на начало и конец эфира: %s – '
                 'сессия переключится только при перезапуске бота', e,
             )
 

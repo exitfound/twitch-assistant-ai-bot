@@ -75,7 +75,7 @@ def _env_percent(name: str, default_percent: float) -> float:
         return default_percent / 100.0
     if 0.0 <= value <= 1.0 and '.' in raw:
         logger.warning(
-            '%s=%s задано долей — трактую как %.0f%%. Новый формат — проценты, например %s=%.0f',
+            '%s=%s задано долей – трактую как %.0f%%. Новый формат – проценты, например %s=%.0f',
             name, raw, value * 100, name, value * 100,
         )
         return value
@@ -83,6 +83,28 @@ def _env_percent(name: str, default_percent: float) -> float:
         return value / 100.0
     logger.warning('%s=%s вне диапазона 0..100, используется %s%%', name, raw, default_percent)
     return default_percent / 100.0
+
+
+def _interval_range(prefix: str, default_min: int, default_max: int) -> tuple[int, int]:
+    """Разброс интервала фонового цикла: PREFIX_MIN_MINUTES и PREFIX_MAX_MINUTES.
+
+    Старое имя PREFIX_MINUTES (одно фиксированное число) ещё принимается и
+    становится обеими границами – цикл ведёт себя как раньше, а в лог уходит
+    подсказка, как включить разброс.
+    """
+    legacy = _env_int(f'{prefix}_MINUTES', 0, 0, 1440)
+    if legacy:
+        logger.warning(
+            '%s_MINUTES задаёт ровный интервал. Для разброса укажи %s_MIN_MINUTES и %s_MAX_MINUTES',
+            prefix, prefix, prefix,
+        )
+        default_min = default_max = legacy
+    low = _env_int(f'{prefix}_MIN_MINUTES', default_min, 1, 1440)
+    high = _env_int(f'{prefix}_MAX_MINUTES', default_max, 1, 1440)
+    if low > high:
+        logger.warning('%s_MIN_MINUTES=%s больше %s_MAX_MINUTES=%s, значения переставлены', prefix, low, prefix, high)
+        low, high = high, low
+    return low, high
 
 
 def validate_config() -> None:
@@ -133,26 +155,74 @@ class Caps:
 
 class Cooldown:
     # Одна лесенка по статусу зрителя на все команды обоих классов.
-    # Стример, модератор и подписчик не ждут никогда — их значения не
+    # Стример, модератор и подписчик не ждут никогда – их значения не
     # настраиваются, это правило, а не параметр.
     VIP: int = _env_int('COOLDOWN_VIP', 10, 0, 3600)
     REGULAR: int = _env_int('COOLDOWN_REGULAR', 30, 0, 3600)
 
 
+class Quota:
+    # Потолок обращений к Gemini за час – поверх кулдауна. Стример, модераторы
+    # и подписчики не ограничены: у них и кулдауна нет. 0 – без лимита
+    VIP_PER_HOUR: int = _env_int('QUOTA_VIP_PER_HOUR', 60, 0, 10_000)
+    FOLLOWER_PER_HOUR: int = _env_int('QUOTA_FOLLOWER_PER_HOUR', 30, 0, 10_000)
+    WINDOW_MINUTES: int = _env_int('QUOTA_WINDOW_MINUTES', 60, 1, 1440)
+
+
+class Follow:
+    # Без фолова бот не отвечает вовсе, кроме справки. Проверка идёт через
+    # Helix и кэшируется: фолов меняется редко, а сообщений много
+    REQUIRED: bool = _env_bool('FOLLOW_REQUIRED', True)
+    CACHE_MINUTES: int = _env_int('FOLLOW_CACHE_MINUTES', 15, 1, 1440)
+    # Как часто повторять одному человеку предложение зафоловиться
+    HINT_MINUTES: int = _env_int('FOLLOW_HINT_MINUTES', 10, 1, 1440)
+
+
+class Picture:
+    # !ascii: картинка по ссылке рисуется символами Брайля. Ссылку даёт
+    # зритель, поэтому ограничиваем и время, и размер
+    ENABLED: bool = _env_bool('PICTURE_ENABLED', True)
+    TIMEOUT: float = _env_float('PICTURE_TIMEOUT', 10.0, 1.0, 60.0)
+    MAX_BYTES: int = _env_int('PICTURE_MAX_BYTES', 10 * 1024 * 1024, 1024, 100 * 1024 * 1024)
+    # Ширина строки арта. Строка должна влезать в колонку чата целиком:
+    # шире – порвётся переносом и картинка разъедется
+    MAX_COLS: int = _env_int('PICTURE_MAX_COLS', 26, 14, 60)
+    # Поправка на пропорции ячейки чата. Символ Брайля выше, чем вдвое
+    # своей ширины, поэтому точка не квадратная и картинка без поправки
+    # выглядит вытянутой по вертикали. Меньше 1 – сжать по высоте
+    ASPECT: float = _env_float('PICTURE_ASPECT', 0.8, 0.3, 2.0)
+    # Выедать заливку: сплошное пятно теряет форму, поэтому от него
+    # остаются края. Тонкие линии не страдают – они сами края
+    HOLLOW: bool = _env_bool('PICTURE_HOLLOW', True)
+    # Насколько тёмные места остаются залитыми поверх контура – это и
+    # даёт объём. Больше – больше заливки, 0 – только контур
+    SHADOW: int = _env_int('PICTURE_SHADOW', 45, 0, 255)
+    # Сколько картинок зритель может нарисовать за эфир. Команда открыта со
+    # значка подписчика: фолловеру и не фолловеру она недоступна вовсе.
+    # Стример не ограничен, 0 – без лимита
+    PER_STREAM_VIP: int = _env_int('PICTURE_PER_STREAM_VIP', 3, 0, 1000)
+    PER_STREAM_SUB: int = _env_int('PICTURE_PER_STREAM_SUB', 10, 0, 1000)
+    # Показывать картинку Gemini, чтобы он решил, можно ли её рисовать.
+    # Выключать не стоит: ссылку приносит зритель
+    CHECK: bool = _env_bool('PICTURE_CHECK', True)
+
+
 class Stream:
-    # Сессия бота — это эфир. Если эфир оборвался и снова пошёл в течение
+    # Сессия бота – это эфир. Если эфир оборвался и снова пошёл в течение
     # RESUME_MINUTES, это тот же эфир: роллы, щиты и проклятия продолжаются.
-    # 0 — любой новый эфир начинает новую сессию
+    # 0 – любой новый эфир начинает новую сессию
     RESUME_MINUTES: int = _env_int('STREAM_RESUME_MINUTES', 15, 0, 240)
 
 
 class Roll:
     MIN: int = _env_int('ROLL_MIN', 1, 1, 1000)
     MAX: int = _env_int('ROLL_MAX', 100, 2, 1000)
-    # Бесплатных !roll на зрителя за сессию. Дальше — только награда за баллы.
-    # На стримера лимит не действует
+    # Бесплатных !roll за сессию – по статусу зрителя. Дальше только награда
+    # за баллы. Стример катает без лимита, не фолловер не катает вовсе
     FREE_PER_SESSION: int = _env_int('ROLL_FREE_PER_SESSION', 3, 1, 1000)
-    # Итоги прошлого эфира: китежанину — щит от перебросов, залупе — проклятие.
+    FREE_VIP: int = _env_int('ROLL_FREE_VIP', 5, 1, 1000)
+    FREE_SUB: int = _env_int('ROLL_FREE_SUB', 10, 1, 1000)
+    # Итоги прошлого эфира: китежанину – щит от перебросов, залупе – проклятие.
     # Отсчёт PERK_MINUTES идёт с первого появления человека в чате нового эфира
     PERKS_ENABLED: bool = _env_bool('ROLL_PERKS_ENABLED', True)
     PERK_MINUTES: int = _env_int('ROLL_PERK_MINUTES', 30, 1, 600)
@@ -168,7 +238,7 @@ def _curse_range() -> tuple[int, int]:
 
 
 class Rewards:
-    # Награды за баллы канала. Работают, только если есть токен канала —
+    # Награды за баллы канала. Работают, только если есть токен канала –
     # без него флаг ничего не включает, а бот пишет в лог ссылку на авторизацию
     ENABLED: bool = _env_bool('REWARDS_ENABLED', True)
     # Цены в баллах. Зритель без подписки зарабатывает около 300 в час
@@ -177,17 +247,17 @@ class Rewards:
     COST_CURSE: int = _env_int('REWARD_COST_CURSE', 1000, 1, 1_000_000)
     COST_SHIELD: int = _env_int('REWARD_COST_SHIELD', 500, 1, 1_000_000)
     # Проклятие: бросок жертвы не выше CURSE_CEILING, каждый следующий бросок
-    # по ней — свой или чужой переброс — опускает потолок на CURSE_STEP, но не ниже CURSE_FLOOR.
+    # по ней – свой или чужой переброс – опускает потолок на CURSE_STEP, но не ниже CURSE_FLOOR.
     # На дне потолок держится CURSE_HOLD_MINUTES, потом проклятие спадает
     CURSE_CEILING, CURSE_FLOOR = _curse_range()
     CURSE_STEP: int = _env_int('REWARD_CURSE_STEP', 5, 0, 1000)
     CURSE_HOLD_MINUTES: int = _env_int('REWARD_CURSE_HOLD_MINUTES', 15, 1, 1440)
     # После успешного переброса цель столько минут неуязвима для новых перебросов:
     # лимит Twitch считает каждого атакующего отдельно, и толпа добивает одну цель.
-    # Проклятие защиту пробивает, как и щит. 0 — защиты нет
+    # Проклятие защиту пробивает, как и щит. 0 – защиты нет
     REROLL_PROTECT_MINUTES: int = _env_int('REWARD_REROLL_PROTECT_MINUTES', 3, 0, 1440)
-    # Сколько раз один зритель может перебросить и проклясть за эфир — лимит
-    # у каждой награды свой, считает его сам Twitch. 0 — без лимита
+    # Сколько раз один зритель может перебросить и проклясть за эфир – лимит
+    # у каждой награды свой, считает его сам Twitch. 0 – без лимита
     ATTACK_MAX_PER_USER: int = _env_int('REWARD_ATTACK_MAX_PER_USER', 3, 0, 1000)
 
 
@@ -202,9 +272,18 @@ class Context:
     USER_INTERACTIONS: int = _env_int('CONTEXT_USER_INTERACTIONS', 10, 0, 100)
 
 
+class Help:
+    # Напоминание в чат о командах бота. Шлётся только пока идёт эфир и только
+    # если в чате кто-то писал: пустому чату напоминать не о чем.
+    # Интервал ровный: это справка, её ждут предсказуемо
+    ANNOUNCE_ENABLED: bool = _env_bool('HELP_ANNOUNCE_ENABLED', True)
+    ANNOUNCE_INTERVAL_MINUTES: int = _env_int('HELP_ANNOUNCE_INTERVAL_MINUTES', 15, 1, 1440)
+
+
 class Proactive:
     ENABLED: bool = _env_bool('PROACTIVE_ENABLED', True)
-    INTERVAL_MINUTES: int = _env_int('PROACTIVE_INTERVAL_MINUTES', 15, 1, 1440)
+    # Пауза до следующей реплики берётся случайно из этого диапазона
+    INTERVAL_MIN_MINUTES, INTERVAL_MAX_MINUTES = _interval_range('PROACTIVE_INTERVAL', 5, 30)
     ACTIVE_WINDOW: int = _env_int('PROACTIVE_ACTIVE_WINDOW', 20, 1, 200)
     TARGET_PROBABILITY: float = _env_percent('PROACTIVE_TARGET_PROBABILITY', 50)
 
@@ -221,5 +300,5 @@ def _emote_spam_range() -> tuple[int, int]:
 class Emote:
     PROBABILITY: float = _env_percent('EMOTE_PROBABILITY', 10)
     SPAM_ENABLED: bool = _env_bool('EMOTE_SPAM_ENABLED', False)
-    SPAM_INTERVAL_MINUTES: int = _env_int('EMOTE_SPAM_INTERVAL_MINUTES', 10, 1, 1440)
+    SPAM_INTERVAL_MIN_MINUTES, SPAM_INTERVAL_MAX_MINUTES = _interval_range('EMOTE_SPAM_INTERVAL', 5, 20)
     SPAM_MIN, SPAM_MAX = _emote_spam_range()

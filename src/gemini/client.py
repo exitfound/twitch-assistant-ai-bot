@@ -58,8 +58,12 @@ def _is_transient(error: Exception) -> bool:
     return isinstance(error, httpx.TransportError)
 
 
-async def generate(contents: str, config: types.GenerateContentConfig) -> str | None:
-    """Запрос к Gemini. Возвращает None при таймауте, блокировке или отказе API."""
+async def generate(contents: str | list, config: types.GenerateContentConfig) -> str | None:
+    """Запрос к Gemini. Возвращает None при таймауте, блокировке или отказе API.
+
+    contents – либо текст, либо список частей: так !ascii передаёт вместе с
+    вопросом саму картинку.
+    """
     async with _semaphore:
         for attempt in range(Gemini.RETRIES + 1):
             try:

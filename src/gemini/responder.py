@@ -42,7 +42,7 @@ def passes_moderation(text: str) -> bool:
 
 async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
                            max_len: int = TWITCH_MSG_MAX) -> bool:
-    """Отправить ответ в реплай и сохранить. False — если отправлять нечего."""
+    """Отправить ответ в реплай и сохранить. False – если отправлять нечего."""
     if not text:
         return False
     text = cleanup_response(text, ctx.user, max_len)
@@ -50,7 +50,8 @@ async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
         return False
     text = apply_caps(text, ctx.original_text)
     text = maybe_add_emote(text, max_len)
-    await ctx.message.respond(f'@{ctx.user}: {text}')
+    # Ник и сразу текст, без двоеточия и тире: так ответ читается как реплика
+    await ctx.message.respond(f'@{ctx.user} {text}')
     await save_bot_interaction(ctx.session_id, ctx.user, tag, text)
     return True
 
@@ -71,7 +72,7 @@ async def send_chunked(ctx: CommandContext, text: str | None, tag: str) -> None:
     for i, chunk in enumerate(chunks):
         try:
             if i == 0:
-                await ctx.message.respond(f'@{ctx.user}: {chunk}')
+                await ctx.message.respond(f'@{ctx.user} {chunk}')
             else:
                 await asyncio.sleep(CHUNK_SEND_DELAY)
                 await ctx.bot.send_chat_message(chunk)

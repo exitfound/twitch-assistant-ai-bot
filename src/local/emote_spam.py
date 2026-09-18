@@ -5,6 +5,7 @@ import random
 
 from src.core.config import Emote
 from src.core.content import Content
+from src.core.utils import random_delay
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +14,9 @@ async def emote_spam_loop(bot) -> None:
     """Периодическая порция эмотов в чат."""
     try:
         while True:
-            await asyncio.sleep(Emote.SPAM_INTERVAL_MINUTES * 60)
+            delay = random_delay(Emote.SPAM_INTERVAL_MIN_MINUTES, Emote.SPAM_INTERVAL_MAX_MINUTES)
+            logger.debug('Следующая порция эмотов через %.1f мин', delay / 60)
+            await asyncio.sleep(delay)
             try:
                 emotes = Content.items('emotes')
                 if not emotes:

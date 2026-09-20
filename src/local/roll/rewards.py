@@ -1,16 +1,15 @@
-"""Награды за баллы канала: создание в Twitch, подписка, подтверждение и возврат баллов.
+"""Channel-points rewards: creation on Twitch, subscription, fulfilling and refunding points.
 
-Здесь только Twitch. Что награда делает с игрой — src/local/roll/redemption.py и
+Only Twitch is here. What a reward does to the game – src/local/roll/redemption.py and
 src/local/roll/game.py.
 
-Почему награды создаёт сам бот. Twitch разрешает подтвердить выкуп или
-вернуть за него баллы только приложению, которое создало награду. Заведённая
-руками в панели стримера награда для бота недоступна — вернуть баллы за
-опечатку в нике он бы не смог.
+Why the bot creates the rewards itself. Twitch lets only the app that created a reward
+fulfill a redemption or refund its points. A reward made by hand in the streamer's
+dashboard is out of the bot's reach – it could not refund points for a typo in a nick.
 
-Выкуп обрабатывается сразу: бот применяет награду и тут же подтверждает её
-или отменяет с возвратом баллов. Ни стримеру, ни зрителю нажимать ничего не
-нужно. Пока бот выключен, награды стоят на паузе.
+A redemption is handled at once: the bot applies the reward and immediately fulfills
+it or cancels it with a refund. Neither the streamer nor the viewer has to click
+anything. While the bot is off, the rewards are paused.
 """
 import dataclasses
 import datetime
@@ -29,11 +28,11 @@ from src.local.roll.texts import curse_values, reward_title
 
 logger = logging.getLogger(__name__)
 
-# Право, без которого награду не создать и баллы не вернуть. Выдаёт его только
-# владелец канала — у бота-модератора его быть не может
+# The scope without which a reward cannot be created and points cannot be refunded.
+# Only the channel owner grants it – a moderator bot cannot have it
 REWARDS_SCOPE = 'channel:manage:redemptions'
 
-# Ограничения Twitch на поля награды
+# Twitch limits on reward fields
 TITLE_MAX = 45
 PROMPT_MAX = 200
 
@@ -46,7 +45,7 @@ class RewardSpec:
     action: str
     cost: int
     input_required: bool
-    max_per_user: int           # за эфир, 0 — без лимита
+    max_per_user: int           # per stream, 0 – no limit
 
     @property
     def title(self) -> str:
@@ -54,8 +53,8 @@ class RewardSpec:
 
     @property
     def prompt(self) -> str:
-        # В Twitch описание награды включает поле ввода, поэтому оно есть
-        # только у наград, где нужен ник
+        # On Twitch the reward description comes with the input field, so it is set
+        # only on rewards that need a nick
         if not self.input_required:
             return ''
         return Content.text(
@@ -74,7 +73,7 @@ def _specs() -> list[RewardSpec]:
 
 
 def _changes(reward: twitchio.CustomReward, spec: RewardSpec) -> dict:
-    """Поля, которые разошлись с CONTENT.md и .env. Пустой dict — запрос не нужен."""
+    """Fields that differ from CONTENT.md and .env. Empty dict – no request needed."""
     changes: dict = {}
     if reward.title != spec.title:
         changes['title'] = spec.title
@@ -97,18 +96,18 @@ class RewardService:
     def __init__(self, bot) -> None:
         self._bot = bot
         self._channel_id: str | None = None
-        self._actions: dict[str, str] = {}      # id награды в Twitch → действие
+        self._actions: dict[str, str] = {}      # Twitch reward id → action
         self.active = False
 
     async def start(self, channel_id: str, *, open_: bool) -> None:
-        """Создать или обновить награды, подписаться, разобрать зависшие.
+        """Create or update the rewards, subscribe, settle stale redemptions.
 
-        open_ — идёт ли эфир. Без эфира игра закрыта, и награды остаются на паузе.
+        open_ – whether the stream is live. Offline the game is closed and rewards stay paused.
         """
         if self.active:
             return
         self._channel_id = channel_id
-        # Всё, что выкупили до подписки, событием уже не придёт
+        # Anything redeemed before the subscription will never arrive as an event
         started = datetime.datetime.now(datetime.timezone.utc)
         await self._sync()
         await self._bot.subscribe_websocket(
@@ -124,7 +123,7 @@ class RewardService:
         await self._settle_stale(started)
 
     async def stop(self) -> None:
-        """Поставить награды на паузу: пока бота нет, баллы списывать не за что."""
+        """Pause the rewards: while the bot is away, there is nothing to spend points on."""
         if not self.active:
             return
         self.active = False
@@ -135,7 +134,7 @@ class RewardService:
             logger.exception('Не удалось поставить награды на паузу')
 
     async def set_open(self, open_: bool) -> None:
-        """Эфир начался или закончился: снять награды с паузы или поставить на неё."""
+        """The stream started or ended: unpause the rewards or pause them."""
         if not self.active:
             return
         try:
@@ -147,7 +146,7 @@ class RewardService:
     async def on_redemption(self, payload: twitchio.ChannelPointsRedemptionAdd) -> None:
         action = self._actions.get(payload.reward.id)
         if action is None:
-            return                  # другая награда стримера, не наша
+            return                  # another streamer reward, not ours
         decision = await handle_redemption(
             self._bot, action, payload.id, (payload.user.name or '').lower(), payload.user_input,
         )
@@ -159,11 +158,11 @@ class RewardService:
         return self._bot.create_partialuser(self._channel_id)
 
     async def _sync(self) -> None:
-        """Привести награды в Twitch к CONTENT.md и .env.
+        """Bring the rewards on Twitch in line with CONTENT.md and .env.
 
-        Награда ищется по сохранённому id, а если его нет — по названию среди
-        наград этого приложения: так переживается и потеря таблицы rewards,
-        и переименование в CONTENT.md.
+        A reward is looked up by its stored id, and failing that by title among this
+        app's rewards: that survives both a lost rewards table and a rename in
+        CONTENT.md.
         """
         broadcaster = self._broadcaster()
         existing = {r.id: r for r in await broadcaster.fetch_custom_rewards(manageable=True)}
@@ -193,9 +192,9 @@ class RewardService:
             await broadcaster.update_custom_reward(reward_id, paused=paused)
 
     async def _set_status(self, reward_id: str, redemption_id: str, status: str) -> None:
-        # CustomRewardRedemption.fulfill() в twitchio 3.x отправляет id канала
-        # вместо id выкупа, поэтому статус ставим запросом напрямую — одинаково
-        # для событий и для зависших выкупов
+        # CustomRewardRedemption.fulfill() in twitchio 3.x sends the channel id
+        # instead of the redemption id, so the status is set with a direct request –
+        # the same way for events and for stale redemptions
         try:
             await self._bot._http.patch_custom_reward_redemption(
                 broadcaster_id=self._channel_id, token_for=self._channel_id,
@@ -205,23 +204,23 @@ class RewardService:
             logger.exception('Не удалось выставить статус %s выкупу %s', status, redemption_id)
 
     async def _settle_stale(self, started: datetime.datetime) -> None:
-        """Разобрать выкупы, оставшиеся без статуса с прошлого запуска.
+        """Settle redemptions left without a status since the previous run.
 
-        Так бывает, если бот упал и не успел поставить награды на паузу.
-        Применять их задним числом нельзя — сессия и роллы уже другие, —
-        поэтому баллы возвращаются. Исключение — награда, которую применили,
-        но не успели подтвердить: её подтверждаем.
+        That happens when the bot crashed before it could pause the rewards.
+        They cannot be applied retroactively – the session and the rolls are different
+        by now – so the points are refunded. The exception is a reward that was applied
+        but not yet fulfilled: that one gets fulfilled.
         """
         broadcaster = self._broadcaster()
         rewards = await broadcaster.fetch_custom_rewards(ids=list(self._actions), manageable=True)
         settled = 0
         for reward in rewards:
-            # Сначала собираем: смена статуса выкидывает выкуп из выборки и
-            # сбивает постраничный обход
+            # Collect first: changing the status drops the redemption from the result
+            # and throws off the pagination
             pending = [r async for r in reward.fetch_redemptions(status='UNFULFILLED')]
             for redemption in pending:
                 if redemption.redeemed_at >= started:
-                    continue        # выкуплен уже после подписки, придёт событием
+                    continue        # redeemed after the subscription, will arrive as an event
                 applied = await get_action_status(redemption.id) == game.OK
                 await self._set_status(reward.id, redemption.id, FULFILLED if applied else CANCELED)
                 settled += 1

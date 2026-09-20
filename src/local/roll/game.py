@@ -1,13 +1,13 @@
-"""Игра «залупа стрима»: единственное место, которое меняет таблицу rolls.
+"""The «залупа стрима» (session loser) game: the only place that changes the rolls table.
 
-Бросок из чата и награды за баллы канала приходят из разных мест, а
-состояние у них одно. Всё, что читает ролл и потом пишет новый, идёт под
-общей блокировкой: иначе переброс, пришедший между чтением и записью
-собственного !roll жертвы, затёр бы один из результатов.
+A throw from chat and channel-points rewards come from different places, but
+they share one state. Everything that reads a roll and then writes a new one runs
+under a shared lock: otherwise a reroll arriving between the read and the write
+of the victim's own !roll would overwrite one of the results.
 
-Модуль ничего не пишет в чат и не знает про Twitch. Он возвращает Outcome,
-а текст и судьбу баллов по нему решает вызывающий — хендлер команды или
-обработчик награды.
+The module writes nothing to chat and knows nothing about Twitch. It returns an
+Outcome, and the caller – the command handler or the reward handler – decides the
+text and the fate of the points from it.
 """
 import asyncio
 import dataclasses
@@ -24,33 +24,33 @@ from src.local.roll.storage import (
     has_action, save_action, save_roll, seconds_since_action, set_curse,
 )
 
-# Действия, которые покупаются за баллы канала
-ACTION_EXTRA = 'extra'      # бросок за себя сверх бесплатных
-ACTION_REROLL = 'reroll'    # бросок за другого, щит от него защищает
-ACTION_CURSE = 'curse'      # бросок за другого с потолком, дальше потолок падает; щит пробивает
-ACTION_SHIELD = 'shield'    # защита от переброса до конца сессии
+# Actions bought with channel points
+ACTION_EXTRA = 'extra'      # a throw for yourself beyond the free ones
+ACTION_REROLL = 'reroll'    # a throw for someone else, the shield protects from it
+ACTION_CURSE = 'curse'      # a capped throw for another, then the cap drops; pierces the shield
+ACTION_SHIELD = 'shield'    # protection from rerolls until the session ends
 ACTIONS = (ACTION_EXTRA, ACTION_REROLL, ACTION_CURSE, ACTION_SHIELD)
 
-# Бонусы по итогам прошлого эфира: не покупаются, выдаются в начале нового
-PERK_SHIELD = 'shield'      # китежанину — щит от перебросов
-PERK_CURSE = 'curse'        # залупе — проклятие с жёстким сроком
+# Perks from the previous stream: not bought, granted at the start of the new one
+PERK_SHIELD = 'shield'      # to the китежанин (champion) – a shield from rerolls
+PERK_CURSE = 'curse'        # to the залупа (loser) – a curse with a hard deadline
 
-# Итоги. OK — изменение применено, всё остальное — отказ с причиной
+# Outcomes. OK – the change is applied, everything else is a refusal with a reason
 OK = 'ok'
-NO_FREE_LEFT = 'no_free_left'           # !roll: бесплатные кончились
-FREE_LEFT = 'free_left'                 # доп. ролл купили, хотя бесплатные ещё есть
-BAD_TARGET = 'bad_target'               # в поле награды не ник
-SELF_TARGET = 'self_target'             # перебросить или проклясть себя
-NOT_ROLLED = 'not_rolled'               # цель сегодня не катала
-SHIELDED = 'shielded'                   # у цели щит
-ALREADY_SHIELDED = 'already_shielded'   # щит купили повторно
-ALREADY_CURSED = 'already_cursed'       # цель уже прокляли
-PROTECTED = 'protected'                 # цель недавно перебросили, защита ещё действует
-UNKNOWN_TARGET = 'unknown_target'       # переброс за ник, которого нет ни в игре, ни в чате
-PERK_SHIELDED = 'perk_shielded'         # у цели щит китежанина прошлого эфира
-DUPLICATE = 'duplicate'                 # Twitch прислал ту же награду ещё раз
+NO_FREE_LEFT = 'no_free_left'           # !roll: free throws are used up
+FREE_LEFT = 'free_left'                 # extra roll bought while free throws are still left
+BAD_TARGET = 'bad_target'               # the reward input is not a nick
+SELF_TARGET = 'self_target'             # rerolling or cursing yourself
+NOT_ROLLED = 'not_rolled'               # the target has not rolled today
+SHIELDED = 'shielded'                   # the target has a shield
+ALREADY_SHIELDED = 'already_shielded'   # shield bought a second time
+ALREADY_CURSED = 'already_cursed'       # the target is already cursed
+PROTECTED = 'protected'                 # the target was rerolled recently, protection still holds
+UNKNOWN_TARGET = 'unknown_target'       # reroll for a nick seen neither in the game nor in chat
+PERK_SHIELDED = 'perk_shielded'         # the target has the previous stream's champion shield
+DUPLICATE = 'duplicate'                 # Twitch sent the same redemption again
 
-# Логин Twitch: латиница, цифры и подчёркивание, до 25 символов
+# Twitch login: Latin letters, digits and underscore, up to 25 characters
 _NICK_RE = re.compile(r'[a-z0-9_]{1,25}')
 
 _lock = asyncio.Lock()
@@ -59,17 +59,17 @@ _lock = asyncio.Lock()
 @dataclasses.dataclass(frozen=True)
 class Outcome:
     status: str
-    target: str | None = None               # чей ролл затронут
-    old_value: int | None = None            # ролл до операции
-    value: int | None = None                # ролл после операции
-    free_left: int | None = None            # бесплатных бросков осталось, None — лимита нет
-    loser: tuple[str, int] | None = None    # залупа сессии после операции
-    champion: tuple[str, int] | None = None # китежанин сессии, None — если он же залупа
-    # Проклятие цели, если оно действовало на этот бросок
-    ceiling: int | None = None              # потолок этого броска
-    next_ceiling: int | None = None         # потолок следующего
-    curse_minutes_left: int | None = None   # потолок на дне: через сколько минут спадёт
-    protect_minutes_left: int | None = None # защита после переброса: сколько минут осталось
+    target: str | None = None               # whose roll is affected
+    old_value: int | None = None            # roll before the operation
+    value: int | None = None                # roll after the operation
+    free_left: int | None = None            # free throws left, None – no limit
+    loser: tuple[str, int] | None = None    # session loser after the operation
+    champion: tuple[str, int] | None = None # session champion, None – if also the loser
+    # The target's curse, if it applied to this throw
+    ceiling: int | None = None              # ceiling of this throw
+    next_ceiling: int | None = None         # ceiling of the next one
+    curse_minutes_left: int | None = None   # ceiling on the floor: minutes until it lifts
+    protect_minutes_left: int | None = None # protection after a reroll: minutes left
 
     @property
     def ok(self) -> bool:
@@ -82,10 +82,10 @@ def _throw(ceiling: int | None = None) -> int:
 
 
 def parse_nick(raw: str) -> str | None:
-    """Ник из поля награды: первое слово без @ и хвостовой пунктуации.
+    """Nick from the reward input: the first word without @ and trailing punctuation.
 
-    Зрители пишут «@Nick», «nick,» или «ник и ещё что-то». Всё, что после
-    первого слова, отбрасывается; не похожее на логин — None.
+    Viewers write «@Nick», «nick,» or «ник и ещё что-то». Everything after the
+    first word is dropped; anything that does not look like a login – None.
     """
     words = raw.strip().split()
     if not words:
@@ -94,15 +94,15 @@ def parse_nick(raw: str) -> str | None:
     return nick if _NICK_RE.fullmatch(nick) else None
 
 
-# --- проклятие ---------------------------------------------------------------
+# --- curse -------------------------------------------------------------------
 
 def _curse_of(row: RollRow | None) -> tuple[int, float | None] | None:
-    """Действующее проклятие: (потолок ближайшего броска, когда он встал на дно).
+    """The active curse: (ceiling of the next throw, when it reached the floor).
 
-    Снимать проклятие отдельно не нужно: как только потолок пробыл на дне
-    дольше CURSE_HOLD_MINUTES, строка просто перестаёт считаться проклятой.
-    Новая сессия — новая строка, проклятия в ней нет. У проклятия залупы
-    прошлого эфира есть ещё жёсткий срок curse_until.
+    The curse does not need lifting separately: once the ceiling has sat on the
+    floor longer than CURSE_HOLD_MINUTES, the row simply stops counting as cursed.
+    A new session is a new row with no curse in it. The curse of the previous
+    stream's loser also has a hard deadline, curse_until.
     """
     if row is None or row.curse_ceiling is None:
         return None
@@ -115,10 +115,10 @@ def _curse_of(row: RollRow | None) -> tuple[int, float | None] | None:
 
 
 def _lowered(ceiling: int, floor_at: float | None) -> tuple[int, float | None]:
-    """Потолок после броска проклятого: на шаг ниже, но не ниже дна.
+    """The ceiling after a cursed player's throw: one step lower, but not below the floor.
 
-    Отсчёт до снятия запускается в тот момент, когда потолок впервые встал
-    на дно, и дальше не сдвигается.
+    The countdown to the lift starts the moment the ceiling first reaches the
+    floor, and does not move after that.
     """
     next_ceiling = max(Rewards.CURSE_FLOOR, ceiling - Rewards.CURSE_STEP)
     if floor_at is None and next_ceiling == Rewards.CURSE_FLOOR:
@@ -133,26 +133,28 @@ def _minutes_left(floor_at: float | None) -> int | None:
     return max(1, math.ceil(seconds / 60))
 
 
-async def _throw_for(session_id: str, user: str, row: RollRow | None, *, free_throw: bool) -> dict:
-    """Бросок по строке игрока — свой или чужой переброс.
+async def _throw_for(
+    session_id: str, user: str, row: RollRow | None, *, free_throw: bool, limit: int | None = None,
+) -> dict:
+    """A throw on a player's row – their own or someone else's reroll.
 
-    Проклятому бросок идёт с потолком, и потолок опускается на шаг: любой
-    бросок по жертве, от кого бы он ни был, приближает проклятие к дну.
+    A cursed player's throw is capped by the ceiling, and the ceiling drops a step:
+    any throw on the victim, whoever made it, brings the curse closer to the floor.
     """
     curse = _curse_of(row)
     until = row.curse_until if curse is not None else None
     if curse is None:
-        # Проклятие залупы прошлого эфира ложится на первый бросок по ней
+        # The previous stream's loser curse is laid on the first throw on them
         until = await _take_perk_curse(session_id, user)
         if until is not None:
             curse = (Rewards.CURSE_CEILING, None)
     if curse is None:
         value = _throw()
-        await save_roll(session_id, user, value, free_throw=free_throw)
+        await save_roll(session_id, user, value, free_throw=free_throw, limit=limit)
         return {'value': value}
     ceiling, floor_at = curse
     value = _throw(ceiling)
-    await save_roll(session_id, user, value, free_throw=free_throw)
+    await save_roll(session_id, user, value, free_throw=free_throw, limit=limit)
     next_ceiling, floor_at = _lowered(ceiling, floor_at)
     await set_curse(session_id, user, next_ceiling, floor_at, until)
     return {
@@ -162,11 +164,11 @@ async def _throw_for(session_id: str, user: str, row: RollRow | None, *, free_th
 
 
 async def _standings(session_id: str) -> dict:
-    """Залупа и китежанин сессии после броска.
+    """The session loser (залупа) and champion (китежанин) after a throw.
 
-    Китежанина не показываем, если это тот же человек, что и залупа: так
-    бывает, когда катал один игрок или все выбросили одно число, — хвалить
-    не на фоне кого.
+    The champion is not shown if it is the same person as the loser: that happens
+    when only one player rolled or everyone threw the same number – there is
+    nobody to praise them against.
     """
     loser = await get_session_loser(session_id)
     champion = await get_session_champion(session_id)
@@ -175,18 +177,18 @@ async def _standings(session_id: str) -> dict:
     return {'loser': loser, 'champion': champion}
 
 
-# --- бонусы по итогам прошлого эфира ---------------------------------------------
+# --- perks from the previous stream ------------------------------------------------
 
 async def _activate_perks(session_id: str, user: str) -> list[str]:
-    """Первое появление игрока в эфире запускает отсчёт его бонусов."""
+    """A player's first appearance in the stream starts the countdown of their perks."""
     now = time.time()
     return await activate_perks(session_id, user, now, now + Roll.PERK_MINUTES * 60)
 
 
 async def _perk_shield_left(session_id: str, user: str) -> int | None:
-    """Минут до конца щита китежанина. None — щита нет.
+    """Minutes until the champion's shield ends. None – no shield.
 
-    Переброс по игроку — тоже его появление: щит включается и сразу защищает.
+    A reroll on a player is also their appearance: the shield turns on and protects at once.
     """
     await _activate_perks(session_id, user)
     perk = await get_perk(session_id, user, PERK_SHIELD)
@@ -197,10 +199,10 @@ async def _perk_shield_left(session_id: str, user: str) -> int | None:
 
 
 async def _take_perk_curse(session_id: str, user: str) -> float | None:
-    """Забрать проклятие залупы для первого броска по ней. Возвращает его срок.
+    """Take the loser's curse for the first throw on them. Returns its deadline.
 
-    Проклятие одно: легло на бросок — второй раз не выдаётся, даже если его
-    сняли раньше срока. Не появился в эфире за отведённое время — сгорело.
+    There is one curse: once laid on a throw it is not given a second time, even
+    if it was lifted early. A player who did not show up in time loses it.
     """
     await _activate_perks(session_id, user)
     perk = await get_perk(session_id, user, PERK_CURSE)
@@ -211,11 +213,11 @@ async def _take_perk_curse(session_id: str, user: str) -> float | None:
 
 
 async def _previous_session(session_id: str) -> str | None:
-    """Сессия, по итогам которой выдаются бонусы: эфир, шедший перед этим.
+    """The session whose results grant the perks: the stream before this one.
 
-    Прошлый эфир прошёл без роллов — бонусов нет, более ранние эфиры не в счёт.
-    Эфиров раньше не записано (первый эфир после перехода с сессий-дат) — берётся
-    последняя старая сессия, броски в которой закончились до начала этого эфира.
+    The previous stream had no rolls – no perks, earlier streams do not count.
+    No earlier streams recorded (the first stream after the switch from date
+    sessions) – the latest old session whose throws ended before this stream started.
     """
     previous = await get_previous_stream_session(session_id)
     if previous is not None:
@@ -225,10 +227,10 @@ async def _previous_session(session_id: str) -> str | None:
 
 
 async def grant_perks(session_id: str) -> tuple[str | None, str | None] | None:
-    """Выдать бонусы по итогам прошлого эфира: (китежанин, залупа).
+    """Grant the perks from the previous stream: (champion, loser).
 
-    None — выдавать нечего или всё уже выдано. Вызов безопасно повторять после
-    перезапуска и обрыва эфира: второй раз ничего не выдаётся.
+    None – nothing to grant or everything is already granted. Safe to repeat after
+    a restart or a stream outage: nothing is granted a second time.
     """
     async with _lock:
         previous = await _previous_session(session_id)
@@ -246,42 +248,91 @@ async def grant_perks(session_id: str) -> tuple[str | None, str | None] | None:
 
 
 async def appear(session_id: str, user: str) -> list[str]:
-    """Игрок появился в чате эфира: запустить отсчёт его бонусов. Какие запущены."""
+    """A player showed up in the stream chat: start their perk countdown. Returns which started."""
     async with _lock:
         return await _activate_perks(session_id, user)
 
 
-# --- операции ----------------------------------------------------------------
+# --- operations --------------------------------------------------------------
 
-async def free_throw(session_id: str, user: str, *, unlimited: bool = False) -> Outcome:
-    """Бесплатный !roll: не больше Roll.FREE_PER_SESSION за сессию.
+async def free_throw(
+    session_id: str, user: str, *, limit: int, unlimited: bool = False,
+) -> Outcome:
+    """A free !roll: no more than limit per session.
 
-    unlimited — лимит не действует (стример). Бросок всё равно идёт в счётчик,
-    чтобы доп. ролл за баллы у него работал как у всех. free_left у такого
-    итога None: писать про остаток нечего.
+    limit depends on the viewer's status (see free_limit_for() in the command) and
+    is stored in the player's row: a reward redemption arrives without badges.
+    unlimited – no limit applies (broadcaster). The throw is still counted, so the
+    paid extra roll works for them like for everyone. free_left of such an outcome
+    is None: there is no remainder to mention.
     """
     async with _lock:
         row = await get_roll(session_id, user)
         used = row.free_throws if row else 0
-        if not unlimited and used >= Roll.FREE_PER_SESSION:
-            return Outcome(NO_FREE_LEFT, target=user)
-        throw = await _throw_for(session_id, user, row, free_throw=True)
+        if not unlimited and used >= limit:
+            return Outcome(NO_FREE_LEFT, target=user, free_left=0)
+        throw = await _throw_for(session_id, user, row, free_throw=True, limit=limit)
         standings = await _standings(session_id)
     return Outcome(
         OK, target=user, old_value=row.value if row else None,
-        free_left=None if unlimited else Roll.FREE_PER_SESSION - used - 1,
+        free_left=None if unlimited else max(0, limit - used - 1),
         **standings, **throw,
     )
 
 
-async def lift_expired_curses(session_id: str) -> list[str]:
-    """Снять кончившиеся проклятия: потолок пробыл на дне дольше CURSE_HOLD_MINUTES
-    или вышел жёсткий срок проклятия залупы прошлого эфира.
+@dataclasses.dataclass(frozen=True)
+class Standing:
+    """What !rollstat shows: the player's own state plus the session's two titles."""
+    value: int | None = None                # their roll, None – they have not rolled
+    free_left: int | None = None            # free throws left, None – no limit
+    ceiling: int | None = None              # curse: ceiling of their next throw
+    curse_minutes_left: int | None = None   # ceiling on the floor: minutes until it lifts
+    shield: bool = False                    # a shield bought with points, holds till the session ends
+    shield_minutes_left: int | None = None  # the previous stream's champion shield
+    loser: tuple[str, int] | None = None
+    champion: tuple[str, int] | None = None
 
-    Механике снятие не нужно: _curse_of() и так не считает такую строку
-    проклятой. Оно нужно, чтобы бот сказал об этом в чат ровно один раз —
-    очищенная строка в следующую выборку не попадёт. Под общей блокировкой,
-    чтобы не стереть проклятие, наложенное заново между выборкой и записью.
+
+async def status(session_id: str, user: str, *, limit: int, unlimited: bool = False) -> Standing:
+    """The player's standing in the session. Reads only: no throw, no perk started.
+
+    _perk_shield_left() is not used on purpose – it activates the perk, and merely
+    asking about your state must not start the countdown.
+    """
+    row = await get_roll(session_id, user)
+    curse = _curse_of(row)
+    perk = await get_perk(session_id, user, PERK_SHIELD)
+    left = None
+    if perk is not None and not perk.consumed and perk.active_until is not None:
+        seconds = perk.active_until - time.time()
+        left = max(1, math.ceil(seconds / 60)) if seconds > 0 else None
+    return Standing(
+        value=row.value if row else None,
+        free_left=None if unlimited else max(0, limit - (row.free_throws if row else 0)),
+        ceiling=curse[0] if curse else None,
+        curse_minutes_left=_minutes_left(curse[1]) if curse else None,
+        shield=await has_action(session_id, ACTION_SHIELD, user, OK),
+        shield_minutes_left=left,
+        **await _standings(session_id),
+    )
+
+
+def _minutes_left(floor_at: float | None) -> int | None:
+    """Minutes until a curse sitting on the floor lifts. None – the ceiling is still dropping."""
+    if floor_at is None:
+        return None
+    seconds = Rewards.CURSE_HOLD_MINUTES * 60 - (time.time() - floor_at)
+    return max(1, math.ceil(seconds / 60)) if seconds > 0 else None
+
+
+async def lift_expired_curses(session_id: str) -> list[str]:
+    """Lift expired curses: the ceiling sat on the floor longer than CURSE_HOLD_MINUTES
+    or the hard deadline of the previous stream's loser curse passed.
+
+    The mechanics do not need the lift: _curse_of() already stops treating such a
+    row as cursed. It is there so the bot says so in chat exactly once – a cleared
+    row will not be selected again. Under the shared lock, so as not to erase a
+    curse laid anew between the select and the write.
     """
     async with _lock:
         now = time.time()
@@ -294,11 +345,11 @@ async def lift_expired_curses(session_id: str) -> list[str]:
 async def redeem(
     action: str, session_id: str, actor: str, user_input: str, redemption_id: str,
 ) -> Outcome:
-    """Применить купленную награду и записать итог в журнал roll_actions.
+    """Apply a bought reward and record the outcome in the roll_actions journal.
 
-    Журнал заодно защищает от повторов: Twitch может прислать одно событие
-    дважды, и второй раз бросать нельзя. Проверка и запись идут под той же
-    блокировкой, что и сам бросок, поэтому повтор не проскочит между ними.
+    The journal also guards against duplicates: Twitch may send one event twice,
+    and the second one must not throw. The check and the write run under the same
+    lock as the throw itself, so a duplicate cannot slip in between them.
     """
     async with _lock:
         if await get_action_status(redemption_id) is not None:
@@ -323,9 +374,12 @@ async def redeem(
 async def _extra(session_id: str, actor: str) -> Outcome:
     row = await get_roll(session_id, actor)
     used = row.free_throws if row else 0
-    if used < Roll.FREE_PER_SESSION:
-        # Баллы за бросок, который и так бесплатный, — почти наверняка промах
-        return Outcome(FREE_LEFT, target=actor, free_left=Roll.FREE_PER_SESSION - used)
+    # A redemption event carries no badges, so the limit comes from the player's row –
+    # written by their own throw from chat. Never rolled – the base limit
+    limit = (row.free_limit if row and row.free_limit else None) or Roll.FREE_PER_SESSION
+    if used < limit:
+        # Points for a throw that is free anyway are almost certainly a misclick
+        return Outcome(FREE_LEFT, target=actor, free_left=limit - used)
     throw = await _throw_for(session_id, actor, row, free_throw=False)
     return Outcome(
         OK, target=actor, old_value=row.value if row else None,
@@ -334,7 +388,7 @@ async def _extra(session_id: str, actor: str) -> Outcome:
 
 
 async def _shield(session_id: str, actor: str) -> Outcome:
-    # Сам щит — это успешная запись в журнале, отдельного состояния у него нет
+    # The shield itself is a successful journal row, it has no state of its own
     if await has_action(session_id, ACTION_SHIELD, actor, OK):
         return Outcome(ALREADY_SHIELDED, target=actor)
     return Outcome(OK, target=actor)
@@ -343,13 +397,13 @@ async def _shield(session_id: str, actor: str) -> Outcome:
 async def _target(
     session_id: str, actor: str, user_input: str, *, require_roll: bool,
 ) -> tuple[str, RollRow | None] | Outcome:
-    """Цель переброса или проклятия — или отказ, если трогать некого.
+    """The target of a reroll or curse – or a refusal if there is nobody to touch.
 
-    require_roll — цель должна была катать в этой сессии: проклятие вешается
-    только на того, кто уже в игре. Переброс бросает и за того, кто ещё не
-    катал, но только за ник, который хоть раз писал в чате: иначе опечатка в
-    поле награды завела бы ролл несуществующему игроку, и он мог бы стать
-    залупой стрима.
+    require_roll – the target must have rolled this session: a curse is laid only
+    on someone already in the game. A reroll also throws for someone who has not
+    rolled yet, but only for a nick that has written in chat at least once:
+    otherwise a typo in the reward input would create a roll for a nonexistent
+    player, who could become the «залупа стрима».
     """
     target = parse_nick(user_input)
     if target is None:
@@ -366,12 +420,12 @@ async def _target(
 
 
 async def _protection_left(session_id: str, target: str) -> int | None:
-    """Минут до конца защиты после чужого переброса. None — защиты нет.
+    """Minutes until the protection after someone's reroll ends. None – no protection.
 
-    Лимит Twitch на зрителя считает каждого атакующего отдельно, поэтому
-    несколько человек могли бы перебрасывать одну цель подряд. Окно идёт от
-    последнего успешного переброса, а отклонённые попытки в журнал пишутся
-    не как ok и его не продлевают.
+    Twitch's per-viewer limit counts each attacker separately, so several people
+    could reroll one target in a row. The window runs from the last successful
+    reroll, and refused attempts are journaled as something other than ok and do
+    not extend it.
     """
     window = Rewards.REROLL_PROTECT_MINUTES * 60
     if not window:
@@ -395,8 +449,8 @@ async def _reroll(session_id: str, actor: str, user_input: str) -> Outcome:
     protect_left = await _protection_left(session_id, target)
     if protect_left is not None:
         return Outcome(PROTECTED, target=target, protect_minutes_left=protect_left)
-    # На проклятого переброс идёт с его потолком и опускает потолок так же,
-    # как собственный бросок жертвы. Бесплатные броски жертвы не тратятся
+    # On a cursed target the reroll is capped by their ceiling and lowers it the same
+    # way the victim's own throw does. The victim's free throws are not spent
     throw = await _throw_for(session_id, target, row, free_throw=False)
     return Outcome(
         OK, target=target, old_value=row.value if row else None,
@@ -409,10 +463,10 @@ async def _curse(session_id: str, actor: str, user_input: str) -> Outcome:
     if isinstance(found, Outcome):
         return found
     target, row = found
-    # Щит не проверяется намеренно: проклятие его пробивает, в этом его
-    # отличие от дешёвого переброса
+    # The shield is deliberately not checked: the curse pierces it, that is what sets
+    # it apart from the cheap reroll
     if _curse_of(row) is not None:
-        # Новое проклятие вернуло бы потолок наверх — жертве это подарок
+        # A new curse would reset the ceiling to the top – a gift to the victim
         return Outcome(ALREADY_CURSED, target=target)
     ceiling = Rewards.CURSE_CEILING
     value = _throw(ceiling)

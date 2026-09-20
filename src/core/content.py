@@ -1,22 +1,22 @@
-"""Тексты бота: один CONTENT.md с горячей перезагрузкой по mtime.
+"""Bot texts: a single CONTENT.md, hot-reloaded by mtime.
 
-Разделение ответственности: src/core/config.py читает окружение (секреты, числа,
-флаги), этот модуль — всё, что бот произносит. Промпты, заголовки секций
-контекста, ответы в чат, списки эмотов и фолов лежат в одном файле и
-правятся без перезапуска.
+Separation of concerns: src/core/config.py reads the environment (secrets, numbers,
+flags), this module holds everything the bot says. Prompts, context section
+headings, chat replies, the emote and follow lists live in one file and
+are edited without a restart.
 
-Формат — Markdown, чтобы русская проза лежала без кавычек и экранирования:
+The format is Markdown, so Russian prose sits there without quoting or escaping:
 
-    ## секция
-    ### ключ
-    значение до следующего заголовка
+    ## section
+    ### key
+    value up to the next heading
 
-Всё до первого `###` внутри секции — примечания, они игнорируются, как и
-комментарии `<!-- ... -->`, в том числе многострочные.
+Everything before the first `###` inside a section is a note and is ignored, as are
+`<!-- ... -->` comments, multi-line ones included.
 
-Синтаксически сломать такой файл почти нельзя, поэтому вместо разбора
-формата проверяется смысл: дубли ключей и незакрытые секции пишутся в лог,
-а отсутствующие и лишние ключи ловятся на старте через validate_content().
+Such a file is almost impossible to break syntactically, so instead of parsing
+the format the meaning is checked: duplicate keys and unclosed sections are logged,
+and missing or extra keys are caught at startup by validate_content().
 """
 import logging
 import re
@@ -26,29 +26,38 @@ from src.core.utils import safe_format
 
 logger = logging.getLogger(__name__)
 
-# Корень проекта: src/core/content.py → на три уровня вверх
+# Project root: src/core/content.py → three levels up
 CONTENT_PATH = Path(__file__).resolve().parents[2] / 'CONTENT.md'
 
 SECTION_RE = re.compile(r'^##\s+(\S+)\s*$')
 KEY_RE = re.compile(r'^###\s+(\S+)\s*$')
 
-# Ключи, без которых бот работать не может — проверяются при запуске.
+# Keys the bot cannot work without – checked at startup.
 REQUIRED = {
     'prompts': (
-        'system', 'ask', 'summary', 'summary_request', 'who', 'versus',
+        'system', 'ask', 'ask_followup', 'summary', 'summary_request', 'summary_request_previous', 'summary_previous', 'summary_tail', 'who', 'versus',
+        'picture',
         'proactive_user', 'proactive_general',
         'user_question', 'interaction_line',
+        'memory_chronicle', 'memory_chronicle_merge', 'memory_profile', 'memory_hint',
     ),
     'labels': (
         'facts', 'chat', 'channel', 'language',
         'user_facts', 'user_messages', 'user_interactions',
+        'user_events', 'user_sample', 'user_relations', 'user_recent', 'who_said',
+        'prev_stream', 'people', 'chronicle', 'replied',
     ),
     'texts': (
-        'help', 'stats', 'cooldown_local', 'cooldown_gemini', 'role_denied',
+        'help', 'help_announce', 'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
+        'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',
+        'cooldown_local', 'cooldown_gemini', 'role_denied', 'role_denied_sub',
+        'follow_required', 'quota_exceeded',
         'roll_loser_self', 'roll_loser_other', 'roll_free_left', 'roll_champion',
         'roll_cursed_self', 'roll_cursed_other',
         'roll_curse_step', 'roll_curse_hold', 'roll_curse_lifted',
         'roll_no_free', 'roll_no_free_reward', 'roll_error', 'roll_offline',
+        'rollstat_self', 'rollstat_none', 'rollstat_cursed', 'rollstat_curse_hold',
+        'rollstat_shield', 'rollstat_perk_shield', 'rollstat_loser', 'rollstat_nobody',
         'roll_perks_both', 'roll_perks_champion', 'roll_perks_loser',
         'roll_perk_shield_on', 'roll_perk_curse_on',
         'reward_extra_title', 'reward_reroll_title', 'reward_reroll_prompt',
@@ -59,12 +68,14 @@ REQUIRED = {
         'reward_refund_already_cursed', 'reward_refund_protected', 'reward_refund_unknown_target',
         'reward_refund_perk_shield', 'reward_refund_offline',
         'reward_error',
-        'fact_usage', 'fact_saved',
-        'defact_usage', 'defact_missing', 'defact_ambiguous', 'defact_done',
         'ask_usage', 'ask_error',
-        'summary_empty', 'summary_error',
-        'who_usage', 'who_unknown', 'who_failed',
-        'versus_usage', 'versus_unknown', 'versus_failed',
+        'ascii_usage', 'ascii_bad_url', 'ascii_failed', 'ascii_too_big',
+        'ascii_blocked', 'ascii_unchecked', 'ascii_no_left',
+        'summary_empty', 'summary_error', 'summary_no_left', 'summary_no_previous',
+        # summary_recent: only for a bot started before 2026-09-20, remove after the restart
+        'summary_recent',
+        'who_usage', 'who_unknown', 'who_failed', 'who_no_left',
+        'versus_usage', 'versus_unknown', 'versus_unknown_one', 'versus_failed', 'versus_no_left',
         'no_answer', 'filtered', 'gen_error', 'gen_failed',
     ),
     'lists': ('emotes', 'follow', 'banned'),
@@ -72,10 +83,10 @@ REQUIRED = {
 
 
 def parse(raw: str) -> dict[str, dict[str, str]]:
-    """Разобрать CONTENT.md в {секция: {ключ: значение}}.
+    """Parse CONTENT.md into {section: {key: value}}.
 
-    Дубли ключей логируются; побеждает последнее определение — при правке
-    обычно дописывают ниже.
+    Duplicate keys are logged; the last definition wins – edits are usually
+    appended further down.
     """
     data: dict[str, dict[str, str]] = {}
     section: str | None = None
@@ -92,7 +103,7 @@ def parse(raw: str) -> dict[str, dict[str, str]]:
         key, buffer = None, []
 
     for line in raw.splitlines():
-        # Примечания <!-- ... -->, в том числе многострочные, в значения не попадают
+        # Notes <!-- ... -->, multi-line ones included, never reach the values
         stripped = line.strip()
         if in_comment:
             in_comment = '-->' not in stripped
@@ -121,7 +132,7 @@ def parse(raw: str) -> dict[str, dict[str, str]]:
 
 
 class _ContentFile:
-    """CONTENT.md с перечитыванием при изменении mtime."""
+    """CONTENT.md, re-read when its mtime changes."""
 
     def __init__(self, path: Path) -> None:
         self._path = path
@@ -141,13 +152,13 @@ class _ContentFile:
             raw = self._path.read_text(encoding='utf-8')
         except OSError as e:
             self._mtime = mtime
-            self._log_once('Не удалось прочитать %s: %s — остаюсь на прошлой версии', self._path, e)
+            self._log_once('Не удалось прочитать %s: %s – остаюсь на прошлой версии', self._path, e)
             return self._data
         data = parse(raw)
         if not data:
-            # Пустой разбор — скорее всего снесли заголовки; прошлая версия лучше.
+            # An empty parse most likely means the headings were wiped; the previous version is better.
             self._mtime = mtime
-            self._log_once('%s не содержит секций — остаюсь на прошлой версии', self._path)
+            self._log_once('%s не содержит секций – остаюсь на прошлой версии', self._path)
             return self._data
         self._data = data
         self._mtime = mtime
@@ -177,7 +188,7 @@ def _lines(raw: str) -> list[str]:
 
 
 class Content:
-    """Доступ к текстам. Плейсхолдеры подставляются через safe_format."""
+    """Access to texts. Placeholders are substituted via safe_format."""
 
     @staticmethod
     def prompt(name: str, **values) -> str:
@@ -201,18 +212,18 @@ class Content:
 
 
 def validate_content() -> None:
-    """Проверить структуру файла. Вызывается на старте бота.
+    """Check the file structure. Called at bot startup.
 
-    Отсутствующий ключ — ошибка запуска. Лишний ключ или секция — почти
-    всегда опечатка в заголовке, поэтому о них предупреждаем: сам по себе
-    такой заголовок молча ничего бы не сломал, но нужный текст при этом
-    остался бы недоступным.
+    A missing key is a startup error. An extra key or section is almost
+    always a typo in a heading, so it gets a warning: such a heading on its own
+    would silently break nothing, but the intended text would stay
+    unreachable.
     """
     if not CONTENT_PATH.exists():
         raise FileNotFoundError(f'Не найден {CONTENT_PATH}')
     data = _content.get()
     if not data:
-        raise ValueError(f'{CONTENT_PATH.name} пуст или не разобран — смотри лог')
+        raise ValueError(f'{CONTENT_PATH.name} пуст или не разобран – смотри лог')
 
     missing = [
         f'{section}.{key}'
@@ -220,7 +231,7 @@ def validate_content() -> None:
         for key in keys
         if not data.get(section, {}).get(key, '') and section != 'lists'
     ]
-    # Списки могут быть пустыми по смыслу (стоп-лист), важно лишь наличие ключа
+    # Lists may legitimately be empty (the stop-list); only the presence of the key matters
     missing += [
         f'lists.{key}' for key in REQUIRED['lists'] if key not in data.get('lists', {})
     ]

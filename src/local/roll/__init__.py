@@ -1,10 +1,12 @@
-"""Игра «залупа стрима»: !roll, награды за баллы канала, оповещение о снятии проклятия.
+"""The «залупа стрима» (session loser) game: !roll, channel-points rewards, curse-lift
+announcement.
 
-    game.py        механика — единственное место, которое меняет rolls
-    storage.py     запросы к rolls, rewards и roll_actions
+    game.py        mechanics – the only place that changes rolls
+    storage.py     queries on rolls, rewards, roll_actions and roll_perks
+    perks.py       perks from the previous stream: announce, start the countdown
     command.py     !roll
-    texts.py       общие куски сообщений: китежанин, проклятие, названия наград
-    redemption.py  применить выкуп и сказать в чат
-    rewards.py     Twitch: создание наград, подписка, статусы, пауза
-    announce.py    фоновое оповещение о снятии проклятия
+    texts.py       shared message pieces: китежанин (champion), curse, reward titles
+    redemption.py  apply a redemption and say it in chat
+    rewards.py     Twitch: reward creation, subscription, statuses, pause
+    announce.py    background announcement of a curse lift
 """

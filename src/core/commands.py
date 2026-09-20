@@ -9,20 +9,22 @@ if TYPE_CHECKING:
 
 Handler = Callable[['CommandContext'], Awaitable[None]]
 
-# Разделители между триггером и аргументами: "!who ник", "!ask: вопрос"
+# Separators between the trigger and the args: "!who ник", "!ask: вопрос"
 ARG_SEPARATORS = ' :,'
 
-# Классы команд. Локальные обслуживаются из SQLite и текста CONTENT.md —
-# стоят ноль и отвечают мгновенно. У Gemini-команд каждый вызов уходит в API:
-# это деньги, ожидание и место в семафоре.
+# Command classes. Local ones are served from SQLite and CONTENT.md text –
+# they cost nothing and answer instantly. Every Gemini command call goes to the API:
+# that is money, waiting and a slot in the semaphore.
 #
-# Класс — он же область кулдауна: у каждого свой счётчик на пользователя,
-# поэтому отсидка за !ask не мешает нажать !help. Лестница по статусу зрителя
-# при этом одна на оба класса, см. _cooldown_seconds() в src/core/component.py.
+# The class is also the cooldown scope: each has its own per-user counter,
+# so waiting out !ask does not block !help-bot. The viewer status ladder, though,
+# is one for both classes, see _cooldown_seconds() in src/core/component.py.
 KIND_LOCAL = 'local'
 KIND_GEMINI = 'gemini'
 
 ROLE_VIP_MOD_BROADCASTER = 'vip_mod_broadcaster'
+# Same ladder, but a subscriber passes too: !ascii is open from the sub badge up
+ROLE_SUB_VIP_MOD_BROADCASTER = 'sub_vip_mod_broadcaster'
 
 
 @dataclasses.dataclass
@@ -36,14 +38,41 @@ class CommandContext:
     kind: str = KIND_LOCAL
     args: str = ''
 
-    def clear_cooldown(self) -> None:
-        """Снять кулдаун со своего класса.
+    @property
+    def original_args(self) -> str:
+        """Command args in their original case.
 
-        Хендлер зовёт это, когда отказывает по формату: человек не получил
-        ответа, значит и ждать ему не за что. Область берётся из самого
-        контекста, чтобы её нельзя было перепутать.
+        args are cut from the lowercased prompt, so the same substring is looked
+        up in the original message text. Needed where case is part of the
+        meaning: a fact, a question to the model.
+        """
+        if not self.args:
+            return ''
+        index = self.original_text.lower().rfind(self.args)
+        if index == -1:
+            return self.args
+        return self.original_text[index:index + len(self.args)].strip()
+
+    def clear_cooldown(self) -> None:
+        """Release the cooldown of its own class.
+
+        A handler calls this when it rejects malformed input: the viewer got no
+        answer, so there is nothing to wait for. The scope is taken from the
+        context itself, so it cannot be mixed up.
         """
         self.bot.clear_cooldown(self.user, self.kind)
+
+    async def refuse(self) -> None:
+        """Rejection of malformed input: give back both the cooldown and the hourly quota slot.
+
+        The dispatcher records the request before calling the handler – otherwise
+        spam would slip through – so a handler that generated nothing must give
+        it back itself.
+        """
+        self.clear_cooldown()
+        if self.kind == KIND_GEMINI:
+            from src.core.database import forget_bot_use
+            await forget_bot_use(self.user, self.kind)
 
 
 @dataclasses.dataclass
@@ -51,7 +80,7 @@ class CommandEntry:
     trigger: str
     handler: Handler
     prefix: bool
-    role: str | None            # None = все, ROLE_VIP_MOD_BROADCASTER = VIP/мод/стример
+    role: str | None            # None = everyone, ROLE_VIP_MOD_BROADCASTER = VIP/mod/broadcaster
     kind: str                   # KIND_LOCAL | KIND_GEMINI
 
     def match(self, prompt: str) -> bool:
@@ -60,7 +89,7 @@ class CommandEntry:
         if not prompt.startswith(self.trigger):
             return False
         rest = prompt[len(self.trigger):]
-        # Граница слова: "!who ник" — да, "!whoever" — нет
+        # Word boundary: "!who ник" – yes, "!whoever" – no
         return not rest or rest[0] in ARG_SEPARATORS
 
     def extract_args(self, prompt: str) -> str:

@@ -1,6 +1,6 @@
-"""Общие куски сообщений игры: названия наград, хвосты про китежанина и проклятие.
+"""Shared pieces of game messages: reward titles, champion (китежанин) and curse notes.
 
-Нужны и ответу на !roll, и итогам наград, и описаниям наград в Twitch.
+Needed by the !roll reply, by reward outcomes and by reward descriptions on Twitch.
 """
 from src.core.config import Rewards, Roll
 from src.core.content import Content
@@ -12,7 +12,7 @@ def reward_title(action: str) -> str:
 
 
 def curse_values() -> dict:
-    """Параметры проклятия для текстов: в описании награды и в чате."""
+    """Curse parameters for the texts: in the reward description and in chat."""
     return {
         'step': Rewards.CURSE_STEP, 'floor': Rewards.CURSE_FLOOR,
         'hold': Rewards.CURSE_HOLD_MINUTES,
@@ -20,10 +20,10 @@ def curse_values() -> dict:
 
 
 def curse_note(outcome: Outcome) -> str:
-    """Хвост к сообщению о броске проклятого. Пусто, если проклятия нет.
+    """Note appended to the message about a cursed player's throw. Empty if there is no curse.
 
-    Любой бросок по проклятому опускает потолок, поэтому хвост всегда про
-    следующий потолок — или про минуты до снятия, если потолок уже на дне.
+    Any throw on a cursed player lowers the ceiling, so the note is always about the
+    next ceiling – or about the minutes until the lift if the ceiling is already on the floor.
     """
     if outcome.ceiling is None:
         return ''
@@ -35,7 +35,7 @@ def curse_note(outcome: Outcome) -> str:
 
 
 def champion_note(outcome: Outcome) -> str:
-    """«Китежанин стрима: …» к сообщению о броске. Пусто, если показывать некого."""
+    """«Китежанин стрима: …» for the throw message. Empty if there is nobody to show."""
     if outcome.champion is None:
         return ''
     name, value = outcome.champion

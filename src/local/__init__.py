@@ -1,10 +1,11 @@
-"""Возможности бота без Gemini.
+"""Bot features that do not use Gemini.
 
-    commands.py    !help, !stat, !fact, !defact
-    follow.py      ответ на новый фолов
-    emote_spam.py  порция эмотов в чат раз в интервал
-    roll/          игра «залупа стрима»: !roll, награды за баллы, оповещения
+    commands.py    !help-bot, !stat
+    follow.py      reply to a new follow
+    emote_spam.py  a batch of emotes in chat once per interval
+    roll/          the «залупа стрима» (session loser) game: !roll, channel-points rewards,
+                   announcements
 
-Небольшая команда без генерации — сюда, отдельным модулем. Фича со своими
-таблицами, текстами и фоновыми задачами получает подпапку здесь же, как roll/.
+A small command without generation goes here as a module of its own. A feature with its
+own tables, texts and background tasks gets a subpackage right here, like roll/.
 """

@@ -1,24 +1,24 @@
-"""Сессия бота — это эфир, а не календарный день.
+"""The bot's session is the stream, not the calendar day.
 
-Пока идёт стрим, сессия — это эфир: чат, статистика, саммари, контекст Gemini
-и игра живут в её рамках. id эфира от Twitch записан в таблицу streams вместе
-с сессией, поэтому перезапуск бота посреди стрима продолжает ту же сессию.
-Короткий обрыв (стример переподключился за STREAM_RESUME_MINUTES) даёт новый
-id, но сессия остаётся прежней.
+While a stream is live the session is the stream: chat, stats, summary, Gemini
+context and the game all live within it. Twitch's stream id is stored in the
+streams table together with the session, so a bot restart mid-stream continues the
+same session. A short outage (the streamer reconnected within STREAM_RESUME_MINUTES)
+gives a new id, but the session stays the same.
 
-Пока эфира нет, сессия — текущая дата, как было раньше: чат пишется и вне
-стрима, а игра в это время закрыта.
+While there is no stream the session is the current date, as before: chat is
+recorded outside streams too, while the game is closed.
 
-Откуда бот знает про эфир:
-- события stream.online / stream.offline приходят сразу;
-- при запуске бот сам спрашивает Twitch, идёт ли стрим: события о том, что
-  случилось, пока бот был выключен, уже не придут;
-- раз в CHECK_SECONDS watch_stream() сверяется с Twitch и ловит события,
-  которые потерялись (разрыв вебсокета, неудачная подписка, ошибка на старте).
+How the bot learns about the stream:
+- stream.online / stream.offline events arrive right away;
+- on startup the bot asks Twitch itself whether the stream is live: events about
+  what happened while the bot was down will never arrive;
+- every CHECK_SECONDS watch_stream() checks against Twitch and catches events that
+  got lost (websocket drop, failed subscription, error on startup).
 
-Конец эфира, который бот не видел (был выключен), берётся по записи эфира в
-Twitch, а если записи нет — по последнему сообщению чата, которое бот успел
-записать. От этого времени зависит, будет ли следующий эфир считаться обрывом.
+A stream end the bot did not see (it was down) is taken from the stream's
+recording on Twitch, and if there is none – from the last chat message the bot
+managed to record. That time decides whether the next stream counts as an outage.
 """
 import asyncio
 import logging
@@ -32,19 +32,19 @@ from src.core.database import (
 
 logger = logging.getLogger(__name__)
 
-# Сверка с Twitch: как часто и сколько проверок подряд расхождение должно
-# держаться, прежде чем бот ему поверит. Список эфиров в Twitch отстаёт от
-# событий на минуту-другую в начале и в конце стрима, одной проверки мало
+# Twitch check: how often, and for how many checks in a row a disagreement must
+# hold before the bot believes it. Twitch's stream list lags behind events by a
+# minute or two at the start and end of a stream, so one check is not enough
 CHECK_SECONDS = 120
 CONFIRMATIONS = 3
 
-# (stream_id, started_at) → time.time() конца эфира или None, если узнать нечем
+# (stream_id, started_at) → time.time() of the stream end, or None if there is no way to tell
 EndLookup = Callable[[str, float], Awaitable[float | None]]
 
 
 def _session_name(started_at: float) -> str:
-    # Дата и время начала по местным часам: читается в !stat и сортируется
-    # после сессий-дат того же дня
+    # Start date and time in local time: readable in !stat and sorts
+    # after date sessions of the same day
     return time.strftime('%Y-%m-%d %H:%M', time.localtime(started_at))
 
 
@@ -68,17 +68,17 @@ class StreamTracker:
         return self._session or time.strftime('%Y-%m-%d')
 
     async def online(self, stream_id: str, started_at: float) -> bool:
-        """Эфир идёт. True — началась новая сессия, False — продолжается прежняя.
+        """Stream is live. True – a new session started, False – the previous one continues.
 
-        Знакомый id — это перезапуск бота, повтор события или эфир, который
-        закрыли по ошибке. Новый id вскоре после конца прошлого эфира — обрыв,
-        сессия та же. Прошлый эфир, конец которого бот не видел, закрывается.
+        A known id is a bot restart, a redelivered event or a stream that was
+        closed by mistake. A new id shortly after the previous stream ended is an
+        outage, same session. A previous stream whose end the bot did not see is closed.
         """
         known = await get_stream(stream_id)
         if known is not None:
             if known.ended_at is not None:
                 await reopen_stream(stream_id)
-                logger.warning('Эфир %s снова идёт — его закрыли по ошибке, открываю', stream_id)
+                logger.warning('Эфир %s снова идёт – его закрыли по ошибке, открываю', stream_id)
             session, new = known.session_id, False
         else:
             session, new = _session_name(started_at), True
@@ -96,14 +96,14 @@ class StreamTracker:
         return new
 
     async def offline(self) -> None:
-        """Эфир закончился: сессия снова по дате."""
+        """Stream ended: the session is by date again."""
         if self._stream_id is not None:
             await end_stream(self._stream_id, time.time())
             logger.info('Эфир %s закончился, сессия %s закрыта', self._stream_id, self._session)
         self._stream_id = self._session = None
 
     async def settle_missed_end(self) -> None:
-        """На старте эфира нет, а последний в базе не закрыт: бот не видел его конца."""
+        """No stream at startup, but the last one in the DB is open: the bot missed its end."""
         last = await get_last_stream()
         if last is None or last.ended_at is not None:
             return
@@ -113,11 +113,11 @@ class StreamTracker:
                     last.stream_id, time.strftime('%Y-%m-%d %H:%M', time.localtime(ended)))
 
     async def _estimate_end(self, stream: StreamRow) -> float:
-        """Когда кончился эфир, конец которого бот не видел.
+        """When a stream ended whose end the bot did not see.
 
-        Точно — по записи эфира в Twitch. Записи нет (VOD выключены) — по
-        последнему сообщению чата в сессии, которое бот успел записать, то есть
-        примерно по моменту, когда бот выключился. В худшем случае — начало эфира.
+        Exactly – from the stream's recording on Twitch. No recording (VODs off) –
+        from the last chat message of the session the bot managed to record, i.e.
+        roughly the moment the bot went down. In the worst case – the stream start.
         """
         if self._end_lookup is not None:
             try:
@@ -131,11 +131,11 @@ class StreamTracker:
 
 
 async def watch_stream(bot) -> None:
-    """Сверка с Twitch раз в CHECK_SECONDS: ловит пропущенные начало и конец эфира.
+    """Check against Twitch every CHECK_SECONDS: catches a missed stream start or end.
 
-    bot должен уметь fetch_live_stream(), stream_went_online() и
-    stream_went_offline(). Расхождению с Twitch бот верит, только если оно
-    держится CONFIRMATIONS проверок подряд и указывает на одно и то же.
+    bot must provide fetch_live_stream(), stream_went_online() and
+    stream_went_offline(). The bot believes a disagreement with Twitch only if it
+    holds for CONFIRMATIONS checks in a row and points to the same thing.
     """
     seen: str | None = None
     strikes = 0
@@ -158,10 +158,10 @@ async def watch_stream(bot) -> None:
             seen, strikes = None, 0
             try:
                 if observed is None:
-                    logger.warning('Конец эфира пропущен — закрываю сессию по сверке с Twitch')
+                    logger.warning('Конец эфира пропущен – закрываю сессию по сверке с Twitch')
                     await bot.stream_went_offline()
                 else:
-                    logger.warning('Начало эфира %s пропущено — открываю по сверке с Twitch', key)
+                    logger.warning('Начало эфира %s пропущено – открываю по сверке с Twitch', key)
                     await bot.stream_went_online(*observed)
             except Exception:
                 logger.exception('Состояние эфира по сверке не применено')

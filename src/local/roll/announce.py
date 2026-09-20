@@ -1,7 +1,7 @@
-"""Фоновое оповещение игры: снятие проклятия.
+"""Background announcement of the game: a curse lift.
 
-Периодической сводки «кто залупа стрима» здесь больше нет: каждый !roll и
-итог награды и так называют залупу и китежанина.
+The periodic «кто залупа стрима» summary is gone from here: every !roll and
+reward outcome already names the loser (залупа) and the champion (китежанин).
 """
 import asyncio
 import logging
@@ -13,17 +13,17 @@ from src.local.roll import game
 
 logger = logging.getLogger(__name__)
 
-# Как часто проверять, не спало ли проклятие. Отсчёт до снятия идёт в минутах,
-# так что точности в минуту хватает, а запрос по одной сессии копеечный
+# How often to check whether a curse has lifted. The countdown runs in minutes,
+# so one-minute precision is enough, and a query over one session is cheap
 CURSE_LIFT_CHECK_SECONDS = 60
 
 
 async def curse_lift_loop(bot) -> None:
-    """Сообщает в чат, когда с игрока спало проклятие.
+    """Tells chat when a player's curse has lifted.
 
-    Проклятие спадает, когда потолок пробыл на дне REWARD_CURSE_HOLD_MINUTES.
-    Проклятие, не дошедшее до дна, живёт до конца сессии и молча уходит вместе
-    с ней — сообщать тут нечего, новая сессия и так начинается без проклятий.
+    A curse lifts once the ceiling has sat on the floor for REWARD_CURSE_HOLD_MINUTES.
+    A curse that never reaches the floor lives until the session ends and leaves
+    silently with it – nothing to announce, a new session starts without curses anyway.
     """
     try:
         while True:
@@ -42,7 +42,7 @@ async def _announce_curse_lifts(bot) -> None:
     session_id = bot.session_id
     for user in await game.lift_expired_curses(session_id):
         text = Content.text('roll_curse_lifted', user=user, max=Roll.MAX)
-        # Проклятие уже снято и в выборку больше не попадёт: если сообщение
-        # не ушло, повторять его не будем — игра от этого не ломается
+        # The curse is already cleared and will not be selected again: if the message
+        # did not go out, we do not repeat it – the game does not break from that
         if text and await bot.send_chat_message(text):
             await save_bot_interaction(session_id, '_roll_', '[curse-lifted]', text)

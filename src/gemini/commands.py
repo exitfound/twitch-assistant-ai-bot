@@ -1,57 +1,46 @@
-"""Команды, обращающиеся к Gemini."""
-import asyncio
+"""Commands that call Gemini."""
 import logging
+from collections import defaultdict
 
 from google.genai import types
 
 from src.core.commands import CommandContext
-from src.core.config import Context, Gemini
+from src.core.config import Gemini, Summary, Who
 from src.core.content import Content
 from src.core.database import (
-    get_random_knowledge, get_recent_chat, get_relevant_facts,
-    get_user_interactions, get_user_messages, search_context,
+    count_bot_uses_this_stream, get_last_tagged_interaction, record_bot_use,
 )
-from src.core.utils import WHO_VERSUS_MAX
+from src.core.utils import (
+    WHO_MAX, clean_nick, reply_to_bot,
+)
+from src.gemini import summary, who
+from src.gemini.answer_context import Question, answer, walk
 from src.gemini.client import SAFETY_OFF, generate, make_gen_config
-from src.gemini.context import ContextBuilder
 from src.gemini.responder import respond_and_save, send_chunked
 
 logger = logging.getLogger(__name__)
 
-SUMMARY_TEMPERATURE = 1.2
+# !versus: two descriptions plus the verdict at the end do not fit one message,
+# and trimming a single one cut exactly the verdict (owner, 2026-09-19)
+VERSUS_MAX_CHUNKS = 2
 
-
-def _interaction_lines(username: str, interactions: list[tuple[str, str]]) -> list[str]:
-    return [
-        Content.prompt('interaction_line', user=username, question=q, answer=a)
-        for q, a in interactions
-    ]
+ASK_TAG = '[ask]'
+# An answer to !ask is at most two Twitch messages. send_chunked trims the excess
+# at a sentence end
+ASK_MAX_CHUNKS = 2
+# For how many minutes a viewer's previous !ask counts as the same conversation
+ASK_FOLLOWUP_MINUTES = 15
 
 
 async def handle_default(ctx: CommandContext) -> None:
-    facts, recent_chat, context_results, random_knowledge = await asyncio.gather(
-        get_relevant_facts(ctx.user, ctx.prompt),
-        get_recent_chat(ctx.session_id, Context.CHAT_MESSAGES),
-        search_context(ctx.prompt, Context.SEARCH_RESULTS),
-        get_random_knowledge(Context.KNOWLEDGE_RANDOM),
-    )
-    prompt_ctx = (
-        ContextBuilder()
-        .add_facts(Content.label('facts'), facts)
-        .add_chat(Content.label('chat'), recent_chat)
-        .add_lines(Content.label('channel'), context_results)
-        .add_lines(Content.label('language'), random_knowledge)
-        .add_raw(Content.prompt('user_question', user=ctx.user, prompt=ctx.prompt))
+    """Free text addressed to the bot. The context and its fallback ladder live in
+    src/gemini/answer_context.py: two streams plus memory, less when Gemini blocks it."""
+    question = Question(
+        session_id=ctx.session_id, user=ctx.user, prompt=ctx.prompt,
+        replied=reply_to_bot(ctx.message, ctx.bot.bot_id),
     )
     try:
-        gen_config = make_gen_config()
-        text = await generate(prompt_ctx.build(), gen_config)
-        if not text:
-            logger.warning('Пустой ответ для %s, повтор без контекста канала', ctx.user)
-            text = await generate(
-                prompt_ctx.build_without(Content.label('language'), Content.label('channel')),
-                gen_config,
-            )
+        text, _ = await answer(question, make_gen_config())
         if not await respond_and_save(ctx, text, ctx.prompt):
             logger.warning('Ответ не отправлен для %s, запрос: %s', ctx.user, ctx.prompt[:100])
             await ctx.message.respond(Content.text('no_answer', user=ctx.user))
@@ -61,114 +50,158 @@ async def handle_default(ctx: CommandContext) -> None:
 
 
 async def handle_ask(ctx: CommandContext) -> None:
-    if not ctx.args:
-        ctx.clear_cooldown()
+    # The question in its original case: «РФ», names and code lose their meaning without it
+    question = ctx.original_args
+    if not question:
+        await ctx.refuse()
         await ctx.message.respond(Content.text('ask_usage', user=ctx.user))
         return
     try:
         ask_config = types.GenerateContentConfig(
             system_instruction=Content.prompt('ask'),
-            temperature=Gemini.TEMPERATURE,
+            temperature=Gemini.ASK_TEMPERATURE,
             safety_settings=SAFETY_OFF,
         )
-        text = await generate(ctx.args, ask_config)
-        await send_chunked(ctx, text, f'[ask] {ctx.args}')
+        contents = question
+        # The same viewer's previous question: without it the model cannot make sense of
+        # «а подробнее?» or «где ответ». Only a recent one – an old one is another topic
+        previous = await get_last_tagged_interaction(ctx.user, ASK_TAG, ASK_FOLLOWUP_MINUTES)
+        if previous:
+            contents = Content.prompt(
+                'ask_followup', question=question,
+                previous_question=previous[0], previous_answer=previous[1],
+            )
+        text = await generate(contents, ask_config)
+        await send_chunked(ctx, text, f'{ASK_TAG} {question}', max_chunks=ASK_MAX_CHUNKS)
     except Exception:
         logger.exception('Gemini !ask: ошибка для %s', ctx.user)
         await ctx.message.respond(Content.text('ask_error', user=ctx.user))
 
 
 async def handle_summary(ctx: CommandContext) -> None:
+    """The stream so far, or the previous stream (src/gemini/summary.py)."""
+    previous = summary.mode(ctx.args, ctx.session_id) == summary.PREVIOUS
+
+    async def run() -> bool:
+        if previous:
+            result, tag, empty = await summary.previous(ctx.session_id, ctx.user), '[summary] прошлый', 'summary_no_previous'
+        else:
+            result, tag, empty = await summary.now(ctx.session_id, ctx.user), '[summary]', 'summary_empty'
+        if result is None:
+            await ctx.refuse()
+            await ctx.message.respond(Content.text(empty, user=ctx.user))
+            return False
+        return await send_chunked(ctx, result[0], tag)
+
+    await _per_stream(ctx, summary.KIND, run, error='summary_error')
+
+
+# Per-stream limits of !who, !versus and !summary (owner, 2026-09-19):
+# kind → (follower, VIP, subscriber or moderator), 0 – unlimited. The broadcaster
+# is never limited; a subscribing VIP counts as a subscriber
+def _limit_for(kind: str, chatter) -> int:
+    if chatter.broadcaster:
+        return 0
+    follower, vip, sub = {
+        who.WHO_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
+        who.VERSUS_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
+        summary.KIND: (Summary.PER_STREAM_FOLLOWER, Summary.PER_STREAM_VIP, Summary.PER_STREAM_SUB),
+    }[kind]
+    if chatter.moderator or chatter.subscriber or chatter.founder:
+        return sub
+    if chatter.vip:
+        return vip
+    return follower
+
+
+# Who is waiting for an answer right now, per command. The limit is checked before
+# generation and counted after sending, seconds later: a VIP's 10-second cooldown
+# could let a second command through with the same count. Hence one at a time
+_busy: dict[str, set[str]] = defaultdict(set)
+
+
+async def _per_stream(ctx: CommandContext, kind: str, run, error: str = 'gen_failed') -> None:
+    """A command under its per-stream limit, counted in bot_uses under `kind` like
+    !ascii pictures. run() sends the answer and returns whether it reached chat:
+    only that is counted, so a refusal costs nothing and a restart resets nothing."""
+    busy = _busy[kind]
+    if ctx.user in busy:
+        # The first command is still being written and will answer itself
+        await ctx.refuse()
+        return
+    # Taken before the first await, or two commands at once both pass the check
+    busy.add(ctx.user)
     try:
-        recent_chat = await get_recent_chat(ctx.session_id, Context.SUMMARY_MESSAGES)
-        if not recent_chat:
-            ctx.clear_cooldown()
-            await ctx.message.respond(Content.text('summary_empty', user=ctx.user))
+        limit = _limit_for(kind, ctx.message.chatter)
+        if limit and await count_bot_uses_this_stream(ctx.user, kind, ctx.session_id) >= limit:
+            await ctx.refuse()
+            await ctx.message.respond(Content.text(f'{kind}_no_left', user=ctx.user, limit=limit))
             return
-        chat_lines = '\n'.join(f'{u}: {m}' for u, m in recent_chat)
-        summary_config = types.GenerateContentConfig(
-            system_instruction=f"{Content.prompt('system')}\n\n{Content.prompt('summary')}",
-            temperature=SUMMARY_TEMPERATURE,
-            safety_settings=SAFETY_OFF,
-        )
-        request = Content.prompt(
-            'summary_request', session_id=ctx.session_id, count=len(recent_chat),
-        )
-        text = await generate(f'{request}\n\n{chat_lines}', summary_config)
-        await send_chunked(ctx, text, '[summary]')
+        if await run():
+            await record_bot_use(ctx.user, kind)
     except Exception:
-        logger.exception('Gemini !summary: ошибка для %s', ctx.user)
-        await ctx.message.respond(Content.text('summary_error', user=ctx.user))
+        logger.exception('Gemini !%s: ошибка для %s', kind, ctx.user)
+        await ctx.message.respond(Content.text(error, user=ctx.user))
+    finally:
+        busy.discard(ctx.user)
 
 
 async def handle_who(ctx: CommandContext) -> None:
+    """A handful of facts about the chatter from a fresh random sample of their
+    whole history, less when Gemini blocks it."""
     args = ctx.args.split()
-    target = args[0].lstrip('@') if args else ''
+    target = clean_nick(args[0]) if args else ''
     if not target:
-        ctx.clear_cooldown()
+        await ctx.refuse()
         await ctx.message.respond(Content.text('who_usage', user=ctx.user))
         return
-    try:
-        target_facts, target_msgs, target_interactions = await asyncio.gather(
-            get_relevant_facts(target, ''),
-            get_user_messages(target, Context.WHO_MESSAGES),
-            get_user_interactions(target, Context.USER_INTERACTIONS),
-        )
-        if not target_facts and not target_msgs and not target_interactions:
+
+    async def run() -> bool:
+        rungs = await who.who_rungs(ctx.user, target)
+        if rungs is None:
+            # Gemini was not called – a typo in the nick must not cost cooldown or quota
+            await ctx.refuse()
             await ctx.message.respond(Content.text('who_unknown', user=ctx.user, target=target))
-            return
-        prompt_ctx = (
-            ContextBuilder()
-            .add_facts(Content.label('user_facts', target=target), target_facts)
-            .add_lines(Content.label('user_messages', target=target), target_msgs)
-            .add_lines(
-                Content.label('user_interactions', target=target),
-                _interaction_lines(target, target_interactions),
-            )
-            .add_raw(Content.prompt('who', user=ctx.user, target=target))
-        )
-        text = await generate(prompt_ctx.build(), make_gen_config())
-        if not await respond_and_save(ctx, text, f'[who] {target}', WHO_VERSUS_MAX):
-            await ctx.message.respond(Content.text('who_failed', user=ctx.user, target=target))
-    except Exception:
-        logger.exception('Gemini !who: ошибка для %s', ctx.user)
-        await ctx.message.respond(Content.text('gen_failed', user=ctx.user))
+            return False
+        text, _ = await walk(rungs, make_gen_config(), ctx.user)
+        if await respond_and_save(ctx, text, who.who_tag(target), WHO_MAX):
+            return True
+        await ctx.message.respond(Content.text('who_failed', user=ctx.user, target=target))
+        return False
+
+    await _per_stream(ctx, who.WHO_KIND, run)
 
 
 async def handle_versus(ctx: CommandContext) -> None:
+    """Facts about two chatters piled up and mocked; whoever's are dumber loses."""
     args = ctx.args.split()
-    nicks = list(dict.fromkeys(a.lstrip('@') for a in args if a.lstrip('@')))
+    nicks = list(dict.fromkeys(nick for nick in map(clean_nick, args) if nick))
     if len(nicks) < 2:
-        ctx.clear_cooldown()
+        await ctx.refuse()
         await ctx.message.respond(Content.text('versus_usage', user=ctx.user))
         return
     nick1, nick2 = nicks[0], nicks[1]
-    try:
-        facts1, msgs1, interactions1, facts2, msgs2, interactions2 = await asyncio.gather(
-            get_relevant_facts(nick1, ''),
-            get_user_messages(nick1, Context.VERSUS_MESSAGES),
-            get_user_interactions(nick1, Context.USER_INTERACTIONS),
-            get_relevant_facts(nick2, ''),
-            get_user_messages(nick2, Context.VERSUS_MESSAGES),
-            get_user_interactions(nick2, Context.USER_INTERACTIONS),
-        )
-        if not any([facts1, msgs1, interactions1, facts2, msgs2, interactions2]):
-            await ctx.message.respond(
-                Content.text('versus_unknown', user=ctx.user, nick1=nick1, nick2=nick2)
-            )
-            return
-        prompt_ctx = ContextBuilder()
-        for nick, facts, msgs, ints in [(nick1, facts1, msgs1, interactions1),
-                                        (nick2, facts2, msgs2, interactions2)]:
-            prompt_ctx.add_facts(Content.label('user_facts', target=nick), facts)
-            prompt_ctx.add_lines(Content.label('user_messages', target=nick), msgs)
-            prompt_ctx.add_lines(
-                Content.label('user_interactions', target=nick), _interaction_lines(nick, ints),
-            )
-        prompt_ctx.add_raw(Content.prompt('versus', user=ctx.user, nick1=nick1, nick2=nick2))
-        text = await generate(prompt_ctx.build(), make_gen_config())
-        if not await respond_and_save(ctx, text, f'[versus] {nick1} vs {nick2}', WHO_VERSUS_MAX):
-            await ctx.message.respond(Content.text('versus_failed', user=ctx.user))
-    except Exception:
-        logger.exception('Gemini !versus: ошибка для %s', ctx.user)
-        await ctx.message.respond(Content.text('gen_failed', user=ctx.user))
+
+    async def run() -> bool:
+        m1, m2 = await who.versus_material(nick1, nick2)
+        if not (m1.known and m2.known):
+            # Gemini was not called – a typo costs no cooldown or quota. With one side
+            # unknown the model would make that person up, so it is a refusal as well
+            await ctx.refuse()
+            if not (m1.known or m2.known):
+                text = Content.text('versus_unknown', user=ctx.user, nick1=nick1, nick2=nick2)
+            else:
+                text = Content.text('versus_unknown_one', user=ctx.user,
+                                    target=nick2 if m1.known else nick1)
+            await ctx.message.respond(text)
+            return False
+        rungs = await who.versus_rungs(ctx.user, m1, m2)
+        text, _ = await walk(rungs, make_gen_config(), ctx.user)
+        if await respond_and_save(ctx, text, who.versus_tag(nick1, nick2),
+                                  max_chunks=VERSUS_MAX_CHUNKS):
+            return True
+        await ctx.message.respond(Content.text('versus_failed', user=ctx.user))
+        return False
+
+    await _per_stream(ctx, who.VERSUS_KIND, run)
+

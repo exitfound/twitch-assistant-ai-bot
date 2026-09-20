@@ -1,22 +1,18 @@
-"""!summary: the stream so far, or the previous stream (owner, 2026-09-19).
+"""!summary: the stream so far, or the previous stream.
 
-During a stream the bot retells the whole stream, not its last 500 messages – the
-longest ones ran past 800 and the start was lost. Gemini's input filter judges a
-request by combinations of messages, and with hundreds of them it blocks a
-fraction of the chats whole (12 of 89 chronicles in the memory backfill), so a
-blocked request is asked again with less (answer_context.walk()): the whole
-stream → the last CONTEXT_SUMMARY_MESSAGES → the last FALLBACK_MESSAGES.
+During a stream the whole stream is retold rather than a fixed window, because the
+longest ones run past 800 messages and a window loses the start. Gemini's input filter
+judges a request by combinations of messages and blocks a fraction of long chats whole,
+so a blocked request is asked again with less (answer_context.walk()): the whole stream
+→ the last CONTEXT_SUMMARY_MESSAGES → the last FALLBACK_MESSAGES.
 
-Offline the session is a date and there is next to no chat in it, so there – and
-during a stream with «!summary прошлый» – the bot retells the previous stream from
-its chronicle in the memory: a few hundred characters, almost free. Right after a
-stream the chronicle is not written yet (the memory waits for MEMORY_SILENCE_MINUTES
-of silence), so then the previous stream's chat itself is retold, with the ladder.
+Offline, and on «!summary прошлый», the previous stream is retold from its chronicle in
+the memory – a few hundred characters, almost free. The chronicle appears only after
+MEMORY_SILENCE_MINUTES of silence, so until then that stream's chat is retold instead,
+with the same ladder.
 
-Limited per viewer and stream like !who and !versus (_per_stream() in commands.py):
-a follower SUMMARY_PER_STREAM_FOLLOWER, a VIP SUMMARY_PER_STREAM_VIP, a subscriber
-or moderator SUMMARY_PER_STREAM_SUB, the broadcaster unlimited; the current and the
-previous stream share one count (owner, 2026-09-20).
+Limited per viewer and stream like !who and !versus (_per_stream() in commands.py), the
+current and the previous stream sharing one count.
 """
 
 from google.genai import types
@@ -29,7 +25,7 @@ from src.gemini.client import make_gen_config
 from src.gemini.memory import storage
 
 TEMPERATURE = 1.2
-# The last rung of the ladder: a chat this short passed the filter in the memory backfill
+# The last rung of the ladder: a chat this short passes the input filter
 FALLBACK_MESSAGES = 200
 
 NOW = 'now'

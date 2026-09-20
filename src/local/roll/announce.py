@@ -1,7 +1,7 @@
 """Background announcement of the game: a curse lift.
 
-The periodic «кто залупа стрима» summary is gone from here: every !roll and
-reward outcome already names the loser (залупа) and the champion (китежанин).
+There is no periodic «кто залупа стрима» summary: every !roll and reward outcome
+already names the loser (залупа) and the champion (китежанин).
 """
 import asyncio
 import logging
@@ -42,7 +42,7 @@ async def _announce_curse_lifts(bot) -> None:
     session_id = bot.session_id
     for user in await game.lift_expired_curses(session_id):
         text = Content.text('roll_curse_lifted', user=user, max=Roll.MAX)
-        # The curse is already cleared and will not be selected again: if the message
-        # did not go out, we do not repeat it – the game does not break from that
+        # The curse is already cleared and will not be selected again, so a message
+        # that did not go out is not repeated – the game does not break from that
         if text and await bot.send_chat_message(text):
             await save_bot_interaction(session_id, '_roll_', '[curse-lifted]', text)

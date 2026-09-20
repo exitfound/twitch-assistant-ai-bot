@@ -186,10 +186,8 @@ async def get_session_champion(session_id: str) -> tuple[str, int] | None:
 async def get_last_roll_session_before(session_id: str, before: float) -> str | None:
     """The latest session with rolls, other than this one, whose throws ended before `before`.
 
-    Needed only for the first stream after the switch to stream sessions: the previous
-    stream is not in the streams table yet, and the results come from an old date
-    session. Throws made in the current stream while the old code was still running
-    do not count.
+    Needed when the previous stream is not in the streams table and the results have to
+    come from a date session instead. Throws made inside the current stream do not count.
     """
     db = await get_db()
     async with db.execute(

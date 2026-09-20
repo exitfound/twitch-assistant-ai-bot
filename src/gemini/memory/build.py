@@ -1,19 +1,15 @@
 """Writing the memory: a conversation's chronicle, then the profiles of its active chatters.
 
-A conversation is chat between two silences of MEMORY_SILENCE_MINUTES (storage.Block).
-The stream state plays no part: chat here happens only on streams, and the
-messages alone cannot be fooled by a missed stream event, a restart mid-stream
-or a stream that ended while the bot was down. memory_loop() looks for finished
-conversations every CHECK_SECONDS, so whatever the bot missed is written as soon
-as it runs again. Once over the whole history: bot.py --build-memory
-(src/cli/memory.py).
+A conversation is chat between two silences of MEMORY_SILENCE_MINUTES (storage.Block),
+told by the messages alone, so a missed stream event, a restart mid-stream or a stream
+that ended while the bot was down cannot shift it. memory_loop() picks up finished
+conversations every CHECK_SECONDS; the whole history is built once by bot.py
+--build-memory (src/cli/memory.py).
 
-The bot's own lines never go in: the bot quoting itself is how it started looping
-on phrases, and memory would bring that back through the side door.
-
-The model writes both in the chat's own language, not as a neutral report – the
-profile later sits next to the persona, and a polite summary would pull the bot's
-answers towards polite too. Facts must come from the messages, nothing invented.
+The bot's own lines never go in, or it would quote itself and loop on phrases. The
+model writes in the chat's own language rather than as a neutral report, because the
+profile later sits next to the persona and a polite summary pulls the bot's answers
+polite too. Facts must come from the messages, nothing invented.
 """
 import asyncio
 import logging
@@ -44,10 +40,9 @@ BACKFILL_MENTIONS = 200
 BACKFILL_EVENTS = 60
 # Upper bounds the model is asked to keep; the schema cannot enforce lengths
 MAX_RELATIONS = 8
-# Gemini's input filter (PROHIBITED_CONTENT) cannot be switched off, and it judges
-# the whole request: a chat it blocks whole passes in halves – measured on
-# 2026-05-26, where 1/8 chunks were still blocked and 1/16 all passed. A blocked
-# chronicle is split down to this many messages per piece
+# Gemini's input filter (PROHIBITED_CONTENT) cannot be switched off and judges the
+# whole request, so a chat it blocks whole passes in halves. A blocked chronicle is
+# split down to this many messages per piece, the size at which nothing is blocked
 CHRONICLE_MIN_PIECE = 50
 # A blocked profile update is retried on ever fewer of the latest messages,
 # without the mentions by others
@@ -64,10 +59,9 @@ NONE = '–'
 # How often the bot looks for a finished conversation
 CHECK_SECONDS = 600
 
-# How many Gemini requests the memory may run at once, out of GEMINI_CONCURRENCY
-# shared with the chat: a split chronicle fans out into many requests, and a
-# memory run while a stream is live (the bot restarted mid-stream) must not keep
-# viewers waiting. The CLI backfill lifts it (use_all_slots())
+# How many Gemini requests the memory may run at once out of GEMINI_CONCURRENCY, which
+# it shares with the chat: a split chronicle fans out into many requests and must not
+# keep viewers waiting while a stream is live. The CLI backfill lifts it (use_all_slots)
 MEMORY_CONCURRENCY = 2
 _slots = asyncio.Semaphore(MEMORY_CONCURRENCY)
 
@@ -135,10 +129,9 @@ async def _ask(prompt: str, schema: type[BaseModel], max_tokens: int) -> BaseMod
     the output filter twice); _Blocked – the input filter refused; Unavailable –
     no answer at all (timeout, network, API error).
 
-    Asked for once more when the answer is unparseable (now and then the model
-    loops on one phrase until max_tokens cuts the JSON off) or stopped by the
-    output filter, which is random: in the backfill 1 profile of 80 was stopped,
-    and the same prompt passed 3 times of 4. Both times the next try is normal.
+    Asked for once more when the answer is unparseable (the model occasionally loops
+    on one phrase until max_tokens cuts the JSON off) or stopped by the output filter,
+    which is random enough that the same prompt usually passes on the next try.
     """
     for attempt in range(2):
         async with _slots:
@@ -146,9 +139,9 @@ async def _ask(prompt: str, schema: type[BaseModel], max_tokens: int) -> BaseMod
         if block == BLOCK_INPUT:
             raise _Blocked
         if block in (BLOCK_OUTPUT, EMPTY):
-            # Answered, but with nothing: once more, then it counts as a failure –
-            # a prompt that always comes back empty (RECITATION) must not hold up
-            # the conversation and cost a call every check (found in review 2026-09-19)
+            # Answered, but with nothing: one more try, then it counts as a failure –
+            # a prompt that always comes back empty (RECITATION) must not hold up the
+            # conversation and cost a call on every check
             logger.warning('Память: Gemini ответил пусто (%s, попытка %d)', block, attempt + 1)
             continue
         if not text:
@@ -377,14 +370,11 @@ async def first_profile(username: str, last: Block, *, save: bool = True,
 async def process_block(block: Block) -> bool:
     """Chronicle and profile updates for one finished conversation. False – Gemini is down.
 
-    The chronicle row is written last and marks the conversation as done: if the
-    bot stops halfway, it is processed again, and profiles already updated with
-    it are skipped (update_profile()).
-
-    If Gemini did not answer at all (Unavailable: timeout, network, quota), the
-    conversation is left unmarked and the next check retries it. Anything else –
-    a chronicle the filter refuses even in pieces – is final: the row is written
-    as failed, so one hopeless conversation never holds up the ones after it.
+    The chronicle row is written last and marks the conversation done, so a bot that
+    stops halfway processes it again and update_profile() skips the profiles already
+    updated with it. Unavailable (timeout, network, quota) leaves the conversation
+    unmarked for the next check; anything else is written as failed, so one hopeless
+    conversation never holds up the ones after it.
     """
     if block.count < Memory.CONVERSATION_MIN_MESSAGES:
         await storage.save_chronicle(block, '', storage.STATUS_SKIPPED, [])

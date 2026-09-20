@@ -6,10 +6,9 @@ logger = logging.getLogger(__name__)
 
 MENTION_RE = re.compile(r'@\S+')
 
-# Addressing the bot by word: «сосур» in Cyrillic and «secur» in Latin.
-# A new variant is added as one entry in the list.
-# Lives here, not in the dispatcher: src/core/database.py uses the same pattern
-# for a one-off marking of addressings in old chat messages.
+# Addressing the bot by word: «сосур» in Cyrillic and «secur» in Latin, one entry per
+# variant. It lives here rather than in the dispatcher because src/core/database.py
+# uses the same pattern to mark addressings in stored chat messages.
 SOSUR_VARIANTS = ('сосур', 'secur')
 SOSUR_RE = re.compile(
     r'(?:{})\w*'.format('|'.join(SOSUR_VARIANTS)), re.IGNORECASE | re.UNICODE
@@ -59,7 +58,7 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r'\*+', '', text)
     text = re.sub(r'#+\s*', '', text)
     # No `_` here: it is part of nicks (m1ndsh1ft_, limbo_______), and stripping it
-    # made the bot mention people who do not exist
+    # makes the bot mention people who do not exist
     text = re.sub(r'[`~>|]', '', text)
     text = re.sub(r'^\s*[-\u2022\u25cf]\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*\d+[\.\)]\s+', '', text, flags=re.MULTILINE)
@@ -100,9 +99,8 @@ def clean_nick(raw: str) -> str:
     """A nick from a command argument: no @, no trailing punctuation, lowercased.
 
     Cut to NICK_MAX because the answer echoes it back («@ник, @цель ни разу не писал»):
-    a Twitch login is at most 25 characters, so nothing real is lost, and an argument
-    of arbitrary length cannot be turned into a message of the viewer's choosing
-    (2026-09-20).
+    a Twitch login is at most 25 characters, so nothing real is lost, and an argument of
+    arbitrary length cannot be turned into a message of the viewer's choosing.
     """
     return raw.lstrip('@').rstrip(NICK_TRAILING).lower()[:NICK_MAX]
 
@@ -115,8 +113,8 @@ def strip_links(text: str) -> str:
     """Remove anything that reads as a link.
 
     For messages nobody is watching. The chat is part of the model's context, so a
-    viewer can plant text for the bot to repeat later; a link it repeats is the one
-    thing that turns that into harm for a third person (2026-09-20).
+    viewer can plant text for the bot to repeat later, and a repeated link is what
+    turns that into harm for a third person.
     """
     return re.sub(r'\s{2,}', ' ', _URL_RE.sub('', text)).strip()
 
@@ -156,8 +154,8 @@ def trim_to_sentence(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     head = text[:limit]
-    # A mark ends a sentence only before a space or the end: the dot of «23.06»
-    # or «v1.2» cut in half is not one (2026-09-20)
+    # A mark ends a sentence only before a space or the end of the text: the dot
+    # inside «23.06» or «v1.2» does not
     ends = [m.start() for m in _SENTENCE_END.finditer(text, 0, limit + 1) if m.start() < limit]
     end = ends[-1] if ends else -1
     if end >= limit // 2:
@@ -168,8 +166,8 @@ def trim_to_sentence(text: str, limit: int) -> str:
 
 def cleanup_response(text: str, user: str, max_len: int = TWITCH_MSG_MAX) -> str:
     text = fix_dashes(text)
-    # Asterisks (*ФАКТ*) and backticks (`terraform`) would show as is, and chat has
-    # no line breaks. Backticks turn up when the model quotes a command (2026-09-20)
+    # Asterisks (*ФАКТ*) and backticks (`terraform`, which the model emits when it
+    # quotes a command) would show as is, and chat has no line breaks
     text = re.sub(r'[*`]+', '', text)
     text = re.sub(r'\s+', ' ', text).strip()
     mention = re.compile('@' + re.escape(user) + r'(?!\w)', re.IGNORECASE)
@@ -181,7 +179,7 @@ def cleanup_response(text: str, user: str, max_len: int = TWITCH_MSG_MAX) -> str
         text = re.sub(r'^[\s:,]*(?:[-' + EN_DASH + r']\s+)?', '', text[leading.end():])
     # Further mentions of the asker keep the nick, just without the ping: when the
     # asker is also the subject (!who on oneself, !versus with oneself) the nick is
-    # the meaning – deleting it left «Победитель – .»
+    # the meaning, and deleting it leaves «Победитель – .»
     text = mention.sub(user, text).strip()
     # The model exceeds the limit: cut at a sentence end, not mid-word
     return trim_to_sentence(text, max_len)
@@ -210,9 +208,9 @@ def find_banned(text: str, banned: list[str]) -> str | None:
 def reply_to_bot(message, bot_id) -> str | None:
     """The bot's line this chat message replies to, or None if it is not a reply to the bot.
 
-    twitchio's ChatMessageReply has parent_user (a PartialUser), not parent_user_id;
-    reading the latter always gave '' and no reply to the bot was ever recognised
-    as one – it only worked because Twitch puts @botname at the start of a reply.
+    twitchio's ChatMessageReply carries parent_user (a PartialUser), not
+    parent_user_id: reading the latter yields '' and no reply is ever recognised,
+    which only stays invisible because Twitch puts @botname at the start of a reply.
     """
     reply = getattr(message, 'reply', None)
     parent = getattr(reply, 'parent_user', None)

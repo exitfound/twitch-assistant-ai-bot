@@ -10,8 +10,7 @@ Three formats (--format):
               one wall of text
 
 Every row remembers its source, so one source can be removed whole
-(--clear-lore --source X) without touching the others. The 96k rows imported
-before sources existed have NULL there.
+(--clear-lore --source X) without touching the others; NULL means it is unknown.
 """
 import json
 import logging
@@ -30,7 +29,8 @@ PIECE_SENTENCES = 3
 PIECE_CHARS = 300
 _SENTENCE_END = re.compile(r'(?<=[.!?…])\s+(?=\S)')
 _MD_LINK = re.compile(r'!?\[([^\]]*)\]\([^)]*\)')
-# A numbered list item is 1–2 digits: «2024. год был трудным» is a sentence, not item 2024
+# A numbered list item is 1–2 digits: a four-digit year with a dot starts a sentence,
+# not list item number 2024
 _MD_MARKUP = re.compile(r'^\s{0,3}(?:#{1,6}\s+|>\s?|[-*+]\s+|\d{1,2}[.)]\s+)')
 _MD_EMPHASIS = re.compile(r'(\*\*|__|\*|`)')
 
@@ -186,7 +186,7 @@ async def import_entries(entries: list[str], source: str | None = None) -> tuple
 
 
 async def lore_sources() -> list[tuple[str | None, int]]:
-    """(source, rows), largest first; None – rows imported before sources existed."""
+    """(source, rows), largest first; None – rows whose source is unknown."""
     db = await get_db()
     async with db.execute(
         'SELECT source, COUNT(*) FROM knowledge GROUP BY source ORDER BY COUNT(*) DESC'

@@ -1,11 +1,10 @@
 """!who and !versus: what the bot knows about a chatter, sampled afresh on every call.
 
-!who (owner, 2026-09-19) is not a dossier: the point is to fire off a few things
-about the person, and every call should dig up something else. !versus piles up
-such facts about two people, mocks them and names the loser – whoever's facts are
-dumber and more out of place. So each call draws a fresh random sample from the
-whole history instead of the last 30 messages – those covered 1% of an active
-chatter and described only their latest topic:
+!who is not a dossier: it fires off a few things about the person, and every call
+digs up something else. !versus piles up such facts about two people, mocks them and
+names the loser – whoever's facts are dumber and more out of place. Each call therefore
+draws a fresh random sample from the whole history; a fixed window of the last messages
+covers about 1% of an active chatter and only their latest topic:
   - events from the memory (chatter_events): ready-made facts, all time
   - messages spread over all their streams, only ones with some content
   - a couple of relations from the profile

@@ -69,8 +69,8 @@ async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
     if sent:
         await save_bot_interaction(ctx.session_id, ctx.user, tag, ' '.join(sent))
     # Honestly whether anything reached chat: _send_chunks() swallows send errors, and
-    # the caller counts a served request by this. It used to return True regardless, so
-    # a failed send still cost the viewer their per-stream limit (2026-09-20)
+    # the caller counts a served request by this, so an unconditional True would charge
+    # the viewer's per-stream limit for a failed send
     return bool(sent)
 
 

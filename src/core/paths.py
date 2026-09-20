@@ -1,12 +1,9 @@
 """Where the bot's files live: the database and CONTENT.md.
 
-Both used to be computed from `Path(__file__).parents[2]`, which pins them to the
-repository. That is fine for a checkout and wrong for a container, where the code
-is immutable and the data has to sit on a volume. The environment can now move
-them; an empty environment keeps the old paths byte for byte.
-
-Importing config first matters: it calls load_dotenv(), so .env is applied before
-the paths below are computed (2026-09-20).
+Both default to the repository root, which suits a checkout but not a container, where
+the code is immutable and the data has to sit on a volume, so the environment can move
+them. config is imported first for its load_dotenv(), so .env is applied before the
+paths below are computed.
 """
 import os
 from pathlib import Path

@@ -1,7 +1,9 @@
 FROM python:3.11-slim AS builder
 
 WORKDIR /build
+
 COPY requirements.txt .
+
 RUN pip install --no-cache-dir --no-compile --target /deps -r requirements.txt
 
 
@@ -15,6 +17,7 @@ ENV PYTHONPATH=/deps \
     PYTHONUNBUFFERED=1
 
 WORKDIR /app
+
 USER 1000
 
 CMD ["/app/bot.py"]

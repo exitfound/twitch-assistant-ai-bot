@@ -1,29 +1,23 @@
 """What the bot sees when someone talks to it in free text, and the fallback ladder.
 
-Chosen by the owner on 2026-09-19 after the context
-probe (bot.py --probe-context): during a stream the bot gets the whole current
-stream and the whole previous one, plus its memory – the profiles of the asker
-and of the people named, and the previous stream's chronicle. Offline (the
-session is a date) the chat is what it always was: the day's last
+During a stream the bot gets the whole current stream and the whole previous one,
+plus its memory – the profiles of the asker and of the people named, and the previous
+stream's chronicle. Offline (the session is a date) the chat is the day's last
 CONTEXT_CHAT_MESSAGES.
 
 Gemini's input filter cannot be switched off and judges the whole request by
-combinations of messages: in the probe every fifth answer with two streams came
-back blocked. A blocked request is asked again with less, one rung at a time:
+combinations of messages, blocking roughly every fifth request that carries two
+streams. A blocked request is asked again with less, one rung at a time:
   1. current stream + previous stream
   2. the whole current stream
-  3. the last CONTEXT_CHAT_MESSAGES of it – the chat window the bot had before
-     2026-09-19, still with memory
-  4. the same without memory, search and «language» – the fallback the bot
-     always had, so the worst case is never worse than before
-A blocked request comes back in ~0.3 s, so a rung costs almost no time. The output
-filter is random rather than about the size, so an answer it stopped is asked once
-more on the same rung. Any other empty answer goes straight to the last rung, as
-it always did.
+  3. the last CONTEXT_CHAT_MESSAGES of it, still with memory
+  4. the same without memory, search and «language»
+A block comes back in ~0.3 s, so a rung costs almost no time. The output filter is
+random rather than about the size, so an answer it stopped is asked once more on the
+same rung; any other empty answer goes straight to the last rung.
 
-Everything the bot stores stays stored; the ladder only decides how much of it
-goes into one request. The context probe (src/cli/probe.py) uses this module too,
-so what is measured is what the bot sends.
+The ladder only decides how much of the stored data goes into one request. The context
+probe (src/cli/probe.py) uses this module too, so what is measured is what is sent.
 """
 import asyncio
 import logging
@@ -59,8 +53,8 @@ class Question:
     replied: str | None = None
     # Only chat before this message id – the probe asks past questions
     before_id: int | None = None
-    # Treat the session as a stream whatever its id says: before 2026-09-17 every
-    # session was a date, though the chat was a stream all the same (probe only)
+    # Treat the session as a stream whatever its id says: a date-shaped id may still
+    # cover the chat of one stream (probe only)
     stream: bool | None = None
 
 
@@ -160,7 +154,7 @@ async def walk(rungs: list[tuple[str, str]], config: types.GenerateContentConfig
         text, block = await generate_checked(prompt, config)
         if not text and block == BLOCK_OUTPUT:
             # The output filter is random – the same prompt usually passes on the
-            # next try, so it keeps its rung (found in review 2026-09-19)
+            # next try, so it keeps its rung
             logger.info('Ответ %s остановлен выходным фильтром на ступени «%s» – повторяю', user, name)
             text, block = await generate_checked(prompt, config)
         if text:
@@ -173,7 +167,7 @@ async def walk(rungs: list[tuple[str, str]], config: types.GenerateContentConfig
             logger.info('Запрос %s заблокирован фильтром Gemini на ступени «%s» – беру меньше',
                         user, name)
             continue
-        # Not a block: less context would not help – the last rung, as it always was
+        # Not a block: less context would not help, so jump to the last rung
         logger.warning('Пустой ответ для %s, повтор на последней ступени', user)
         name, prompt = rungs[-1]
         text, _ = await generate_checked(prompt, config)

@@ -53,9 +53,9 @@ STATUS_REGULAR = 'regular'
 # on every message of a non-following viewer
 FOLLOW_HINT_SCOPE = 'follow_hint'
 
-# Same for refusals by role and by exhausted quota. These facts do not change:
-# there is no point repeating them on every message, yet it quickly turns into
-# chat spam – a viewer without badges has no cooldown of their own at all
+# Same for refusals by role and by exhausted quota: the fact does not change between
+# repeats, and a viewer without badges has no cooldown of their own, so without this
+# brake every one of their messages gets a refusal
 DENY_SCOPE = 'deny'
 DENY_REPEAT_SECONDS = 30
 
@@ -267,11 +267,10 @@ class ChatComponent(commands.Component):
     async def _within_channel_quota(self, message, user: str, status: str) -> bool:
         """Whether the channel as a whole is within its window. False – already refused.
 
-        A ceiling over everyone, on top of the per-viewer quota: that one bounds how
-        much one person may ask, not what the channel spends, because moderators and
-        subscribers have no personal quota at all. The broadcaster is exempt – their
-        own spend is a decision, not a runaway. Local commands keep working: only the
-        paid ones are refused (2026-09-20).
+        A ceiling over everyone, on top of the per-viewer quota, which bounds one person
+        and not the channel's spend: moderators and subscribers have no personal quota at
+        all. The broadcaster is exempt, and local commands keep working – only paid ones
+        are refused.
         """
         if not Quota.CHANNEL_PER_HOUR or status == STATUS_BROADCASTER:
             return True
@@ -303,16 +302,11 @@ class ChatComponent(commands.Component):
     def _route(self, message: twitchio.ChatMessage):
         """Determine the command, the request text and whether the bot was addressed.
 
-        Returns (entry, prompt, addressed). (None, None, False) – the message is
-        not addressed to the bot. addressed – whether there was a call word, an
-        @mention or a reply; a bare command does not count as addressing, while
-        «сосурити !roll» does.
-
-        The command is recognised right in the text: `!who ник` works without
-        addressing the bot. Args are taken as written – address triggers are not
-        cut out of them, otherwise `!who securityexpert` would lose the nick.
-        Addressing (@bot, сосур*, secur*, reply) is needed for free text and for
-        a command it precedes.
+        Returns (entry, prompt, addressed), or (None, None, False) when the message is
+        not for the bot. Addressing is a call word, an @mention or a reply, and it is
+        required only for free text and for a command it precedes: a bare `!who ник`
+        works without it. Args are taken as written, so `!who securityexpert` keeps the
+        nick instead of losing the trigger inside it.
         """
         text = message.text.strip()
         lowered = text.lower()

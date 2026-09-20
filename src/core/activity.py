@@ -1,9 +1,9 @@
 """Has anyone talked in chat since a loop last looked.
 
-The bot's own messages (reminder, proactive remarks, emote spam) go out only into
-a live conversation: if nobody has written since the previous one, a new one would
-be the bot talking to itself (owner, 2026-09-19). Only live dialogue counts –
-commands to the bot are not stored in chat_messages.
+The bot's own messages (reminder, proactive remarks, emote spam) go out only into a
+live conversation: if nobody has written since the previous one, a new one would be
+the bot talking to itself. Only live dialogue counts – commands to the bot are not
+stored in chat_messages.
 """
 from src.core.database import get_chat_after
 

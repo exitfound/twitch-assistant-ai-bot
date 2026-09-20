@@ -1,13 +1,9 @@
 """Whether a viewer follows the channel: a Twitch request with a cache.
 
-A chat event carries no follower badge – unlike subscriber, VIP and
-moderator – so the status has to be asked from Helix
-(`channels/followers`, scope `moderator:read:followers`, the same one needed
-for the follow subscription). A request per chat message would be wasteful,
-so the answer lives in the cache for FOLLOW_CACHE_MINUTES.
-
-A request error is read in the viewer's favour: a silent Twitch must not
-lock the chat out of the bot.
+A chat event carries no follower badge, unlike subscriber, VIP and moderator, so the
+status comes from Helix (`channels/followers`, scope `moderator:read:followers`) and is
+cached for FOLLOW_CACHE_MINUTES instead of being asked per message. A request error is
+read in the viewer's favour: a silent Twitch must not lock the chat out of the bot.
 """
 import logging
 import time
@@ -46,8 +42,7 @@ class FollowerCache:
     async def _fetch(self, bot, user_id: str) -> bool:
         broadcaster = bot.create_partialuser(bot.channel_id)
         followers = await broadcaster.fetch_followers(user=user_id, token_for=str(bot.bot_id))
-        # followers.followers is an async iterator with neither __bool__
-        # nor __len__, so bool() of it is always true and the check would silently
-        # let everyone in. Unwrap the first page: with user= Twitch returns
-        # either one record or an empty list
+        # followers.followers is an async iterator with neither __bool__ nor __len__,
+        # so bool() of it is always true and everyone passes. The first page is unwrapped
+        # instead: with user= Twitch returns either one record or an empty list
         return bool(await followers.followers)

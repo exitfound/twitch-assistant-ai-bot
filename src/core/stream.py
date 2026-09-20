@@ -1,24 +1,16 @@
 """The bot's session is the stream, not the calendar day.
 
-While a stream is live the session is the stream: chat, stats, summary, Gemini
-context and the game all live within it. Twitch's stream id is stored in the
-streams table together with the session, so a bot restart mid-stream continues the
-same session. A short outage (the streamer reconnected within STREAM_RESUME_MINUTES)
-gives a new id, but the session stays the same.
+While a stream is live the session is the stream and holds chat, stats, summary,
+Gemini context and the game; off stream it is the current date and the game is closed.
+The streams table binds Twitch's stream id to the session, so a restart mid-stream
+continues the same one, and a reconnect within STREAM_RESUME_MINUTES keeps the session
+under a new id.
 
-While there is no stream the session is the current date, as before: chat is
-recorded outside streams too, while the game is closed.
-
-How the bot learns about the stream:
-- stream.online / stream.offline events arrive right away;
-- on startup the bot asks Twitch itself whether the stream is live: events about
-  what happened while the bot was down will never arrive;
-- every CHECK_SECONDS watch_stream() checks against Twitch and catches events that
-  got lost (websocket drop, failed subscription, error on startup).
-
-A stream end the bot did not see (it was down) is taken from the stream's
-recording on Twitch, and if there is none – from the last chat message the bot
-managed to record. That time decides whether the next stream counts as an outage.
+The state comes from stream.online / stream.offline events, a direct Twitch query at
+startup, and a watch_stream() check every CHECK_SECONDS that catches events lost to a
+websocket drop or a failed subscription. An end the bot did not see is taken from the
+Twitch recording, or from the last recorded chat message, and that time decides whether
+the next stream counts as an outage.
 """
 import asyncio
 import logging
@@ -116,8 +108,8 @@ class StreamTracker:
         """When a stream ended whose end the bot did not see.
 
         Exactly – from the stream's recording on Twitch. No recording (VODs off) –
-        from the last chat message of the session the bot managed to record, i.e.
-        roughly the moment the bot went down. In the worst case – the stream start.
+        from the last chat message of the session the bot managed to record, roughly
+        the moment it went down. In the worst case – the stream start.
         """
         if self._end_lookup is not None:
             try:

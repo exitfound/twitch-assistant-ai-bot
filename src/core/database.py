@@ -857,17 +857,21 @@ async def count_bot_uses(username: str, kind: str, window_minutes: int) -> int:
         return (await cursor.fetchone())[0]
 
 
-async def count_channel_bot_uses(window_minutes: int) -> int:
-    """Requests of every kind by everyone in the last window_minutes.
+async def count_channel_bot_uses(kind: str, window_minutes: int) -> int:
+    """Served requests by everyone in the last window_minutes.
 
     The per-viewer quota holds one person's volume; this one holds the bill. Every
     badge above follower is unlimited per person, so a handful of subscribers could
-    spend without any ceiling at all (2026-09-20).
+    spend without any ceiling at all.
+
+    Counted by the dispatcher's kind alone, not over the whole table: !who, !versus,
+    !summary and !ascii write a second row each for their own per-stream limit, and
+    counting every row would make those commands cost two (2026-09-20).
     """
     db = await get_db()
     async with db.execute(
-        "SELECT COUNT(*) FROM bot_uses WHERE created_at > datetime('now', ?)",
-        (f'-{window_minutes} minutes',),
+        "SELECT COUNT(*) FROM bot_uses WHERE kind = ? AND created_at > datetime('now', ?)",
+        (kind, f'-{window_minutes} minutes'),
     ) as cursor:
         return (await cursor.fetchone())[0]
 

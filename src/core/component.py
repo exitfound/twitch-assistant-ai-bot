@@ -275,7 +275,7 @@ class ChatComponent(commands.Component):
         """
         if not Quota.CHANNEL_PER_HOUR or status == STATUS_BROADCASTER:
             return True
-        used = await count_channel_bot_uses(Quota.WINDOW_MINUTES)
+        used = await count_channel_bot_uses(KIND_GEMINI, Quota.WINDOW_MINUTES)
         if used < Quota.CHANNEL_PER_HOUR:
             return True
         logger.warning(

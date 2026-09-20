@@ -173,9 +173,9 @@ class Quota:
     # The bill's emergency brake: requests of everyone together per window. The
     # per-viewer quota does not bound spend, because every badge above follower is
     # unlimited. The broadcaster is not counted against it – that spend is deliberate.
-    # 0 – no limit. The default is far above real use: the busiest hour so far is
-    # about twenty requests (2026-09-20)
-    CHANNEL_PER_HOUR: int = _env_int('QUOTA_CHANNEL_PER_HOUR', 300, 0, 100_000)
+    # 0 – no limit. The owner set 200 on 2026-09-20: the busiest hour on record is
+    # 14 served requests, so it is an emergency brake, not a working limit
+    CHANNEL_PER_HOUR: int = _env_int('QUOTA_CHANNEL_PER_HOUR', 200, 0, 100_000)
 
 
 class Follow:

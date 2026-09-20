@@ -13,3 +13,8 @@ import_tg_*.py
 .claude/memory/
 chat_history.backup-*.db
 *.log
+
+# Docker: изменяемое состояние и логи
+data/
+logs/
+backups/

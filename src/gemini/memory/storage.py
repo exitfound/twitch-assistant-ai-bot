@@ -1,7 +1,7 @@
 """Queries on the memory tables: chronicles, chatter_events, chatter_profiles.
 
 The memory works on conversations (Block), not on bot sessions: chat split by
-silence, keyed by the Kyiv time of its first message.
+silence, keyed by the Moscow time of its first message.
 
 The schema lives in init_db() (src/core/database.py) with all the others.
 Chat rows are read with the same «not a command» filter as everywhere else:
@@ -46,7 +46,7 @@ class Block(NamedTuple):
     practice a stream – but told by the messages alone, not by the stream state:
     no Twitch event, bot restart or missed stream end can shift it.
     """
-    key: str          # Kyiv time of its first message (KEY_TIMEZONE), 'YYYY-MM-DD HH:MM'
+    key: str          # Moscow time of its first message (KEY_TIMEZONE), 'YYYY-MM-DD HH:MM'
     first_id: int     # chat_messages ids, inclusive
     last_id: int
     count: int        # messages, commands not counted
@@ -56,10 +56,13 @@ class Block(NamedTuple):
         return self.first_id, self.last_id
 
 
-# The conversation key is the channel's time, not the process's: the bot under a
-# service manager may run in UTC while --build-memory runs by hand in local time,
-# and keys that differ between them break the crash-rerun check in update_profile()
-KEY_TIMEZONE = ZoneInfo('Europe/Kyiv')
+# The conversation key is the channel's time, not the process's: the bot in a container
+# may run in UTC while --build-memory runs by hand in local time, and keys that differ
+# between them break the crash-rerun check in update_profile().
+# Europe/Moscow, the same zone the container is given, so that the key and session_id
+# cannot drift apart. Until 2026-10-26 this changes nothing – Kyiv is also UTC+3 right
+# now – but from the winter switch Kyiv would have been an hour off (owner, 2026-09-20)
+KEY_TIMEZONE = ZoneInfo('Europe/Moscow')
 
 
 def _key(ts: float) -> str:

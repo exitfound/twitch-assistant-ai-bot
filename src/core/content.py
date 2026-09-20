@@ -22,12 +22,12 @@ import logging
 import re
 from pathlib import Path
 
+# CONTENT_PATH may be moved by BOT_CONTENT_PATH – see src/core/paths.py. It keeps
+# this module's name because src/cli/emotes.py imports it from here
+from src.core.paths import CONTENT_PATH
 from src.core.utils import safe_format
 
 logger = logging.getLogger(__name__)
-
-# Project root: src/core/content.py → three levels up
-CONTENT_PATH = Path(__file__).resolve().parents[2] / 'CONTENT.md'
 
 SECTION_RE = re.compile(r'^##\s+(\S+)\s*$')
 KEY_RE = re.compile(r'^###\s+(\S+)\s*$')

@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import os
 import re
 import signal
 import time
+from pathlib import Path
 
 import twitchio
 from twitchio import eventsub
@@ -33,6 +35,11 @@ VOD_MATCH_SECONDS = 300
 # How often the chat connection is checked (_watch_chat_socket)
 CHAT_WATCH_SECONDS = 60
 
+# Liveness file for the container healthcheck. Empty – no heartbeat, which is how
+# a run outside a container behaves
+HEARTBEAT_PATH = os.getenv('BOT_HEARTBEAT', '')
+HEARTBEAT_SECONDS = 60
+
 
 class Bot(commands.Bot):
 
@@ -55,6 +62,7 @@ class Bot(commands.Bot):
         self._stream_watch_task: asyncio.Task | None = None
         self._memory_task: asyncio.Task | None = None
         self._chat_watch_task: asyncio.Task | None = None
+        self._heartbeat_task: asyncio.Task | None = None
         self._chat_revive_lock = asyncio.Lock()
         self._shutting_down = False
         self.stream = StreamTracker(end_lookup=self._stream_end_from_vod)
@@ -261,6 +269,8 @@ class Bot(commands.Bot):
             if Proactive.ENABLED or Emote.SPAM_ENABLED or Rewards.ENABLED:
                 logger.warning('ID канала не получен – фоновые задачи не запущены')
             return
+        if HEARTBEAT_PATH and not _running(self._heartbeat_task):
+            self._heartbeat_task = asyncio.create_task(self._beat())
         if not _running(self._chat_watch_task):
             self._chat_watch_task = asyncio.create_task(self._watch_chat_socket())
         # The Twitch check catches a missed stream start or end
@@ -375,6 +385,24 @@ class Bot(commands.Bot):
             self._websockets.pop(str(self.bot_id), None)
             await self._subscribe_to_chat()
             logger.warning('Чат снова подключён')
+
+    async def _beat(self) -> None:
+        """Touch a file so the container healthcheck can see the bot is still running.
+
+        Started only when BOT_HEARTBEAT is set, so nothing changes outside a container.
+        It beats from _start_background_tasks(), that is once the channel id is known and
+        the loops are up: a process that came up without them must read as unhealthy,
+        because «alive but deaf» is exactly what restart policies do not catch (2026-09-20).
+        """
+        path = Path(HEARTBEAT_PATH)
+        logger.info('Heartbeat включён: %s (раз в %d с)', path, HEARTBEAT_SECONDS)
+        while True:
+            try:
+                path.touch()
+            except OSError as e:
+                # A full or read-only volume: say so, but do not take the bot down
+                logger.warning('Не удалось обновить heartbeat: %s', e)
+            await asyncio.sleep(HEARTBEAT_SECONDS)
 
     async def _watch_chat_socket(self) -> None:
         logger.info('Проверка соединения с чатом включена (раз в %d с)', CHAT_WATCH_SECONDS)

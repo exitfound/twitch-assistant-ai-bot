@@ -1,0 +1,21 @@
+# Секреты и данные в образ не попадают: они приезжают томами и env_file
+.env
+.env.*
+!.env.example
+.tio.tokens.json
+chat_history.db
+chat_history.db-*
+chat_history.backup-*.db
+data/
+logs/
+backups/
+
+venv/
+__pycache__/
+*.pyc
+.git/
+*.log
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.claude/

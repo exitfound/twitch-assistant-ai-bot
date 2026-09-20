@@ -7,12 +7,12 @@ from pathlib import Path
 from typing import NamedTuple
 
 from src.core.config import Context
+# DB_PATH may be moved by BOT_DB_PATH – see src/core/paths.py. It is re-exported
+# under this module's name because every caller imports get_db(), not the path
+from src.core.paths import DB_PATH
 from src.core.utils import SOSUR_RE
 
 logger = logging.getLogger(__name__)
-
-# Project root: src/core/database.py → three levels up
-DB_PATH = Path(__file__).resolve().parents[2] / 'chat_history.db'
 
 _db: aiosqlite.Connection | None = None
 _db_lock = asyncio.Lock()
@@ -177,7 +177,7 @@ async def init_db() -> None:
     ''')
     # The bot's memory of chatters, written by Gemini after a conversation – chat
     # between two long silences (src/gemini/memory/). conversation is its key, the
-    # Kyiv time of its first message. A chronicle row covers the messages
+    # Moscow time of its first message. A chronicle row covers the messages
     # first_id..last_id: status 'ok', 'failed' when Gemini returned nothing (not
     # retried on every start) or 'skipped' when there were too few messages
     await _migrate_memory(db)

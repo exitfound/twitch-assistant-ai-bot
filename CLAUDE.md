@@ -9,7 +9,17 @@ Twitch chat bot powered by Gemini 2.5 Flash. Commands (`!who`, `!ask`, …) work
 ## Commands
 
 ```bash
-# Run (always use venv python, not system python)
+# Run in production: Docker Compose (since 2026-09-20). Code ships in the image and is
+# also mounted from the host; the database, tokens and logs live on volumes
+docker compose up -d
+docker compose logs -f
+docker compose restart bot
+
+# A maintenance command runs in the same image. Paths are the container's: /app is the
+# tree, /data holds the database and the tokens
+docker compose run --rm bot /app/bot.py --backup /data/copy.db
+
+# Run without a container (debugging). Always use venv python, not system python
 ./venv/bin/python3 bot.py
 
 # Upload lore from txt files (bot doesn't start)
@@ -75,7 +85,7 @@ Entry point is thin; all logic lives in `src/`, split into packages by purpose.
 | `src/local/roll/` | the «залупа стрима» game: throws, channel-points rewards, title announcements. A local feature that grew big enough for its own subpackage | anything about `!roll` |
 | `src/cli/` | `bot.py --…` commands; the bot does not start | a maintenance command |
 
-A feature that grows its own tables, texts and background loops gets **its own subpackage inside the package of its kind** – `local/<feature>/` like `local/roll/`, or `gemini/<feature>/` if it generates text – instead of spreading across several files of `local/` and `core/`. The owner set this on 2026-09-15: roll is a local feature of the bot, not a top-level one. Table schema and migrations still go into `init_db()` in `src/core/database.py` (one place to keep startup idempotent); the feature's queries live in its package, like `src/local/roll/storage.py`. Each package's `__init__.py` lists its modules. Paths to `CONTENT.md` and `chat_history.db` are resolved with `Path(__file__).parents[2]` – keep that in mind if a module holding them moves.
+A feature that grows its own tables, texts and background loops gets **its own subpackage inside the package of its kind** – `local/<feature>/` like `local/roll/`, or `gemini/<feature>/` if it generates text – instead of spreading across several files of `local/` and `core/`. The owner set this on 2026-09-15: roll is a local feature of the bot, not a top-level one. Table schema and migrations still go into `init_db()` in `src/core/database.py` (one place to keep startup idempotent); the feature's queries live in its package, like `src/local/roll/storage.py`. Each package's `__init__.py` lists its modules. Paths to `CONTENT.md` and `chat_history.db` live in `src/core/paths.py` (2026-09-20): they default to the repository root via `Path(__file__).parents[2]`, and `BOT_DB_PATH` / `BOT_CONTENT_PATH` move them – that is how the container keeps its data on a volume instead of inside the image. `database.py` and `content.py` re-export `DB_PATH` / `CONTENT_PATH` under their own names, because callers import `get_db()` rather than the path, and the tests patch them there.
 
 ### Modules
 
@@ -247,7 +257,7 @@ Fourteen tables + two FTS5 virtual tables:
 - `bot_uses` – one row per served Gemini request (`username`, `kind`, `created_at`); the hourly quota counts it, `idx_bot_uses_user_time` serves that count
 - `bot_interactions` – bot Q&A pairs with `session_id`
 - `facts` – facts from the retired `!fact` / `!defact`. `username` is the **author**, not the subject, which is why `!who` never saw facts about its target. `--build-memory` feeds facts with an `@nick` into that chatter's first profile and copies the rest into `knowledge`. Still read by `get_relevant_facts()` until the profiles are wired in, then dropped (after the owner has looked at the profiles)
-- `chronicles` – memory: one row per finished conversation, `conversation` is its key (Kyiv time of its first message, `storage.KEY_TIMEZONE`, so the bot and the CLI agree whatever zone each runs in; `stream_chronicles` / `session_id` before `_migrate_memory()`), `first_id` / `last_id` – the `chat_messages` range it covers, `status` `ok` / `failed` / `skipped`
+- `chronicles` – memory: one row per finished conversation, `conversation` is its key (Moscow time of its first message, `storage.KEY_TIMEZONE`, so the bot and the CLI agree whatever zone each runs in; `stream_chronicles` / `session_id` before `_migrate_memory()`), `first_id` / `last_id` – the `chat_messages` range it covers, `status` `ok` / `failed` / `skipped`
 - `chatter_events` – memory: per-chatter lines from the chronicle
 - `memory_state` – memory: `built` once `--build-memory` has finished the history; the bot leaves the memory alone until then
 - `chatter_profiles` – memory: `portrait`, `relations` (JSON), `last_conversation`, `sessions_seen` (bot sessions); rewritten, never appended
@@ -299,6 +309,7 @@ Context of a free-text answer (in order), built by `src/gemini/answer_context.py
 - **Random knowledge sampling** – `get_random_knowledge()` keeps the list of all knowledge ids (~96k ints) and samples it directly, then fetches the rows by id: uniform and ~0.3 ms. The earlier «random id → nearest row after it» gave the row after a gap all of the gap's chances – after `--clear-lore --source` removed a big source one line showed up in half the answers (review 2026-09-19). The id list is re-read every `KNOWLEDGE_IDS_TTL` (600 s), so lore imported by the CLI while the bot runs reaches the sample without a restart; `invalidate_knowledge_cache()` resets it in the importing process
 - **Probabilities are percentages** – `CAPS_PROBABILITY`, `EMOTE_PROBABILITY`, `PROACTIVE_TARGET_PROBABILITY`, `CONTEXT_SEARCH_KNOWLEDGE_SHARE` are `0..100`. A legacy fractional value like `0.3` is still accepted and logged as deprecated
 - **CLI commands run `init_db()`** – including `--backup`. A new migration reaches the live DB the moment any CLI command runs, while the old bot process is still up. Keep migrations additive and harmless to the code that is currently running
+- **Deployment** (2026-09-20) – Docker Compose, `restart: unless-stopped`. The image is built in two stages: dependencies are installed in `python:3.11-slim` and only they and the code move on to `gcr.io/distroless/python3-debian12` (118 MB against 209 MB for a single-stage slim build). Distroless has **no shell**, so `exec bot sh` does not work and the healthcheck is a Python one-liner rather than `test`/`stat`. Its entry point is Python itself, so the command is just the script path. Dependencies go to `/deps` on `PYTHONPATH`, deliberately **not** under `/app`: the tree is mounted at `/app` and would shadow them. `USER 1000` matches the host's ownership of the volumes. The tree at `/app` keeps `CONTENT.md` hot-reloading and the CLI working on the same files; the database, `.tio.tokens.json` and `heartbeat` live in `data/`, the logs in `logs/`. `working_dir: /data` because twitchio writes its token file by a relative name. `TZ=Europe/Moscow` is explicit: a container defaults to UTC, `session_id` takes the process's local zone, and **an unknown zone name falls back to UTC silently** – the `Europe/Kiev` link no longer exists in current tzdata. `KEY_TIMEZONE` follows the same zone. `CMD` is exec-form so PID 1 is Python and `SIGTERM` reaches the signal handler. `_beat()` touches `BOT_HEARTBEAT` once a minute and the compose healthcheck reads its age: that is the one thing a restart policy cannot see, an alive process with a deaf bot
 - **No tests** – verification is manual, against a copy of the live DB with Gemini stubbed out (and Twitch stubbed for rewards)
 
 ## Environment Variables

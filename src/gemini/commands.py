@@ -2,7 +2,6 @@
 import logging
 from collections import defaultdict
 
-from google.genai import types
 
 from src.core.commands import CommandContext
 from src.core.config import Gemini, Summary, Who
@@ -15,7 +14,7 @@ from src.core.utils import (
 )
 from src.gemini import summary, who
 from src.gemini.answer_context import Question, answer, walk
-from src.gemini.client import SAFETY_OFF, generate, make_gen_config
+from src.gemini.client import generate, make_gen_config
 from src.gemini.responder import respond_and_save, send_chunked
 
 logger = logging.getLogger(__name__)
@@ -57,10 +56,8 @@ async def handle_ask(ctx: CommandContext) -> None:
         await ctx.message.respond(Content.text('ask_usage', user=ctx.user))
         return
     try:
-        ask_config = types.GenerateContentConfig(
-            system_instruction=Content.prompt('ask'),
-            temperature=Gemini.ASK_TEMPERATURE,
-            safety_settings=SAFETY_OFF,
+        ask_config = make_gen_config(
+            system=Content.prompt('ask'), temperature=Gemini.ASK_TEMPERATURE,
         )
         contents = question
         # The same viewer's previous question: without it the model cannot make sense of

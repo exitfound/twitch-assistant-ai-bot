@@ -25,7 +25,7 @@ from src.core.config import Context, Memory
 from src.core.content import Content
 from src.core.database import get_last_chat_session, get_recent_chat
 from src.gemini.answer_context import is_stream_session, walk
-from src.gemini.client import SAFETY_OFF
+from src.gemini.client import make_gen_config
 from src.gemini.memory import storage
 
 TEMPERATURE = 1.2
@@ -48,10 +48,9 @@ def mode(args: str, session_id: str) -> str:
 
 
 def config() -> types.GenerateContentConfig:
-    return types.GenerateContentConfig(
-        system_instruction=f"{Content.prompt('system')}\n\n{Content.prompt('summary')}",
+    return make_gen_config(
+        system=f"{Content.prompt('system')}\n\n{Content.prompt('summary')}",
         temperature=TEMPERATURE,
-        safety_settings=SAFETY_OFF,
     )
 
 

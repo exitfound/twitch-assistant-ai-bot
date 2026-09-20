@@ -602,10 +602,17 @@ async def get_last_tagged_interaction(
 
 
 async def get_user_interactions(username: str, limit: int = 10) -> list[tuple[str, str]]:
+    """The viewer's own exchanges with the bot – free text only, no commands.
+
+    The pattern is '[%]%': a tag is a prefix, not the whole line. The old '[%]' required
+    the row to *end* in ']', so only bare tags like [follow] were filtered out, while
+    «[ask] вопрос» and «[who] ник» passed – and !who fed the model its own past answers,
+    the very thing the memory refuses to do (2026-09-20).
+    """
     db = await get_db()
     async with db.execute(
         'SELECT user_message, bot_response FROM bot_interactions '
-        'WHERE username = ? AND user_message NOT LIKE \'[%]\' ORDER BY id DESC LIMIT ?',
+        "WHERE username = ? AND user_message NOT LIKE '[%]%' ORDER BY id DESC LIMIT ?",
         (username, limit),
     ) as cursor:
         rows = await cursor.fetchall()
@@ -846,6 +853,21 @@ async def count_bot_uses(username: str, kind: str, window_minutes: int) -> int:
         "SELECT COUNT(*) FROM bot_uses WHERE username = ? AND kind = ?"
         " AND created_at > datetime('now', ?)",
         (username, kind, f'-{window_minutes} minutes'),
+    ) as cursor:
+        return (await cursor.fetchone())[0]
+
+
+async def count_channel_bot_uses(window_minutes: int) -> int:
+    """Requests of every kind by everyone in the last window_minutes.
+
+    The per-viewer quota holds one person's volume; this one holds the bill. Every
+    badge above follower is unlimited per person, so a handful of subscribers could
+    spend without any ceiling at all (2026-09-20).
+    """
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM bot_uses WHERE created_at > datetime('now', ?)",
+        (f'-{window_minutes} minutes',),
     ) as cursor:
         return (await cursor.fetchone())[0]
 

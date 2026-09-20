@@ -17,7 +17,8 @@ from src.core.commands import (
 from src.core.config import Cooldown, Follow, Picture, Quota
 from src.core.content import Content
 from src.core.database import (
-    count_bot_uses, oldest_bot_use_age, record_bot_use, save_chat_message,
+    count_bot_uses, count_channel_bot_uses, oldest_bot_use_age, record_bot_use,
+    save_chat_message,
 )
 from src.core.followers import FollowerCache
 from src.core.utils import SOSUR_RE, SOSUR_VARIANTS, reply_to_bot  # noqa: F401  (SOSUR_VARIANTS – the public place to edit the list)
@@ -207,6 +208,8 @@ class ChatComponent(commands.Component):
 
         # Quota on top of the cooldown: only Gemini requests count – they cost
         # money. Local commands are held by the cooldown alone
+        if kind == KIND_GEMINI and not await self._within_channel_quota(message, user, status):
+            return
         if kind == KIND_GEMINI and not await self._within_quota(message, user, status):
             return
 
@@ -260,6 +263,27 @@ class ChatComponent(commands.Component):
             return
         self.bot.set_cooldown(user, DENY_REPEAT_SECONDS, DENY_SCOPE)
         await message.respond(Content.text(key, user=user, **values))
+
+    async def _within_channel_quota(self, message, user: str, status: str) -> bool:
+        """Whether the channel as a whole is within its window. False – already refused.
+
+        A ceiling over everyone, on top of the per-viewer quota: that one bounds how
+        much one person may ask, not what the channel spends, because moderators and
+        subscribers have no personal quota at all. The broadcaster is exempt – their
+        own spend is a decision, not a runaway. Local commands keep working: only the
+        paid ones are refused (2026-09-20).
+        """
+        if not Quota.CHANNEL_PER_HOUR or status == STATUS_BROADCASTER:
+            return True
+        used = await count_channel_bot_uses(Quota.WINDOW_MINUTES)
+        if used < Quota.CHANNEL_PER_HOUR:
+            return True
+        logger.warning(
+            'Потолок канала исчерпан: %d запросов за %d мин (лимит %d) – платные команды закрыты',
+            used, Quota.WINDOW_MINUTES, Quota.CHANNEL_PER_HOUR,
+        )
+        await self._deny(message, user, 'quota_channel', window=Quota.WINDOW_MINUTES)
+        return False
 
     async def _within_quota(self, message, user: str, status: str) -> bool:
         """Whether the viewer is within the hourly quota. False – they have already been refused."""

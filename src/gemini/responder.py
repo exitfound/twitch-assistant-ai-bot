@@ -68,7 +68,10 @@ async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
     sent = await _send_chunks(ctx, chunks, tag)
     if sent:
         await save_bot_interaction(ctx.session_id, ctx.user, tag, ' '.join(sent))
-    return True
+    # Honestly whether anything reached chat: _send_chunks() swallows send errors, and
+    # the caller counts a served request by this. It used to return True regardless, so
+    # a failed send still cost the viewer their per-stream limit (2026-09-20)
+    return bool(sent)
 
 
 async def _send_chunks(ctx: CommandContext, chunks: list[str], tag: str) -> list[str]:

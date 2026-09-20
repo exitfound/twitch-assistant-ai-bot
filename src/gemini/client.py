@@ -42,10 +42,18 @@ def get_client() -> genai.Client:
     return _client
 
 
-def make_gen_config() -> types.GenerateContentConfig:
+def make_gen_config(*, system: str | None = None,
+                    temperature: float | None = None) -> types.GenerateContentConfig:
+    """The request config: persona and chat temperature by default.
+
+    A command with its own instruction or temperature passes them in instead of
+    building a config of its own. !ask and !summary used to build theirs, and both
+    were missing thinking_config – so GEMINI_THINKING_BUDGET did not reach them and
+    they ran with the model's dynamic thinking, billed separately (2026-09-20).
+    """
     config = types.GenerateContentConfig(
-        system_instruction=Content.prompt('system'),
-        temperature=Gemini.TEMPERATURE,
+        system_instruction=Content.prompt('system') if system is None else system,
+        temperature=Gemini.TEMPERATURE if temperature is None else temperature,
         safety_settings=SAFETY_OFF,
     )
     if Gemini.THINKING_BUDGET >= 0:

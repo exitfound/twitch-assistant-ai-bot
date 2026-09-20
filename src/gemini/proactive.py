@@ -2,13 +2,15 @@
 import asyncio
 import logging
 import random
-import re
 
 from src.core.activity import ChatWatch
 from src.core.config import Context, Proactive
 from src.core.content import Content
 from src.core.database import get_random_knowledge, get_recent_chat, save_bot_interaction
-from src.core.utils import TWITCH_MSG_MAX, random_delay
+from src.core.utils import (
+    TWITCH_MSG_MAX, fix_dashes, random_delay, strip_links, strip_markdown, strip_pings,
+    trim_to_sentence,
+)
 from src.gemini.client import generate, make_gen_config
 from src.gemini.context import ContextBuilder
 from src.gemini.responder import apply_caps, maybe_add_emote, passes_moderation
@@ -36,9 +38,12 @@ async def proactive_loop(bot) -> None:
 
 async def _send_proactive(bot, watch: ChatWatch) -> None:
     session_id = bot.session_id
-    # Only into a live conversation: nobody has written since the previous
-    # remark – a new one would be the bot talking to itself
-    if not await watch.new_messages(session_id):
+    # Only while live and only into a live conversation: nobody has written since the
+    # previous remark – a new one would be the bot talking to itself. The stream check
+    # is the one the other loops have had since 2026-09-19 and this one was missing:
+    # a message written offline made the bot start commenting an empty chat, and this
+    # is the only loop that pays Gemini for it (2026-09-20)
+    if not bot.stream_live or not await watch.new_messages(session_id):
         return
     recent_chat = await get_recent_chat(session_id, Context.CHAT_MESSAGES)
     if not recent_chat:
@@ -63,10 +68,15 @@ async def _send_proactive(bot, watch: ChatWatch) -> None:
     if not text:
         return
 
-    text = re.sub(r'\s{2,}', ' ', text).strip()
-    if len(text) > TWITCH_MSG_MAX:
-        text = text[:TWITCH_MSG_MAX - 3] + '...'
-    if not passes_moderation(text):
+    # An unattended remark gets the strictest cleanup of all the output paths.
+    # It used to go out almost raw: asterisks and backticks reached chat, em dashes
+    # slipped past the project's own rule, and the cut fell mid-word (2026-09-20)
+    text = fix_dashes(strip_markdown(text))
+    # Nobody is watching this one, and the chat it is built from is written by viewers:
+    # a planted link or ping must not reach chat through the bot
+    text = strip_pings(strip_links(text))
+    text = trim_to_sentence(text, TWITCH_MSG_MAX)
+    if not text or not passes_moderation(text):
         return
     text = apply_caps(text)
     text = maybe_add_emote(text)

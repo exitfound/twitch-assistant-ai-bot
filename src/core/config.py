@@ -170,6 +170,12 @@ class Quota:
     VIP_PER_HOUR: int = _env_int('QUOTA_VIP_PER_HOUR', 60, 0, 10_000)
     FOLLOWER_PER_HOUR: int = _env_int('QUOTA_FOLLOWER_PER_HOUR', 30, 0, 10_000)
     WINDOW_MINUTES: int = _env_int('QUOTA_WINDOW_MINUTES', 60, 1, 1440)
+    # The bill's emergency brake: requests of everyone together per window. The
+    # per-viewer quota does not bound spend, because every badge above follower is
+    # unlimited. The broadcaster is not counted against it – that spend is deliberate.
+    # 0 – no limit. The default is far above real use: the busiest hour so far is
+    # about twenty requests (2026-09-20)
+    CHANNEL_PER_HOUR: int = _env_int('QUOTA_CHANNEL_PER_HOUR', 300, 0, 100_000)
 
 
 class Follow:

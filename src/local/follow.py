@@ -1,4 +1,4 @@
-"""Ответ на новый фолов: случайный шаблон из lists.follow, без Gemini."""
+"""Reply to a new follow: a random template from lists.follow, no Gemini."""
 import logging
 import random
 

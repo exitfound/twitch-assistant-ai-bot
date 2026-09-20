@@ -1,10 +1,10 @@
-"""!ascii <ссылка> – нарисовать картинку из чата символами Брайля.
+"""!ascii <ссылка> – draw a picture from chat in braille characters.
 
-Порядок такой: найти ссылку, скачать с проверками, нарисовать, спросить
-Gemini, что там изображено, и только потом показывать. Gemini здесь не
-рисует – рисование должно быть детерминированным, из пикселей, – а смотрит
-на картинку и либо запрещает её показывать, либо коротко описывает. Описание
-в чат не идёт: бот его запоминает и пишет в лог, но вслух не комментирует.
+The order is: find the link, download it with checks, draw, ask Gemini what
+is on it, and only then show it. Gemini does not draw here – drawing must be
+deterministic, from pixels – it looks at the picture and either forbids
+showing it or describes it briefly. The description does not go to chat: the
+bot remembers it and logs it, but does not comment on it out loud.
 """
 import asyncio
 import logging
@@ -17,8 +17,7 @@ from src.core.commands import CommandContext
 from src.core.config import Picture
 from src.core.content import Content
 from src.core.database import (
-    count_bot_uses, count_bot_uses_since, get_recent_links, get_session_start,
-    record_bot_use, save_bot_interaction,
+    count_bot_uses_this_stream, record_bot_use, save_bot_interaction,
 )
 from src.core.utils import TWITCH_MSG_MAX
 from src.gemini.client import generate
@@ -27,48 +26,73 @@ from src.gemini.picture.render import preview, render
 
 logger = logging.getLogger(__name__)
 
-# Ссылку берём из исходного текста: ctx.args вырезаны из приведённого к
-# нижнему регистру prompt, а путь в ссылке регистрозависим
+# The link is taken from the original text: ctx.args are cut from the lowercased
+# prompt, and a URL path is case-sensitive
 URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 
-# Хвостовая пунктуация: «смотри !ascii http://… .» не должно ломать адрес
+# Trailing punctuation: «смотри !ascii http://… .» must not break the address
 URL_TRAILING = '.,;:!?)»"\''
 
-# Слово, которым Gemini отказывается показывать картинку. Сверяем по началу
-# ответа: модель любит дописать объяснение, и это нормально
+# The word Gemini starts its answer with when the picture may be shown.
+# We match the permission, not the ban: an answer in any other form –
+# «извини, но НЕЛЬЗЯ», «это нельзя показывать» – counts as a refusal, so
+# an answer we fail to understand will not let the picture through
+ALLOW_WORD = 'МОЖНО'
+# The ban word. Only the cache needs it: an answer that starts with neither
+# of the two words is not cached – the next attempt may understand better
 BLOCK_WORD = 'НЕЛЬЗЯ'
+# What we strip between the permission word and the description
+ALLOW_SEPARATORS = ' :.,–-'
+# Wrapping the model likes to put around the verdict: **МОЖНО**, «МОЖНО»
+VERDICT_WRAPPING = ' *_"\'`«»'
 
 TAG = '[ascii]'
 
-# Под каким видом картинки попадают в журнал bot_uses: лимит за эфир
-# считается по нему, а не по памяти, чтобы перезапуск его не обнулял
+# The kind pictures are recorded under in the bot_uses journal: the per-stream limit
+# is counted from it rather than from memory, so a restart does not reset it
 USE_KIND = 'ascii'
 
-# Вне эфира сессия – это дата, начала стрима нет. Тогда считаем за сутки
-OFFLINE_WINDOW_MINUTES = 24 * 60
-
-# Проверка – не творчество: температура низкая, чтобы вердикт не плавал
+# A check is not creative work: low temperature so the verdict does not drift
 CHECK_TEMPERATURE = 0.2
 
-# Готовые арты последних ссылок. Чат по природе повторяется: один мем
-# прогоняют несколько раз за вечер, и каждый раз это было бы скачивание,
-# отрисовка и запрос к Gemini заново. Живёт до перезапуска – этого хватает,
-# потому что повторяют в пределах эфира
+# Finished art for recent links. Chat repeats itself by nature: one meme
+# is run several times an evening, and each time it would be a download,
+# a render and a Gemini request all over again. Lives until restart – that is
+# enough, because repeats happen within a stream
 CACHE_SIZE = 32
 _cache: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
 
+# Who is currently waiting for their picture. The limit is checked at the start but
+# counted after sending, with the download and Gemini in between – seconds. A sub has
+# neither cooldown nor quota, and five commands in a row would pass the check with the
+# same counter: five pictures in chat over the limit. Hence one at a time
+_busy: set[str] = set()
+
 
 async def handle_ascii(ctx: CommandContext) -> None:
+    if ctx.user in _busy:
+        # The first command is still drawing and will answer itself: silently drop
+        # the repeat and refund its quota
+        await ctx.refuse()
+        return
+    _busy.add(ctx.user)
+    try:
+        await _serve(ctx)
+    finally:
+        _busy.discard(ctx.user)
+
+
+async def _serve(ctx: CommandContext) -> None:
     limit = _limit_for(ctx.message.chatter)
-    if limit and await _used(ctx) >= limit:
-        # Лимит выбран – не тратим ни трафика, ни генерации, квоту возвращаем
+    if limit and await count_bot_uses_this_stream(ctx.user, USE_KIND, ctx.session_id) >= limit:
+        # Limit used up – spend neither traffic nor generation, refund the quota
         await ctx.refuse()
         await ctx.message.respond(Content.text('ascii_no_left', user=ctx.user, limit=limit))
         return
 
-    url = await _find_url(ctx)
+    url = _find_url(ctx)
     if not url:
-        # Ссылки нет – ни трафика, ни генерации не потрачено, возвращаем квоту
+        # No link – no traffic or generation spent, refund the quota
         await ctx.refuse()
         await ctx.message.respond(Content.text('ascii_usage', user=ctx.user))
         return
@@ -82,42 +106,69 @@ async def handle_ascii(ctx: CommandContext) -> None:
         if result is None:
             return
         art, verdict = result
-        _remember(url, art, verdict)
+        if verdict is None or _verdict_word(verdict):
+            _remember(url, art, verdict)
 
-    if verdict and verdict.strip().upper().startswith(BLOCK_WORD):
-        logger.info('!ascii: %s принёс картинку, которую Gemini показывать не дал', ctx.user)
-        await ctx.message.respond(Content.text('ascii_blocked', user=ctx.user))
-        return
+    description = None
+    if verdict is not None:
+        description = _allowed(verdict)
+        if description is None:
+            logger.info('!ascii: %s принёс картинку, которую Gemini показывать не дал: %r',
+                        ctx.user, verdict.strip()[:100])
+            await ctx.message.respond(Content.text('ascii_blocked', user=ctx.user))
+            return
 
-    # Арт уходит без реплая: реплай добавляет ник в начало, а первая
-    # визуальная строка и так занята ником бота
+    # The art goes out without a reply: a reply prepends a nick, and the first
+    # visual line is already taken by the bot's nick
     if not await ctx.bot.send_chat_message(art):
-        # Не ушло – картинки зритель не увидел, лимит за это брать не за что
+        # Not sent – the viewer saw no picture, nothing to charge the limit for
         return
-    # Отмечаем после отправки: отказ по любой причине лимита не стоит.
-    # Повтор из кэша считается – зритель всё равно занял чат картинкой
+    # Recorded after sending: a refusal for any reason costs no limit.
+    # A cache repeat counts – the viewer still filled the chat with a picture
     await record_bot_use(ctx.user, USE_KIND)
-    if verdict:
-        # В чат не произносим, но запоминаем: иначе бот не знает, что вообще
-        # показывал, и не может об этом говорить дальше
-        logger.info('!ascii: %s принёс %s – %s', ctx.user, url, verdict.strip())
-        await save_bot_interaction(ctx.session_id, ctx.user, f'{TAG} {url}', verdict.strip())
+    if description:
+        # Not said in chat, but remembered: otherwise the bot does not know what it
+        # showed at all and cannot talk about it later
+        logger.info('!ascii: %s принёс %s – %s', ctx.user, url, description)
+        await save_bot_interaction(ctx.session_id, ctx.user, f'{TAG} {url}', description)
+
+
+def _allowed(verdict: str) -> str | None:
+    """The picture's description if Gemini allowed showing it. None – not allowed.
+
+    Permission is only an answer that starts with the word ALLOW_WORD. Everything
+    else, including НЕЛЬЗЯ in any wrapping, is a refusal. An empty string means
+    allowed, but the model gave no description.
+    """
+    if _verdict_word(verdict) != ALLOW_WORD:
+        return None
+    text = verdict.strip().lstrip(VERDICT_WRAPPING)
+    return text[len(ALLOW_WORD):].lstrip(ALLOW_SEPARATORS + VERDICT_WRAPPING).strip()
+
+
+def _verdict_word(verdict: str) -> str | None:
+    """ALLOW_WORD or BLOCK_WORD the answer starts with. None – neither."""
+    text = verdict.strip().lstrip(VERDICT_WRAPPING).upper()
+    for word in (ALLOW_WORD, BLOCK_WORD):
+        if text.startswith(word):
+            return word
+    return None
 
 
 async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
-    """Скачать, нарисовать и показать Gemini. None – зрителю уже отказали."""
+    """Download, draw and show to Gemini. None – the viewer has already been refused."""
     try:
         data, _ = await fetch(url)
     except PictureError as e:
-        # Кривой адрес не стоил нам ничего, а вот скачивание – стоило трафика,
-        # и возвращать за него место в квоте нельзя: иначе качать можно вечно
+        # A malformed address cost us nothing, but a download cost traffic, and
+        # its quota slot must not be refunded: otherwise one could download forever
         if e.code == BAD_URL:
             await ctx.refuse()
         await ctx.message.respond(Content.text(e.code, user=ctx.user))
         return None
 
-    # Декодирование и ресайз упираются в процессор: в поток, чтобы не
-    # задерживать остальной чат
+    # Decoding and resizing are CPU-bound: run in a thread so as not to
+    # hold up the rest of the chat
     art = await asyncio.to_thread(
         render, data, limit=TWITCH_MSG_MAX, max_cols=Picture.MAX_COLS,
     )
@@ -129,10 +180,10 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
         return art, None
     verdict = await _look(data, ctx)
     if verdict is None:
-        # Проверка не состоялась: таймаут, ошибка сети или сам Gemini
-        # отказался отвечать про эту картинку. Отказ должен быть закрытым –
-        # непроверенное не показываем. Кэшировать это нельзя, иначе одна
-        # неудача заблокировала бы ссылку до перезапуска
+        # The check did not happen: a timeout, a network error, or Gemini itself
+        # refused to answer about this picture. The refusal must fail closed –
+        # nothing unchecked is shown. This must not be cached, otherwise one
+        # failure would block the link until restart
         logger.warning('!ascii: картинку от %s проверить не удалось, не показываю', ctx.user)
         await ctx.message.respond(Content.text('ascii_unchecked', user=ctx.user))
         return None
@@ -140,11 +191,11 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
 
 
 def _limit_for(chatter) -> int:
-    """Сколько картинок положено зрителю за эфир. 0 – без лимита.
+    """How many pictures a viewer gets per stream. 0 – unlimited.
 
-    До сюда доходят только те, кого пустил диспетчер: команда открыта со
-    значка подписчика, фолловеру и не фолловеру она недоступна вовсе.
-    Поэтому последняя ветка – это VIP.
+    Only those the dispatcher let in get this far: the command is open from the
+    subscriber badge up, and is not available at all to a follower or a
+    non-follower. So the last branch is the VIP.
     """
     if chatter.broadcaster:
         return 0
@@ -153,29 +204,14 @@ def _limit_for(chatter) -> int:
     return Picture.PER_STREAM_VIP
 
 
-async def _used(ctx: CommandContext) -> int:
-    """Сколько картинок зритель уже нарисовал за этот эфир."""
-    start = await get_session_start(ctx.session_id)
-    if start is None:
-        return await count_bot_uses(ctx.user, USE_KIND, OFFLINE_WINDOW_MINUTES)
-    return await count_bot_uses_since(ctx.user, USE_KIND, start)
+def _find_url(ctx: CommandContext) -> str | None:
+    """The link from the command itself. None – the viewer has to give one.
 
-
-async def _find_url(ctx: CommandContext) -> str | None:
-    """Ссылка из команды, а если её нет – последняя ссылка в чате.
-
-    Обычный ход событий: один зритель кинул картинку, другой ответил
-    командой. Заставлять его копировать адрес незачем – весь чат у нас в
-    базе.
+    There is deliberately no fallback to the last link in chat (owner, 2026-09-19):
+    guessing picked the wrong picture, and commands are no longer stored anyway.
     """
     found = URL_RE.search(ctx.original_text)
-    if found:
-        return found.group(0).rstrip(URL_TRAILING)
-    for message in await get_recent_links(ctx.session_id):
-        found = URL_RE.search(message)
-        if found:
-            return found.group(0).rstrip(URL_TRAILING)
-    return None
+    return found.group(0).rstrip(URL_TRAILING) if found else None
 
 
 def _remember(url: str, art: str, verdict: str | None) -> None:
@@ -186,17 +222,17 @@ def _remember(url: str, art: str, verdict: str | None) -> None:
 
 
 async def _look(data: bytes, ctx: CommandContext) -> str | None:
-    """Показать картинку Gemini. Вернёт описание, BLOCK_WORD или None.
+    """Show the picture to Gemini. Returns its answer as is, or None.
 
-    Здесь единственное место в проекте, где фильтры безопасности Gemini
-    **включены**. В остальном боте они выключены намеренно – персонаж иначе
-    не работает, – но тут задача обратная: мы не разговариваем, а проверяем.
-    Классификатор Google становится вторым слоем защиты помимо нашего
-    промпта: на порнографию он не даст ответить вовсе, запрос вернётся
-    пустым, и картинка не будет показана.
+    This is the only place in the project where Gemini's safety filters are
+    **on**. In the rest of the bot they are off on purpose – the persona does not
+    work otherwise – but here the task is the opposite: we are checking, not talking.
+    Google's classifier becomes a second layer of protection beside our
+    prompt: it will not answer about pornography at all, the request comes back
+    empty, and the picture is not shown.
 
-    Личность бота тут тоже не нужна: описание идёт в память и в лог, а не в
-    чат, и ровный нейтральный текст для этого лучше.
+    The bot's personality is not needed here either: the description goes to memory
+    and the log, not to chat, and a flat neutral text is better for that.
     """
     small = await asyncio.to_thread(preview, data)
     if small is None:

@@ -1,9 +1,10 @@
-"""Проактивные реплики: бот сам пишет в чат раз в интервал."""
+"""Proactive remarks: the bot writes to chat on its own once per interval."""
 import asyncio
 import logging
 import random
 import re
 
+from src.core.activity import ChatWatch
 from src.core.config import Context, Proactive
 from src.core.content import Content
 from src.core.database import get_random_knowledge, get_recent_chat, save_bot_interaction
@@ -16,14 +17,15 @@ logger = logging.getLogger(__name__)
 
 
 async def proactive_loop(bot) -> None:
-    """Периодическая реплика в чат от себя."""
+    """A periodic remark to chat on the bot's own initiative."""
+    watch = ChatWatch()
     try:
         while True:
             delay = random_delay(Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
             logger.debug('Следующая проактивная реплика через %.1f мин', delay / 60)
             await asyncio.sleep(delay)
             try:
-                await _send_proactive(bot)
+                await _send_proactive(bot, watch)
             except Exception:
                 logger.exception('Проактивное сообщение не отправлено')
     except asyncio.CancelledError:
@@ -32,8 +34,12 @@ async def proactive_loop(bot) -> None:
         logger.info('Цикл проактивных сообщений остановлен')
 
 
-async def _send_proactive(bot) -> None:
+async def _send_proactive(bot, watch: ChatWatch) -> None:
     session_id = bot.session_id
+    # Only into a live conversation: nobody has written since the previous
+    # remark – a new one would be the bot talking to itself
+    if not await watch.new_messages(session_id):
+        return
     recent_chat = await get_recent_chat(session_id, Context.CHAT_MESSAGES)
     if not recent_chat:
         return

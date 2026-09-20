@@ -1,8 +1,8 @@
-"""Ответ на выкуп награды за баллы канала.
+"""Reply to a channel-points reward redemption.
 
-Twitch-сторона – создание наград, подтверждение, возврат баллов – живёт в
-src/local/roll/rewards.py. Здесь только игра: применить награду через game и
-сказать в чат, что вышло.
+The Twitch side – creating rewards, fulfilling, refunding points – lives in
+src/local/roll/rewards.py. Only the game is here: apply the reward through game and
+say in chat what came of it.
 """
 import logging
 
@@ -14,7 +14,7 @@ from src.local.roll.texts import champion_note, curse_note, curse_values, reward
 
 logger = logging.getLogger(__name__)
 
-# Сколько символов из поля награды цитировать в отказе: туда пишут что угодно
+# How many characters of the reward input to quote in a refusal: people write anything there
 INPUT_PREVIEW_CHARS = 25
 
 _DONE = {
@@ -37,22 +37,22 @@ _REFUND = {
     game.PERK_SHIELDED: 'reward_refund_perk_shield',
 }
 
-# После этих наград к тексту дописывается хвост про проклятие цели
+# After these rewards a note about the target's curse is appended to the text
 _WITH_CURSE_NOTE = (game.ACTION_EXTRA, game.ACTION_REROLL)
 
 
 async def handle_redemption(
     bot, action: str, redemption_id: str, user: str, user_input: str,
 ) -> bool | None:
-    """Применить награду и сообщить в чат.
+    """Apply the reward and report it in chat.
 
-    Возвращает, что сделать с выкупом в Twitch: True – подтвердить,
-    False – вернуть баллы, None – это повтор уже обработанного выкупа,
-    статус не трогать.
+    Returns what to do with the redemption on Twitch: True – fulfill,
+    False – refund the points, None – a repeat of an already handled redemption,
+    leave the status alone.
     """
     session_id = bot.session_id
     if not bot.stream_live:
-        # Без эфира награды на паузе, но выкуп мог проскочить в момент конца стрима
+        # Offline the rewards are paused, but a redemption may slip through as the stream ends
         await _say(bot, session_id, action, Content.text(
             'reward_refund_offline', user=user, reward=reward_title(action),
         ))
@@ -75,10 +75,10 @@ async def handle_redemption(
 def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> str:
     if outcome.ok:
         key = _DONE[action]
-        # У проклятого «из» – это его потолок, а не верхняя граница ролла
+        # For a cursed player the «из» (out of) is their ceiling, not the roll's upper bound
         if action == game.ACTION_EXTRA and outcome.ceiling is not None:
             key = 'reward_extra_cursed'
-        # Цель ещё не катала: «было – стало» писать не про что
+        # The target has not rolled yet: there is no «было – стало» (before – after) to write
         elif action == game.ACTION_REROLL and outcome.old_value is None:
             key = 'reward_reroll_first'
     else:
@@ -93,7 +93,7 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
         minutes=outcome.curse_minutes_left, protect=outcome.protect_minutes_left,
         **curse_values(),
     )
-    # Щит ролл не меняет – китежанина и проклятие к нему не дописываем
+    # A shield does not change the roll – no champion or curse note is appended to it
     if outcome.ok and action != game.ACTION_SHIELD:
         note = ''
         if action in _WITH_CURSE_NOTE:
@@ -103,6 +103,7 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
 
 
 async def _say(bot, session_id: str, action: str, text: str) -> None:
-    # Итог награды уже применён: если сообщение не ушло, баллы это не меняет
+    # The reward outcome is already applied: a message that did not go out
+    # does not change anything about the points
     if text and await bot.send_chat_message(text):
         await save_bot_interaction(session_id, '_reward_', f'[reward:{action}]', text)

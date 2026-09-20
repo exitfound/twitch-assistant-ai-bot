@@ -1,6 +1,6 @@
-"""Каркас бота: конфиг, тексты, БД, логирование, утилиты, реестр команд, диспетчер чата.
+"""Bot skeleton: config, texts, DB, logging, utilities, command registry, chat dispatcher.
 
-Фич здесь нет. Фичи лежат рядом (src/gemini, src/local) и зависят
-от core, а не наоборот. Исключение одно: диспетчер component.py регистрирует
-команды всех фич.
+No features live here. Features sit next door (src/gemini, src/local) and depend
+on core, not the other way round. There is one exception: the dispatcher component.py
+registers the commands of every feature.
 """

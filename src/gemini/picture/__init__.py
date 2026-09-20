@@ -1,6 +1,6 @@
-"""Команда !ascii: картинка по ссылке – в брайль-арт для чата.
+"""The !ascii command: a picture from a link, turned into braille art for chat.
 
-- fetch.py   – скачивание по ссылке из чата, со всеми проверками
-- render.py  – пиксели в символы Брайля, ровно на одно сообщение
-- command.py – хендлер !ascii: скачать, нарисовать, показать, подписать
+- fetch.py   – download from a link in chat, with all the checks
+- render.py  – pixels to braille characters, exactly one message's worth
+- command.py – the !ascii handler: download, draw, show, caption
 """

@@ -10,11 +10,11 @@ _configured = False
 
 
 def setup_logging(default_level: str = 'INFO') -> None:
-    """Настроить корневой логгер.
+    """Configure the root logger.
 
-    Уровень берётся из LOG_LEVEL, иначе используется default_level
-    (INFO для бота, WARNING для CLI-команд). При заданном LOG_FILE
-    дополнительно пишется ротируемый файл.
+    The level comes from LOG_LEVEL, otherwise default_level is used
+    (INFO for the bot, WARNING for CLI commands). When LOG_FILE is set,
+    a rotating file is written as well.
     """
     global _configured
     if _configured:

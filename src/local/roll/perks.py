@@ -1,7 +1,8 @@
-"""Бонусы игры по итогам прошлого эфира: щит китежанину, проклятие залупе.
+"""Game perks from the previous stream: a shield to the китежанин (champion), a curse to
+the залупа (loser).
 
-Механика – в src/local/roll/game.py. Здесь только чат: объявить бонусы в начале
-эфира и сказать игроку, что его отсчёт пошёл, когда он впервые пишет в чат.
+The mechanics are in src/local/roll/game.py. Only chat lives here: announce the perks at
+the stream start and tell a player their countdown has started when they first write in chat.
 """
 import logging
 
@@ -13,17 +14,17 @@ from src.local.roll.storage import get_pending_perk_users
 
 logger = logging.getLogger(__name__)
 
-# Кто в сессии получил бонус, но ещё не появлялся. Без кэша каждое сообщение
-# чата ходило бы в базу. Устаревший кэш безвреден: если отсчёт уже запустил
-# переброс, лишний вызов вернёт пусто
+# Who got a perk this session but has not shown up yet. Without the cache every chat
+# message would hit the DB. A stale cache is harmless: if a reroll has already started
+# the countdown, the extra call returns nothing
 _pending: dict[str, set[str]] = {}
 
 
 async def on_stream_start(bot, session_id: str) -> None:
-    """Эфир идёт: выдать бонусы по итогам прошлого и объявить в чат.
+    """The stream is live: grant the perks from the previous one and announce them in chat.
 
-    Безопасно звать повторно – после перезапуска или обрыва уже выданное не
-    выдаётся и не объявляется второй раз.
+    Safe to call again – after a restart or an outage, what was already granted is
+    neither granted nor announced a second time.
     """
     if not Roll.PERKS_ENABLED:
         return
@@ -47,7 +48,7 @@ async def on_stream_start(bot, session_id: str) -> None:
 
 
 async def on_chat(bot, session_id: str, user: str) -> None:
-    """Сообщение в чат: если игрока ждёт бонус, запустить отсчёт и сказать об этом."""
+    """A chat message: if a perk awaits the player, start the countdown and say so."""
     if not Roll.PERKS_ENABLED or not bot.stream_live:
         return
     try:

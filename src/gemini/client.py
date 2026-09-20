@@ -24,6 +24,16 @@ _semaphore = asyncio.Semaphore(Gemini.CONCURRENCY)
 
 RETRY_BASE_DELAY = 1.0
 
+# Finish reasons of an answer cut off by Gemini's output filter
+_OUTPUT_BLOCKS = {
+    types.FinishReason.PROHIBITED_CONTENT, types.FinishReason.SAFETY,
+    types.FinishReason.BLOCKLIST, types.FinishReason.SPII,
+}
+
+# Tokens spent since start: input, of it served from Gemini's cache, output.
+# Read by CLI commands to report what a run cost
+usage = {'prompt': 0, 'cached': 0, 'output': 0}
+
 
 def get_client() -> genai.Client:
     global _client
@@ -46,10 +56,10 @@ def make_gen_config() -> types.GenerateContentConfig:
 
 
 def _is_transient(error: Exception) -> bool:
-    """Стоит ли повторять запрос: перегрузка сервера, лимит или сеть.
+    """Whether the request is worth retrying: server overload, rate limit or network.
 
-    Таймаут сюда не входит намеренно: зритель в чате уже ждёт Gemini.TIMEOUT
-    секунд, и повторные попытки растянули бы ответ на минуты.
+    A timeout is deliberately excluded: the viewer in chat is already waiting
+    Gemini.TIMEOUT seconds, and retries would stretch the answer to minutes.
     """
     if isinstance(error, errors.ServerError):
         return True
@@ -59,10 +69,33 @@ def _is_transient(error: Exception) -> bool:
 
 
 async def generate(contents: str | list, config: types.GenerateContentConfig) -> str | None:
-    """Запрос к Gemini. Возвращает None при таймауте, блокировке или отказе API.
+    """A Gemini request. Returns None on timeout, block or API refusal.
 
-    contents – либо текст, либо список частей: так !ascii передаёт вместе с
-    вопросом саму картинку.
+    contents is either text or a list of parts: that is how !ascii sends the
+    picture itself along with the question.
+    """
+    text, _ = await generate_checked(contents, config)
+    return text
+
+
+# Why Gemini returned no text though the request went through
+BLOCK_INPUT = 'input'
+BLOCK_OUTPUT = 'output'
+# Gemini answered, but with no text and no filter named (RECITATION, OTHER, …).
+# Unlike a timeout this repeats for the same prompt, so it must not be retried forever
+EMPTY = 'empty'
+
+
+async def generate_checked(contents: str | list,
+                           config: types.GenerateContentConfig) -> tuple[str | None, str | None]:
+    """Like generate(), plus why there is no text: BLOCK_INPUT, BLOCK_OUTPUT, EMPTY
+    (answered with nothing), or None – no answer at all (timeout, network, API error).
+
+    Neither filter can be switched off. The input filter (BLOCK_INPUT) judges the
+    whole prompt, so a caller with a big input can split it and try again. The
+    output filter (BLOCK_OUTPUT) stops the answer halfway and is random: the same
+    prompt usually passes on the next try. Both make sense to retry, a timeout
+    or an unreachable Gemini does not.
     """
     async with _semaphore:
         for attempt in range(Gemini.RETRIES + 1):
@@ -82,15 +115,32 @@ async def generate(contents: str | list, config: types.GenerateContentConfig) ->
                         logger.warning('Gemini: таймаут %d с (попыток: %d)', Gemini.TIMEOUT, attempt + 1)
                     else:
                         logger.warning('Gemini: запрос не удался (попыток: %d): %s', attempt + 1, e)
-                    return None
+                    return None, None
                 delay = RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
                 logger.info('Gemini: %s, повтор через %.1f с', type(e).__name__, delay)
                 await asyncio.sleep(delay)
                 continue
 
+            meta = response.usage_metadata
+            if meta is not None:
+                usage['prompt'] += meta.prompt_token_count or 0
+                usage['cached'] += meta.cached_content_token_count or 0
+                usage['output'] += (meta.candidates_token_count or 0) + (meta.thoughts_token_count or 0)
+            feedback = response.prompt_feedback
+            if feedback and feedback.block_reason:
+                return None, BLOCK_INPUT
             try:
-                return response.text
+                text = response.text
             except (ValueError, AttributeError):
-                logger.debug('Gemini: пустой или заблокированный ответ')
-                return None
-    return None
+                text = None
+            if text:
+                # Even an answer the output filter cut short is returned as before:
+                # chat answers have always sent whatever came back
+                return text, None
+            candidate = response.candidates[0] if response.candidates else None
+            if candidate and candidate.finish_reason in _OUTPUT_BLOCKS:
+                logger.debug('Gemini: ответ остановлен фильтром (%s)', candidate.finish_reason)
+                return None, BLOCK_OUTPUT
+            logger.debug('Gemini: пустой ответ (%s)', candidate.finish_reason if candidate else 'нет кандидатов')
+            return None, EMPTY
+    return None, None

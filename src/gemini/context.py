@@ -1,15 +1,15 @@
 class ContextBuilder:
-    """Собирает промпт для Gemini из именованных секций.
+    """Assembles a Gemini prompt from named sections.
 
-    Каждая секция рендерится как:
+    Each section renders as:
         [Label]
         content
 
-    Секции без метки (add_raw) – просто текст. Пустые данные пропускаются.
+    Sections without a label (add_raw) are plain text. Empty data is skipped.
 
-    Класс отвечает только за структуру: все русские формулировки, включая
-    названия меток, приходят из CONTENT.md – prompts.system ссылается
-    на них по названию, поэтому они должны лежать рядом.
+    The class is responsible for structure only: all Russian wording, including
+    the label names, comes from CONTENT.md – prompts.system refers to them
+    by name, so they have to live side by side.
     """
 
     def __init__(self) -> None:

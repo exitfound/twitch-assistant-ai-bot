@@ -1,14 +1,14 @@
-"""Скачивание картинки по ссылке из чата.
+"""Downloading a picture from a link in chat.
 
-Ссылку даёт случайный зритель, поэтому проверок больше, чем кода. Главное,
-от чего защищаемся: ссылка на внутренний адрес превратила бы бота в способ
-стучаться по локальной сети хозяина (SSRF). Отсюда явная проверка каждого
-IP, в который резолвится хост, и ручной обход редиректов – автоматический
-увёл бы нас на приватный адрес уже после проверки. Плюс проверка адреса
-установленного соединения: имя резолвится второй раз внутри httpx, и запись
-с нулевым TTL иначе подменила бы адрес между проверкой и запросом.
+The link comes from a random viewer, so there are more checks than code. The main
+thing we guard against: a link to an internal address would turn the bot into a way
+of knocking on the owner's local network (SSRF). Hence the explicit check of every
+IP the host resolves to, and manual redirect following – automatic following would
+lead us to a private address after the check. Plus a check of the address of the
+established connection: the name is resolved a second time inside httpx, and a
+zero-TTL record would otherwise swap the address between the check and the request.
 
-Заодно: только http/https, только image/*, таймаут и потолок размера.
+Also: http/https only, image/* only, a timeout and a size cap.
 """
 import asyncio
 import ipaddress
@@ -22,20 +22,20 @@ from src.core.config import Picture
 
 logger = logging.getLogger(__name__)
 
-# Представляемся: без User-Agent часть хостингов (Wikimedia, Reddit) даёт 403
+# Introduce ourselves: without a User-Agent some hosts (Wikimedia, Reddit) return 403
 USER_AGENT = 'sosuryan-twitch-bot/1.0 (+https://twitch.tv)'
 
-# Сколько переадресаций проходим, проверяя каждую
+# How many redirects we follow, checking each one
 MAX_REDIRECTS = 3
 
-# Коды ошибок – это же имена ключей в CONTENT.md
+# Error codes – these are also key names in CONTENT.md
 BAD_URL = 'ascii_bad_url'
 TOO_BIG = 'ascii_too_big'
 FAILED = 'ascii_failed'
 
 
 class PictureError(Exception):
-    """Отказ с готовым ключом текста для чата."""
+    """A refusal carrying a ready text key for chat."""
 
     def __init__(self, code: str) -> None:
         super().__init__(code)
@@ -43,7 +43,7 @@ class PictureError(Exception):
 
 
 async def fetch(url: str) -> tuple[bytes, str]:
-    """Скачать картинку. Возвращает (байты, mime) или бросает PictureError."""
+    """Download a picture. Returns (bytes, mime) or raises PictureError."""
     async with httpx.AsyncClient(
         follow_redirects=False,
         timeout=Picture.TIMEOUT,
@@ -59,7 +59,7 @@ async def fetch(url: str) -> tuple[bytes, str]:
 
 
 async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] | None, str]:
-    """Один запрос. Либо (данные, mime), либо адрес следующей переадресации."""
+    """One request. Either (data, mime) or the address of the next redirect."""
     try:
         async with client.stream('GET', url) as response:
             _check_peer(response)
@@ -67,7 +67,7 @@ async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] |
                 location = response.headers.get('location')
                 if not location:
                     raise PictureError(FAILED)
-                # Адрес может быть относительным, а проверять надо абсолютный
+                # The address may be relative, but the absolute one is what must be checked
                 return None, str(httpx.URL(url).join(location))
             if response.status_code != httpx.codes.OK:
                 logger.info('!ascii: сервер ответил %s', response.status_code)
@@ -77,8 +77,8 @@ async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] |
             if not mime.startswith('image/'):
                 logger.info('!ascii: по ссылке не картинка, а %r', mime)
                 raise PictureError(FAILED)
-            # Заголовку верим только чтобы не начинать качать заведомо лишнее:
-            # его может не быть или он может врать, поэтому считаем и байты
+            # The header is trusted only to avoid starting a download that is surely too big:
+            # it may be missing or may lie, so we count the bytes as well
             declared = response.headers.get('content-length', '')
             if declared.isdigit() and int(declared) > Picture.MAX_BYTES:
                 raise PictureError(TOO_BIG)
@@ -97,13 +97,13 @@ async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] |
 
 
 def _check_peer(response: httpx.Response) -> None:
-    """Проверить адрес, с которым соединение установлено на самом деле.
+    """Check the address the connection was actually established with.
 
-    Проверки одного только имени мало: между нашим запросом к DNS и запросом
-    httpx имя резолвится второй раз, и запись с нулевым TTL может отдать
-    публичный адрес на проверку и локальный на скачивание (DNS rebinding).
-    Здесь мы смотрим уже на установленное соединение, поэтому подменить
-    нечего.
+    Checking the name alone is not enough: between our DNS query and httpx's
+    request the name is resolved a second time, and a zero-TTL record can hand out
+    a public address for the check and a local one for the download (DNS rebinding).
+    Here we look at the already established connection, so there is nothing
+    to swap.
     """
     stream = response.extensions.get('network_stream')
     if stream is None:
@@ -121,7 +121,7 @@ def _check_peer(response: httpx.Response) -> None:
 
 
 async def _check_url(url: str) -> None:
-    """Схема, хост и все его адреса. Бросает PictureError."""
+    """Scheme, host and all of its addresses. Raises PictureError."""
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https') or not parsed.hostname:
         raise PictureError(BAD_URL)
@@ -134,8 +134,8 @@ async def _check_url(url: str) -> None:
         infos = await loop.getaddrinfo(parsed.hostname, port, proto=socket.IPPROTO_TCP)
     except (socket.gaierror, UnicodeError, OSError):
         raise PictureError(BAD_URL) from None
-    # Проверяем каждый адрес: хост может резолвиться и в публичный, и в
-    # локальный – одного публичного мало, чтобы считать ссылку безопасной
+    # Check every address: a host may resolve to both a public and a local
+    # one – a single public address is not enough to consider the link safe
     for info in infos:
         try:
             address = ipaddress.ip_address(info[4][0])

@@ -1,13 +1,13 @@
-"""Фолловер ли зритель: запрос к Twitch с кэшем.
+"""Whether a viewer follows the channel: a Twitch request with a cache.
 
-Значков фолловера в событии чата нет – в отличие от подписки, випки и
-модератора, – поэтому статус приходится спрашивать у Helix
-(`channels/followers`, право `moderator:read:followers`, оно же нужно для
-подписки на фоловы). Запрос на каждое сообщение чата был бы расточительным,
-поэтому ответ живёт в кэше FOLLOW_CACHE_MINUTES.
+A chat event carries no follower badge – unlike subscriber, VIP and
+moderator – so the status has to be asked from Helix
+(`channels/followers`, scope `moderator:read:followers`, the same one needed
+for the follow subscription). A request per chat message would be wasteful,
+so the answer lives in the cache for FOLLOW_CACHE_MINUTES.
 
-Ошибку запроса трактуем в пользу зрителя: молчащий Twitch не должен
-закрывать чату доступ к боту.
+A request error is read in the viewer's favour: a silent Twitch must not
+lock the chat out of the bot.
 """
 import logging
 import time
@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 class FollowerCache:
 
     def __init__(self) -> None:
-        # user_id -> (фолловер ли, до какого времени верим кэшу)
+        # user_id -> (is a follower, until when the cache is trusted)
         self._cache: dict[str, tuple[bool, float]] = {}
 
     def forget(self, user_id: str) -> None:
-        """Забыть ответ: зовём, когда пришло событие о новом фолове."""
+        """Forget the answer: called when a new-follow event arrives."""
         self._cache.pop(str(user_id), None)
 
     async def is_follower(self, bot, user_id: str) -> bool:
@@ -46,8 +46,8 @@ class FollowerCache:
     async def _fetch(self, bot, user_id: str) -> bool:
         broadcaster = bot.create_partialuser(bot.channel_id)
         followers = await broadcaster.fetch_followers(user=user_id, token_for=str(bot.bot_id))
-        # followers.followers – асинхронный итератор, у него нет ни __bool__,
-        # ни __len__, поэтому bool() от него истина всегда и проверка молча
-        # пускала бы каждого. Разворачиваем первую страницу: с user= Twitch
-        # возвращает либо одну запись, либо пустой список
+        # followers.followers is an async iterator with neither __bool__
+        # nor __len__, so bool() of it is always true and the check would silently
+        # let everyone in. Unwrap the first page: with user= Twitch returns
+        # either one record or an empty list
         return bool(await followers.followers)

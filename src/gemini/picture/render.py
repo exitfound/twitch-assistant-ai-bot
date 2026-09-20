@@ -1,20 +1,20 @@
-"""Пиксели в символы Брайля: картинка, влезающая в одно сообщение чата.
+"""Pixels to braille characters: a picture that fits into one chat message.
 
-Почему брайль, а не обычный ASCII. Чат Twitch рисуется пропорциональным
-шрифтом, поэтому строки из `.:-=+*#%@` разъезжаются, а подряд идущие пробелы
-схлопываются – половина арта просто исчезает. Символы Брайля
-(U+2800–U+28FF) рендерятся одинаковой ширины, пустой символ U+2800 – не
-пробел и не схлопывается, а плотность вчетверо выше: одна ячейка несёт
-матрицу 2x4 точки.
+Why braille and not plain ASCII. Twitch chat is drawn in a proportional
+font, so lines made of `.:-=+*#%@` drift apart, and runs of spaces collapse –
+half of the art simply disappears. Braille characters (U+2800–U+28FF)
+render at one width, the blank character U+2800 is not a space and does
+not collapse, and the density is four times higher: one cell carries a
+2x4 dot matrix.
 
-Почему всё уходит одним сообщением. Строка брайля не содержит пробелов,
-для браузера это одно неразрывное «слово». Пробелы стоят только на стыках
-строк, перенос идёт строго по ним – значит каждая строка ложится на свою
-визуальную строку сама, без переводов строки, которых в сообщении Twitch и
-не бывает. Ник отправителя не мешает: первая строка арта целиком не влезает
-в остаток первой визуальной строки и уезжает на вторую.
+Why everything goes out as one message. A braille line contains no spaces,
+so for the browser it is one unbreakable "word". Spaces sit only at the joins
+between lines, and wrapping happens strictly there – so every line lands on its
+own visual line by itself, without newlines, which a Twitch message does not
+have anyway. The sender's nick does not get in the way: the first line of art
+does not fit into the rest of the first visual line and moves to the second.
 
-Отсюда и размер: бюджет не в строках, а в символах сообщения.
+Hence the size: the budget is in message characters, not in lines.
 """
 import io
 import logging
@@ -25,8 +25,8 @@ from src.core.config import Picture
 
 logger = logging.getLogger(__name__)
 
-# Символ Брайля – это 0x2800 плюс маска из восьми точек. Точки в ячейке 2x4
-# пронумерованы не по порядку чтения, а исторически: слева 1,2,3,7, справа 4,5,6,8
+# A braille character is 0x2800 plus an eight-dot mask. The dots in a 2x4 cell are
+# numbered not in reading order but historically: 1,2,3,7 on the left, 4,5,6,8 on the right
 DOT_BITS = {
     (0, 0): 0x01, (0, 1): 0x02, (0, 2): 0x04, (0, 3): 0x40,
     (1, 0): 0x08, (1, 1): 0x10, (1, 2): 0x20, (1, 3): 0x80,
@@ -35,50 +35,50 @@ BLANK = '⠀'
 DOTS_X = 2
 DOTS_Y = 4
 
-# Границы подбора рамки: уже – уже ничего не разобрать, ниже – не картинка
+# Bounds for choosing the frame: narrower – nothing can be made out, lower – not a picture
 MIN_COLS = 14
 MIN_ROWS = 6
 
-# Порог яркости, ниже которого точка считается закрашенной
+# Brightness threshold below which a dot counts as filled
 THRESHOLD = 128
 
-# Доля закрашенных точек, выше которой картинка считается залитой. Порог
-# один на всю картинку не справляется, когда большая область лежит чуть
-# темнее него: зелёная лягушка целиком уходит в чернила и остаётся силуэт
-# без морды. Тогда переключаемся на локальный порог
+# Share of filled dots above which the picture counts as flooded. A single
+# threshold for the whole picture fails when a large area lies just slightly
+# darker than it: a green frog turns entirely into ink and leaves a silhouette
+# with no face. Then we switch to a local threshold
 INK_MAX = 0.45
-# И наоборот: почти пустой результат тоже значит, что порог не туда попал
+# And the other way round: a nearly empty result also means the threshold missed
 INK_MIN = 0.05
 
-# Локальный порог: пиксель темнее своей округи на BIAS – чернила. Радиус
-# в точках готовой картинки, поэтому маленький
+# Local threshold: a pixel darker than its surroundings by BIAS is ink. The radius
+# is in dots of the finished picture, hence small
 LOCAL_RADIUS = 2.0
 LOCAL_BIAS = 6
 
-# Пиксель считается частью силуэта, если он непрозрачен хотя бы наполовину
+# A pixel counts as part of the silhouette if it is at least half opaque
 ALPHA_SOLID = 128
 
-# Размер копии, которая уходит в Gemini: ему надо лишь понять, что на
-# картинке, и решить, можно ли её показывать – разрешение на это не влияет
+# Size of the copy sent to Gemini: it only has to understand what is in the
+# picture and decide whether it may be shown – resolution does not affect that
 PREVIEW_PX = 512
 PREVIEW_QUALITY = 85
 
-# Потолок на распакованный размер: сжатая картинка в пару мегабайт
-# разворачивается в сотни мегапикселей, и декодирование съест память
+# Cap on the decompressed size: a compressed picture of a couple of megabytes
+# expands into hundreds of megapixels, and decoding would eat the memory
 MAX_PIXELS = 40_000_000
 
 
 def render(data: bytes, *, limit: int, max_cols: int) -> str | None:
-    """Готовое сообщение для чата или None, если нарисовать не вышло.
+    """A finished chat message, or None if drawing failed.
 
-    Блокирующая функция: декодирование и ресайз упираются в процессор,
-    поэтому вызывать её следует через asyncio.to_thread.
+    A blocking function: decoding and resizing are CPU-bound,
+    so it should be called via asyncio.to_thread.
     """
     try:
         img = Image.open(io.BytesIO(data))
-        # Размер известен уже из заголовка, и проверять его надо ДО load():
-        # стокилобайтный png разворачивается в сотни мегапикселей, и
-        # декодирование съест память раньше, чем мы успеем отказать
+        # The size is already known from the header, and must be checked BEFORE load():
+        # a hundred-kilobyte png expands into hundreds of megapixels, and
+        # decoding would eat the memory before we get a chance to refuse
         if img.width * img.height > MAX_PIXELS:
             logger.info('!ascii: картинка слишком большая: %dx%d', img.width, img.height)
             return None
@@ -88,9 +88,9 @@ def render(data: bytes, *, limit: int, max_cols: int) -> str | None:
         return None
 
     img, shape = _to_grayscale(img)
-    # Ячейка в чате выше, чем вдвое своей ширины, поэтому точка не квадратная:
-    # без поправки картинка выглядит вытянутой по вертикали. Сжимаем заранее,
-    # считая геометрию по «экранной» высоте
+    # A chat cell is taller than twice its width, so a dot is not square:
+    # uncorrected, the picture looks stretched vertically. Squeeze it up front,
+    # computing the geometry from the "on-screen" height
     height = max(1, round(img.height * Picture.ASPECT))
     cols, rows = _best_box(img.width, height, limit, max_cols)
     size = _fit(img.width, height, cols, rows)
@@ -107,19 +107,19 @@ def render(data: bytes, *, limit: int, max_cols: int) -> str | None:
 
 
 def preview(data: bytes, max_side: int = PREVIEW_PX) -> tuple[bytes, str] | None:
-    """Уменьшенная копия для Gemini. Блокирующая, звать через to_thread.
+    """A downscaled copy for Gemini. Blocking, call via to_thread.
 
-    Модели нужно ответить, что нарисовано и можно ли это показывать, – для
-    этого хватает мелкой картинки. Слать оригинал незачем: снимок с телефона
-    весит мегабайты и стоит соответственно, а решение от разрешения не
-    меняется.
+    The model has to say what is drawn and whether it may be shown – a small
+    picture is enough for that. There is no reason to send the original: a phone
+    photo weighs megabytes and costs accordingly, while the decision does not
+    change with resolution.
     """
     try:
         img = Image.open(io.BytesIO(data))
         if img.width * img.height > MAX_PIXELS:
             return None
         img.load()
-        # JPEG не умеет прозрачность, а она тут и не нужна
+        # JPEG has no transparency, and it is not needed here anyway
         if img.mode not in ('RGB', 'L'):
             img = img.convert('RGB')
         img.thumbnail((max_side, max_side), Image.LANCZOS)
@@ -132,14 +132,14 @@ def preview(data: bytes, max_side: int = PREVIEW_PX) -> tuple[bytes, str] | None
 
 
 def _binarize(img: Image.Image) -> Image.Image:
-    """Полутона в чёрно-белое, уже на готовом размере.
+    """Halftones to black and white, already at the final size.
 
-    Сначала пробуем обычный порог: на контрастном рисунке он даёт самые
-    чистые линии. Если картинка от него залилась или, наоборот, почти
-    исчезла, берём локальный порог – он сравнивает точку не с общим числом,
-    а с её окружением, и потому вытягивает контуры и черты внутри крупных
-    однотонных пятен. Дизеринг здесь не годится вовсе: на шести десятках
-    точек в ширину Флойд-Стейнберг даёт шум, а не полутона.
+    First we try a plain threshold: on a high-contrast drawing it gives the
+    cleanest lines. If the picture floods from it or, conversely, nearly
+    disappears, we take a local threshold – it compares a dot not with one global
+    number but with its surroundings, and so pulls out outlines and features inside
+    large flat areas. Dithering is no good here at all: at sixty-odd dots across,
+    Floyd-Steinberg gives noise, not halftones.
     """
     ink = img.point(lambda v: 255 if v > THRESHOLD else 0, mode='1')
     share = _ink_share(ink)
@@ -154,16 +154,16 @@ def _binarize(img: Image.Image) -> Image.Image:
 
 
 def _hollow(ink: Image.Image, gray: Image.Image) -> Image.Image:
-    """Выесть заливку, оставив края и самые глубокие тени.
+    """Hollow out the fill, keeping the edges and the deepest shadows.
 
-    Сплошное чёрное пятно теряет форму: у енота на фотографии виден контур,
-    а тело – клякса. Вычитаем из рисунка его же, ужатый на точку: остаются
-    только края. Тонкие линии при этом целы – они сами состоят из края,
-    поэтому рисованному Pepe выедание ничего не делает.
+    A solid black blob loses its shape: on a raccoon photo the contour is visible
+    but the body is a smudge. We subtract from the drawing itself eroded by one dot:
+    only the edges remain. Thin lines stay intact – they consist of edge
+    themselves, so hollowing does nothing to a drawn Pepe.
 
-    Чтобы не осталась одна проволочная схема, поверх возвращаются самые
-    тёмные места (темнее `Picture.SHADOW`) – они и дают объём: с одной
-    стороны тень залита, с другой идёт контур.
+    So that not just a wire diagram is left, the darkest places (darker than
+    `Picture.SHADOW`) are put back on top – they give the volume: the shadow is
+    filled on one side, the contour runs on the other.
     """
     solid = ink.convert('L')
     edges = ImageChops.lighter(
@@ -176,7 +176,7 @@ def _hollow(ink: Image.Image, gray: Image.Image) -> Image.Image:
 
 
 def _ink_share(bitmap: Image.Image) -> float:
-    """Доля закрашенных точек."""
+    """Share of filled dots."""
     hist = bitmap.convert('L').histogram()
     black, white = hist[0], hist[255]
     total = black + white
@@ -184,16 +184,16 @@ def _ink_share(bitmap: Image.Image) -> float:
 
 
 def _to_grayscale(img: Image.Image) -> tuple[Image.Image, Image.Image | None]:
-    """В серый, с обрезкой полей и растяжкой контраста.
+    """To grayscale, with margins cropped and contrast stretched.
 
-    Возвращает ещё и силуэт – канал прозрачности, если он есть. Вырезанная
-    картинка на прозрачном фоне (а это половина png в интернете) сама по
-    себе форму не даёт: золотой кубок на белом фоне по яркости почти белый,
-    порог его теряет, и остаётся каша. Зато альфа знает форму точно, и по
-    ней потом обводится контур.
+    Also returns the silhouette – the alpha channel, if there is one. A cutout
+    on a transparent background (and that is half the png on the internet) gives
+    no shape by itself: a gold trophy on a white background is nearly white in
+    brightness, the threshold loses it, and a mess is left. The alpha, however,
+    knows the shape exactly, and the contour is later traced along it.
 
-    Прозрачный фон при этом всё равно кладём на белое: для полутонов это
-    фон, а не рисунок, и точками его ставить не надо.
+    The transparent background is still laid on white: for the halftones it is
+    background, not drawing, and it must not be set in dots.
     """
     shape = None
     if img.mode in ('RGBA', 'LA', 'P') or 'transparency' in img.info:
@@ -202,20 +202,20 @@ def _to_grayscale(img: Image.Image) -> tuple[Image.Image, Image.Image | None]:
         canvas = Image.new('RGBA', img.size, (255, 255, 255, 255))
         img = Image.alpha_composite(canvas, img)
     img = img.convert('L')
-    # Границы содержимого: по силуэту они точные, иначе по непустым пикселям
+    # Content bounds: exact from the silhouette, otherwise from non-empty pixels
     box = shape.getbbox() if shape is not None else ImageOps.invert(img).getbbox()
     if box:
         img = img.crop(box)
         if shape is not None:
             shape = shape.crop(box)
     if shape is not None and (shape.getextrema()[0] >= ALPHA_SOLID):
-        # Прозрачности по факту нет – обводить нечего
+        # There is no actual transparency – nothing to outline
         shape = None
     return ImageOps.autocontrast(img), shape
 
 
 def _add_shape(ink: Image.Image, shape: Image.Image) -> Image.Image:
-    """Добавить обводку по силуэту вырезанной картинки."""
+    """Add an outline along the silhouette of a cutout picture."""
     solid = shape.point(lambda v: 0 if v >= ALPHA_SOLID else 255, mode='1').convert('L')
     edge = ImageChops.lighter(
         solid, ImageChops.invert(solid.filter(ImageFilter.MaxFilter(3))),
@@ -224,13 +224,13 @@ def _add_shape(ink: Image.Image, shape: Image.Image) -> Image.Image:
 
 
 def _best_box(img_w: int, img_h: int, limit: int, max_cols: int) -> tuple[int, int]:
-    """Подобрать рамку в ячейках под пропорции картинки.
+    """Choose a frame in cells to match the picture's proportions.
 
-    Бюджет у нас в символах сообщения, а не в строках: строка из N символов
-    стоит N+1 вместе с пробелом-разделителем. Поэтому высокой картинке
-    выгоднее взять колонок меньше, а строк больше – точек при том же лимите
-    выходит заметно больше. Сверху ограничивает max_cols: строка шире него
-    не влезет в колонку чата и порвётся переносом.
+    Our budget is in message characters, not lines: a line of N characters
+    costs N+1 with the separating space. So a tall picture is better off with
+    fewer columns and more rows – at the same limit that yields noticeably more
+    dots. max_cols caps it from above: a line wider than that will not fit into
+    the chat column and will be torn by wrapping.
     """
     best = (0.0, 0, 0)
     for cols in range(MIN_COLS, max_cols + 1):
@@ -246,11 +246,11 @@ def _best_box(img_w: int, img_h: int, limit: int, max_cols: int) -> tuple[int, i
 
 
 def _fit(img_w: int, img_h: int, cols: int, rows: int) -> tuple[int, int]:
-    """Размер в точках: вписать в рамку, сохранив пропорции.
+    """Size in dots: fit into the frame, keeping the proportions.
 
-    Точки брайля почти квадратные – ячейка вдвое выше своей ширины и несёт
-    2 точки по горизонтали против 4 по вертикали, – поэтому поправка на
-    пропорции символа, обязательная для обычного ASCII, здесь не нужна.
+    Braille dots are nearly square – a cell is twice as tall as it is wide and
+    carries 2 dots horizontally against 4 vertically – so the correction for
+    character proportions, mandatory for plain ASCII, is not needed here.
     """
     box_w, box_h = cols * DOTS_X, rows * DOTS_Y
     scale = min(box_w / img_w, box_h / img_h)
@@ -276,7 +276,7 @@ def _to_lines(img: Image.Image) -> list[str]:
 
 
 def _trim(lines: list[str]) -> list[str]:
-    """Убрать пустые строки сверху и снизу – они тратят бюджет сообщения."""
+    """Remove blank lines at the top and bottom – they waste the message budget."""
     while lines and not lines[0].strip(BLANK):
         lines.pop(0)
     while lines and not lines[-1].strip(BLANK):

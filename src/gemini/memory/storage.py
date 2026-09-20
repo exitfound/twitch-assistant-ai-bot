@@ -3,9 +3,9 @@
 The memory works on conversations (Block), not on bot sessions: chat split by
 silence, keyed by the Moscow time of its first message.
 
-The schema lives in init_db() (src/core/database.py) with all the others.
-Chat rows are read with the same «not a command» filter as everywhere else:
-commands are not stored since 2026-09-18, the filter is for older rows.
+The schema lives in init_db() (src/core/database.py) with all the others. Chat rows
+are read with the same «not a command» filter as everywhere else, which covers the
+rows that still hold commands.
 """
 import bisect
 import json
@@ -56,12 +56,9 @@ class Block(NamedTuple):
         return self.first_id, self.last_id
 
 
-# The conversation key is the channel's time, not the process's: the bot in a container
-# may run in UTC while --build-memory runs by hand in local time, and keys that differ
-# between them break the crash-rerun check in update_profile().
-# Europe/Moscow, the same zone the container is given, so that the key and session_id
-# cannot drift apart. Until 2026-10-26 this changes nothing – Kyiv is also UTC+3 right
-# now – but from the winter switch Kyiv would have been an hour off (owner, 2026-09-20)
+# The conversation key uses a fixed zone, not the process's: a container runs in UTC
+# while --build-memory runs by hand in local time, and keys differing between them break
+# the crash-rerun check in update_profile(). It is the zone the container is given.
 KEY_TIMEZONE = ZoneInfo('Europe/Moscow')
 
 
@@ -424,8 +421,8 @@ async def facts_about(username: str) -> list[str]:
 async def move_unaddressed_facts() -> int:
     """Copy facts that name nobody by @nick into knowledge. Returns how many were new there.
 
-    Facts with an @nick went into that chatter's profile instead. The facts table
-    itself stays until the owner has looked at the profiles.
+    Facts that name a chatter by @nick belong in that chatter's profile instead, so
+    only the rest is copied. The facts table itself is left in place.
     """
     db = await get_db()
     async with db.execute("SELECT fact FROM facts WHERE fact NOT LIKE '%@%' ORDER BY id") as cursor:

@@ -38,11 +38,9 @@ async def proactive_loop(bot) -> None:
 
 async def _send_proactive(bot, watch: ChatWatch) -> None:
     session_id = bot.session_id
-    # Only while live and only into a live conversation: nobody has written since the
-    # previous remark – a new one would be the bot talking to itself. The stream check
-    # is the one the other loops have had since 2026-09-19 and this one was missing:
-    # a message written offline made the bot start commenting an empty chat, and this
-    # is the only loop that pays Gemini for it (2026-09-20)
+    # Only while live and only into a live conversation: with nobody writing since the
+    # previous remark a new one is the bot talking to itself, and a message written
+    # offline would otherwise start it commenting an empty chat – at Gemini's price
     if not bot.stream_live or not await watch.new_messages(session_id):
         return
     recent_chat = await get_recent_chat(session_id, Context.CHAT_MESSAGES)
@@ -68,9 +66,9 @@ async def _send_proactive(bot, watch: ChatWatch) -> None:
     if not text:
         return
 
-    # An unattended remark gets the strictest cleanup of all the output paths.
-    # It used to go out almost raw: asterisks and backticks reached chat, em dashes
-    # slipped past the project's own rule, and the cut fell mid-word (2026-09-20)
+    # An unattended remark gets the strictest cleanup of all the output paths: without
+    # it asterisks and backticks reach chat, the dash rule is broken and the cut falls
+    # mid-word
     text = fix_dashes(strip_markdown(text))
     # Nobody is watching this one, and the chat it is built from is written by viewers:
     # a planted link or ping must not reach chat through the bot

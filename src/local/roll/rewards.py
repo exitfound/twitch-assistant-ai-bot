@@ -29,7 +29,7 @@ from src.local.roll.texts import curse_values, reward_title
 logger = logging.getLogger(__name__)
 
 # The scope without which a reward cannot be created and points cannot be refunded.
-# Only the channel owner grants it – a moderator bot cannot have it
+# Only the broadcaster can grant it – a moderator bot cannot have it
 REWARDS_SCOPE = 'channel:manage:redemptions'
 
 # Twitch limits on reward fields
@@ -146,7 +146,7 @@ class RewardService:
     async def on_redemption(self, payload: twitchio.ChannelPointsRedemptionAdd) -> None:
         action = self._actions.get(payload.reward.id)
         if action is None:
-            return                  # another streamer reward, not ours
+            return                  # a reward of another app, not the bot's
         decision = await handle_redemption(
             self._bot, action, payload.id, (payload.user.name or '').lower(), payload.user_input,
         )

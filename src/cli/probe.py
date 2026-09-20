@@ -1,21 +1,18 @@
 """bot.py --probe-context: the same real question under several contexts, side by side.
 
-The owner compares the answers before a
-context change is accepted. Nothing is written except what init_db() migrates
-on start, like every CLI command.
+For comparing answers before a context change is accepted. Nothing is written except
+what init_db() migrates on start, like every CLI command.
 
-Questions are real addressings of the bot from chat_messages. Each is asked with
-the context as it was at that moment – the stream up to the question, the stream
-before it – so the answers are comparable with what the bot could know then.
-The memory (profiles, chronicles) is the one exception: it is built over the
-whole history and may know what happened later.
+Questions are real addressings of the bot from chat_messages, each asked with the
+context as it was at that moment – the stream up to the question, the stream before it
+– so the answers are comparable with what the bot could know then. The memory
+(profiles, chronicles) is the exception: it is built over the whole history.
 
 Variants:
-  now  – what the bot sent before 2026-09-19: the last CONTEXT_CHAT_MESSAGES of the
-         session, search, «language», facts; the old fallback on an empty answer
-  new  – what the bot sends now: src/gemini/answer_context.py, the same code the
-         bot runs – two streams plus memory, and the ladder when Gemini blocks it.
-         The rung that answered is printed
+  now  – the narrow context: the session's last CONTEXT_CHAT_MESSAGES, search,
+         «language», facts, with the plain fallback on an empty answer
+  new  – src/gemini/answer_context.py, the same code the bot runs: two streams plus
+         memory, and the ladder when Gemini blocks it. The rung that answered is printed
 """
 import asyncio
 import re
@@ -62,7 +59,7 @@ async def _questions(ids: list[int], limit: int) -> list[_Question]:
 
 
 async def _now(q: _Question, config) -> tuple[str | None, str]:
-    """The answer as handle_default gave it before 2026-09-19."""
+    """The answer on the narrow context, without the ladder."""
     facts, chat, found, language = await asyncio.gather(
         get_relevant_facts(q.user, q.prompt),
         get_recent_chat(q.session, Context.CHAT_MESSAGES, q.id),
@@ -85,7 +82,7 @@ async def _now(q: _Question, config) -> tuple[str | None, str]:
 
 async def _new(q: _Question, config) -> tuple[str | None, str]:
     return await answer_context.answer(
-        # History before 2026-09-17 has date sessions only, yet those were streams
+        # The older history has date-shaped session ids, though those sessions are streams
         answer_context.Question(q.session, q.user, q.prompt, before_id=q.id, stream=True), config,
     )
 

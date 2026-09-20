@@ -33,15 +33,14 @@ URL_RE = re.compile(r'https?://\S+', re.IGNORECASE)
 # Trailing punctuation: «смотри !ascii http://… .» must not break the address
 URL_TRAILING = '.,;:!?)»"\''
 
-# The word Gemini starts its answer with when the picture may be shown.
-# We match the permission, not the ban: an answer in any other form –
-# «извини, но НЕЛЬЗЯ», «это нельзя показывать» – counts as a refusal, so
-# an answer we fail to understand will not let the picture through
+# The word Gemini starts its answer with when the picture may be shown. The match is
+# on the permission, not the ban: any other form – «извини, но НЕЛЬЗЯ», «это нельзя
+# показывать» – counts as a refusal, so an unparsed answer never lets a picture through
 ALLOW_WORD = 'МОЖНО'
 # The ban word. Only the cache needs it: an answer that starts with neither
 # of the two words is not cached – the next attempt may understand better
 BLOCK_WORD = 'НЕЛЬЗЯ'
-# What we strip between the permission word and the description
+# What is stripped between the permission word and the description
 ALLOW_SEPARATORS = ' :.,–-'
 # Wrapping the model likes to put around the verdict: **МОЖНО**, «МОЖНО»
 VERDICT_WRAPPING = ' *_"\'`«»'
@@ -55,17 +54,15 @@ USE_KIND = 'ascii'
 # A check is not creative work: low temperature so the verdict does not drift
 CHECK_TEMPERATURE = 0.2
 
-# Finished art for recent links. Chat repeats itself by nature: one meme
-# is run several times an evening, and each time it would be a download,
-# a render and a Gemini request all over again. Lives until restart – that is
-# enough, because repeats happen within a stream
+# Finished art for recent links: one meme runs several times an evening, and each
+# repeat would otherwise cost a download, a render and a Gemini request. Lives until
+# restart, which covers the repeats, since they happen within a stream
 CACHE_SIZE = 32
 _cache: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
 
-# Who is currently waiting for their picture. The limit is checked at the start but
-# counted after sending, with the download and Gemini in between – seconds. A sub has
-# neither cooldown nor quota, and five commands in a row would pass the check with the
-# same counter: five pictures in chat over the limit. Hence one at a time
+# Who is currently waiting for their picture. The limit is checked at the start and
+# counted after sending, seconds later, and a sub has neither cooldown nor quota, so
+# without one-at-a-time several commands pass the same check and overshoot the limit
 _busy: set[str] = set()
 
 
@@ -160,8 +157,8 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
     try:
         data, _ = await fetch(url)
     except PictureError as e:
-        # A malformed address cost us nothing, but a download cost traffic, and
-        # its quota slot must not be refunded: otherwise one could download forever
+        # A malformed address costs nothing, but a download costs traffic, so its
+        # quota slot is not refunded – otherwise downloads could run forever
         if e.code == BAD_URL:
             await ctx.refuse()
         await ctx.message.respond(Content.text(e.code, user=ctx.user))
@@ -180,10 +177,9 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
         return art, None
     verdict = await _look(data, ctx)
     if verdict is None:
-        # The check did not happen: a timeout, a network error, or Gemini itself
-        # refused to answer about this picture. The refusal must fail closed –
-        # nothing unchecked is shown. This must not be cached, otherwise one
-        # failure would block the link until restart
+        # The check did not happen (timeout, network, or Gemini refusing to answer
+        # about this picture), so it fails closed – nothing unchecked is shown. Not
+        # cached, or one failure would block the link until restart
         logger.warning('!ascii: картинку от %s проверить не удалось, не показываю', ctx.user)
         await ctx.message.respond(Content.text('ascii_unchecked', user=ctx.user))
         return None
@@ -207,8 +203,8 @@ def _limit_for(chatter) -> int:
 def _find_url(ctx: CommandContext) -> str | None:
     """The link from the command itself. None – the viewer has to give one.
 
-    There is deliberately no fallback to the last link in chat (owner, 2026-09-19):
-    guessing picked the wrong picture, and commands are no longer stored anyway.
+    There is deliberately no fallback to the last link in chat: guessing picks the
+    wrong picture, and commands are not stored anyway.
     """
     found = URL_RE.search(ctx.original_text)
     return found.group(0).rstrip(URL_TRAILING) if found else None
@@ -224,15 +220,11 @@ def _remember(url: str, art: str, verdict: str | None) -> None:
 async def _look(data: bytes, ctx: CommandContext) -> str | None:
     """Show the picture to Gemini. Returns its answer as is, or None.
 
-    This is the only place in the project where Gemini's safety filters are
-    **on**. In the rest of the bot they are off on purpose – the persona does not
-    work otherwise – but here the task is the opposite: we are checking, not talking.
-    Google's classifier becomes a second layer of protection beside our
-    prompt: it will not answer about pornography at all, the request comes back
-    empty, and the picture is not shown.
-
-    The bot's personality is not needed here either: the description goes to memory
-    and the log, not to chat, and a flat neutral text is better for that.
+    The only place in the project where Gemini's safety filters are on: elsewhere they
+    are off so the persona works, while this call checks rather than talks, and the
+    classifier is a second layer beside the prompt – it returns nothing for pornography,
+    and an empty answer means the picture is not shown. The persona is left out too,
+    since the description goes to memory and the log, where flat neutral text is better.
     """
     small = await asyncio.to_thread(preview, data)
     if small is None:

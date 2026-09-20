@@ -1,20 +1,13 @@
 """Pixels to braille characters: a picture that fits into one chat message.
 
-Why braille and not plain ASCII. Twitch chat is drawn in a proportional
-font, so lines made of `.:-=+*#%@` drift apart, and runs of spaces collapse –
-half of the art simply disappears. Braille characters (U+2800–U+28FF)
-render at one width, the blank character U+2800 is not a space and does
-not collapse, and the density is four times higher: one cell carries a
-2x4 dot matrix.
+Twitch chat is drawn in a proportional font, where `.:-=+*#%@` lines drift apart and
+runs of spaces collapse. Braille (U+2800–U+28FF) renders at one width, its blank
+U+2800 is not a space and does not collapse, and one cell carries a 2x4 dot matrix.
 
-Why everything goes out as one message. A braille line contains no spaces,
-so for the browser it is one unbreakable "word". Spaces sit only at the joins
-between lines, and wrapping happens strictly there – so every line lands on its
-own visual line by itself, without newlines, which a Twitch message does not
-have anyway. The sender's nick does not get in the way: the first line of art
-does not fit into the rest of the first visual line and moves to the second.
-
-Hence the size: the budget is in message characters, not in lines.
+Everything goes out as one message: a braille line holds no spaces, so a browser treats
+it as one unbreakable word and wraps only at the joins between lines, which puts each
+line on its own visual line without the newlines a Twitch message cannot carry. Hence
+the size budget is in message characters, not in lines.
 """
 import io
 import logging
@@ -42,10 +35,9 @@ MIN_ROWS = 6
 # Brightness threshold below which a dot counts as filled
 THRESHOLD = 128
 
-# Share of filled dots above which the picture counts as flooded. A single
-# threshold for the whole picture fails when a large area lies just slightly
-# darker than it: a green frog turns entirely into ink and leaves a silhouette
-# with no face. Then we switch to a local threshold
+# Share of filled dots above which the picture counts as flooded: one threshold for
+# the whole picture fails when a large area lies just slightly darker than it, turning
+# a green frog into a faceless silhouette. A local threshold takes over
 INK_MAX = 0.45
 # And the other way round: a nearly empty result also means the threshold missed
 INK_MIN = 0.05
@@ -76,9 +68,9 @@ def render(data: bytes, *, limit: int, max_cols: int) -> str | None:
     """
     try:
         img = Image.open(io.BytesIO(data))
-        # The size is already known from the header, and must be checked BEFORE load():
-        # a hundred-kilobyte png expands into hundreds of megapixels, and
-        # decoding would eat the memory before we get a chance to refuse
+        # The size is known from the header and must be checked BEFORE load(): a
+        # hundred-kilobyte png expands into hundreds of megapixels, and decoding would
+        # eat the memory before there is any chance to refuse
         if img.width * img.height > MAX_PIXELS:
             logger.info('!ascii: картинка слишком большая: %dx%d', img.width, img.height)
             return None
@@ -109,10 +101,8 @@ def render(data: bytes, *, limit: int, max_cols: int) -> str | None:
 def preview(data: bytes, max_side: int = PREVIEW_PX) -> tuple[bytes, str] | None:
     """A downscaled copy for Gemini. Blocking, call via to_thread.
 
-    The model has to say what is drawn and whether it may be shown – a small
-    picture is enough for that. There is no reason to send the original: a phone
-    photo weighs megabytes and costs accordingly, while the decision does not
-    change with resolution.
+    A small picture is enough to say what is drawn and whether it may be shown, while
+    an original phone photo weighs megabytes and costs accordingly.
     """
     try:
         img = Image.open(io.BytesIO(data))
@@ -134,12 +124,10 @@ def preview(data: bytes, max_side: int = PREVIEW_PX) -> tuple[bytes, str] | None
 def _binarize(img: Image.Image) -> Image.Image:
     """Halftones to black and white, already at the final size.
 
-    First we try a plain threshold: on a high-contrast drawing it gives the
-    cleanest lines. If the picture floods from it or, conversely, nearly
-    disappears, we take a local threshold – it compares a dot not with one global
-    number but with its surroundings, and so pulls out outlines and features inside
-    large flat areas. Dithering is no good here at all: at sixty-odd dots across,
-    Floyd-Steinberg gives noise, not halftones.
+    A plain threshold comes first, since it gives the cleanest lines on a high-contrast
+    drawing. When the picture floods or nearly disappears, a local threshold takes over
+    and compares a dot with its surroundings, pulling outlines out of large flat areas.
+    Dithering is useless here: at sixty-odd dots across Floyd-Steinberg gives noise.
     """
     ink = img.point(lambda v: 255 if v > THRESHOLD else 0, mode='1')
     share = _ink_share(ink)
@@ -156,14 +144,10 @@ def _binarize(img: Image.Image) -> Image.Image:
 def _hollow(ink: Image.Image, gray: Image.Image) -> Image.Image:
     """Hollow out the fill, keeping the edges and the deepest shadows.
 
-    A solid black blob loses its shape: on a raccoon photo the contour is visible
-    but the body is a smudge. We subtract from the drawing itself eroded by one dot:
-    only the edges remain. Thin lines stay intact – they consist of edge
-    themselves, so hollowing does nothing to a drawn Pepe.
-
-    So that not just a wire diagram is left, the darkest places (darker than
-    `Picture.SHADOW`) are put back on top – they give the volume: the shadow is
-    filled on one side, the contour runs on the other.
+    A solid black blob loses its shape, so the drawing eroded by one dot is subtracted
+    from itself and only the edges remain; thin lines are edge themselves and survive
+    untouched. The darkest places (darker than `Picture.SHADOW`) are put back on top so
+    the result is not a wire diagram: shadow filled on one side, contour on the other.
     """
     solid = ink.convert('L')
     edges = ImageChops.lighter(
@@ -186,14 +170,11 @@ def _ink_share(bitmap: Image.Image) -> float:
 def _to_grayscale(img: Image.Image) -> tuple[Image.Image, Image.Image | None]:
     """To grayscale, with margins cropped and contrast stretched.
 
-    Also returns the silhouette – the alpha channel, if there is one. A cutout
-    on a transparent background (and that is half the png on the internet) gives
-    no shape by itself: a gold trophy on a white background is nearly white in
-    brightness, the threshold loses it, and a mess is left. The alpha, however,
-    knows the shape exactly, and the contour is later traced along it.
-
-    The transparent background is still laid on white: for the halftones it is
-    background, not drawing, and it must not be set in dots.
+    Also returns the silhouette, the alpha channel where there is one: a cutout on a
+    transparent background gives no shape by brightness alone – a gold trophy is nearly
+    white and the threshold loses it – while the alpha knows the shape exactly and the
+    contour is traced along it. The transparent background is still laid on white,
+    because for the halftones it is background and must not be set in dots.
     """
     shape = None
     if img.mode in ('RGBA', 'LA', 'P') or 'transparency' in img.info:
@@ -226,11 +207,10 @@ def _add_shape(ink: Image.Image, shape: Image.Image) -> Image.Image:
 def _best_box(img_w: int, img_h: int, limit: int, max_cols: int) -> tuple[int, int]:
     """Choose a frame in cells to match the picture's proportions.
 
-    Our budget is in message characters, not lines: a line of N characters
-    costs N+1 with the separating space. So a tall picture is better off with
-    fewer columns and more rows – at the same limit that yields noticeably more
-    dots. max_cols caps it from above: a line wider than that will not fit into
-    the chat column and will be torn by wrapping.
+    The budget is in message characters, not lines: a line of N characters costs N+1
+    with the separating space, so a tall picture gains dots from fewer columns and more
+    rows. max_cols is the ceiling – a wider line will not fit the chat column and is
+    torn by wrapping.
     """
     best = (0.0, 0, 0)
     for cols in range(MIN_COLS, max_cols + 1):

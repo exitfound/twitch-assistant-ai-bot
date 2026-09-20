@@ -1,9 +1,8 @@
 """Sync of the emote list in CONTENT.md with the Twitch API.
 
-Sources are declared in SOURCES: each returns emotes sorted into groups, and a
-group becomes a comment line in the list. Adding a new source (7TV, BTTV, FFZ)
-is one async function and one line in SOURCES; at the time of writing the
-channel has no emotes on those services, so there is no code for them here.
+Sources are declared in SOURCES: each returns emotes sorted into groups, and a group
+becomes a comment line in the list. A new source (7TV, BTTV, FFZ) is one async function
+and one line in SOURCES; only Twitch is implemented, the channel having no emotes there.
 
 The merge is non-destructive: existing lines are left alone, new ones are
 appended to the end of their group. A full rewrite happens only on an explicit flag.

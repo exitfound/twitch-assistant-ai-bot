@@ -62,8 +62,8 @@ def _env_bool(name: str, default: bool) -> bool:
 def _env_percent(name: str, default_percent: float) -> float:
     """Probability as a percentage 0..100 → fraction 0..1.
 
-    Historically CAPS_PROBABILITY was given as a fraction (0.3). Such a value
-    is recognised by the dot in it and accepted as is.
+    A value written as a fraction (0.3) is recognised by the dot in it and
+    accepted as is.
     """
     raw = _env_raw(name)
     if raw is None:
@@ -88,9 +88,8 @@ def _env_percent(name: str, default_percent: float) -> float:
 def _interval_range(prefix: str, default_min: int, default_max: int) -> tuple[int, int]:
     """Interval range of a background loop: PREFIX_MIN_MINUTES and PREFIX_MAX_MINUTES.
 
-    The old name PREFIX_MINUTES (one fixed number) is still accepted and
-    becomes both bounds – the loop behaves as before, and the log gets
-    a hint on how to enable the spread.
+    PREFIX_MINUTES (one fixed number) is also accepted and becomes both bounds,
+    which makes the interval fixed; the log then hints at how to enable the spread.
     """
     legacy = _env_int(f'{prefix}_MINUTES', 0, 0, 1440)
     if legacy:
@@ -130,8 +129,8 @@ class Twitch:
     CHANNEL: str | None = os.getenv('TWITCH_CHANNEL')
     BOT_TOKEN: str | None = os.getenv('TWITCH_BOT_TOKEN')
     BOT_REFRESH: str | None = os.getenv('TWITCH_BOT_REFRESH')
-    # The channel owner's token, not the bot's: channel-points rewards can be managed
-    # only on the owner's behalf, Twitch does not grant this to moderators
+    # The broadcaster's token, not the bot's: Twitch lets channel-points rewards be
+    # managed only on the broadcaster's behalf, not a moderator's
     BROADCASTER_TOKEN: str | None = os.getenv('TWITCH_BROADCASTER_TOKEN')
     BROADCASTER_REFRESH: str | None = os.getenv('TWITCH_BROADCASTER_REFRESH')
 
@@ -148,7 +147,7 @@ class Gemini:
     RETRIES: int = _env_int('GEMINI_RETRIES', 2, 0, 5)
 
 class Chat:
-    # !summary's message cap; 2 like !ask and !versus (owner, 2026-09-19)
+    # !summary's message cap, the same 2 as !ask and !versus
     MAX_CHUNKS: int = _env_int('CHAT_MAX_CHUNKS', 2, 1, 5)
 
 
@@ -170,12 +169,10 @@ class Quota:
     VIP_PER_HOUR: int = _env_int('QUOTA_VIP_PER_HOUR', 60, 0, 10_000)
     FOLLOWER_PER_HOUR: int = _env_int('QUOTA_FOLLOWER_PER_HOUR', 30, 0, 10_000)
     WINDOW_MINUTES: int = _env_int('QUOTA_WINDOW_MINUTES', 60, 1, 1440)
-    # The bill's emergency brake: requests of everyone together per window. The
-    # per-viewer quota does not bound spend, because every badge above follower is
-    # unlimited. The broadcaster is not counted against it – that spend is deliberate.
-    # 0 – no limit. The default is far above real use: the busiest hour so far is
-    # about twenty requests (2026-09-20)
-    CHANNEL_PER_HOUR: int = _env_int('QUOTA_CHANNEL_PER_HOUR', 300, 0, 100_000)
+    # The bill's emergency brake: everyone's requests per window, since the per-viewer
+    # quota leaves every badge above follower unlimited. The broadcaster is not counted.
+    # 0 – no limit; 200 against a busiest hour of 14 served requests is a brake, not a cap
+    CHANNEL_PER_HOUR: int = _env_int('QUOTA_CHANNEL_PER_HOUR', 200, 0, 100_000)
 
 
 class Follow:
@@ -189,17 +186,16 @@ class Follow:
 
 class Summary:
     # !summary per stream (offline – per 24 hours), the current and the previous
-    # stream counted together (owner, 2026-09-20). The broadcaster is not limited.
-    # 0 – no limit
+    # stream counted together. The broadcaster is not limited. 0 – no limit
     PER_STREAM_FOLLOWER: int = _env_int('SUMMARY_PER_STREAM_FOLLOWER', 1, 0, 1000)
     PER_STREAM_VIP: int = _env_int('SUMMARY_PER_STREAM_VIP', 3, 0, 1000)
     PER_STREAM_SUB: int = _env_int('SUMMARY_PER_STREAM_SUB', 10, 0, 1000)
 
 
 class Who:
-    # !who and !versus per stream (offline – per 24 hours), each command counted
-    # on its own; the same numbers as !summary (owner, 2026-09-20). The broadcaster
-    # is not limited. 0 – no limit
+    # !who and !versus per stream (offline – per 24 hours), each command counted on
+    # its own, with the same numbers as !summary. The broadcaster is not limited.
+    # 0 – no limit
     PER_STREAM_FOLLOWER: int = _env_int('WHO_PER_STREAM_FOLLOWER', 1, 0, 1000)
     PER_STREAM_VIP: int = _env_int('WHO_PER_STREAM_VIP', 3, 0, 1000)
     PER_STREAM_SUB: int = _env_int('WHO_PER_STREAM_SUB', 10, 0, 1000)
@@ -292,8 +288,8 @@ class Rewards:
 class Context:
     CHAT_MESSAGES: int = _env_int('CONTEXT_CHAT_MESSAGES', 50, 1, 1000)
     # A free-text answer during a stream gets the whole current stream and the whole
-    # previous one (owner, 2026-09-19); this only caps a runaway stream. The longest
-    # stream so far had 861 messages
+    # previous one; this only caps a runaway stream. The longest stream on record
+    # holds 861 messages
     STREAM_MAX_MESSAGES: int = _env_int('CONTEXT_STREAM_MAX_MESSAGES', 2000, 100, 20_000)
     SEARCH_RESULTS: int = _env_int('CONTEXT_SEARCH_RESULTS', 10, 0, 100)
     SEARCH_KNOWLEDGE_SHARE: float = _env_percent('CONTEXT_SEARCH_KNOWLEDGE_SHARE', 50)
@@ -316,11 +312,9 @@ class Memory:
     # conversation and a profile of every active chatter, both written by Gemini.
     # See src/gemini/memory/
     ENABLED: bool = _env_bool('MEMORY_ENABLED', True)
-    # A conversation is chat between two silences this long. Chat on this channel
-    # happens only on streams, so it is a stream in practice, told by the messages
-    # alone: stream events, restarts and missed stream ends cannot shift it. Measured
-    # 2026-09-19 over the whole history: 71 silences over 6 hours, just one between
-    # 3 and 6 – the chat splits cleanly at 3 hours
+    # A conversation is chat between two silences this long, told by the messages alone,
+    # so stream events, restarts and missed stream ends cannot shift it. Over the whole
+    # history 71 silences exceed 6 hours and one falls between 3 and 6 – a clean split
     SILENCE_MINUTES: int = _env_int('MEMORY_SILENCE_MINUTES', 180, 30, 24 * 60)
     # A conversation with fewer chat messages gets no chronicle and updates no profiles
     CONVERSATION_MIN_MESSAGES: int = _env_int('MEMORY_CONVERSATION_MIN_MESSAGES', 50, 1, 100_000)

@@ -131,7 +131,7 @@ def _minutes_left(floor_at: float | None) -> int | None:
 
     None means either that the ceiling is still dropping (no floor_at yet) or that the
     hold has already run out. texts.curse_note() picks a different line by exactly that,
-    so «expired» must not come back as «one minute left» (2026-09-20).
+    so «expired» must not come back as «one minute left».
     """
     if floor_at is None:
         return None
@@ -266,11 +266,10 @@ async def free_throw(
 ) -> Outcome:
     """A free !roll: no more than limit per session.
 
-    limit depends on the viewer's status (see free_limit_for() in the command) and
-    is stored in the player's row: a reward redemption arrives without badges.
-    unlimited – no limit applies (broadcaster). The throw is still counted, so the
-    paid extra roll works for them like for everyone. free_left of such an outcome
-    is None: there is no remainder to mention.
+    limit depends on the viewer's status (see free_limit_for() in the command) and is
+    stored in the player's row, because a reward redemption arrives without badges.
+    unlimited (broadcaster) still counts the throw, so the paid extra roll behaves the
+    same for them, and free_left is None since there is no remainder to mention.
     """
     async with _lock:
         row = await get_roll(session_id, user)

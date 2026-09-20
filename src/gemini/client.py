@@ -46,10 +46,9 @@ def make_gen_config(*, system: str | None = None,
                     temperature: float | None = None) -> types.GenerateContentConfig:
     """The request config: persona and chat temperature by default.
 
-    A command with its own instruction or temperature passes them in instead of
-    building a config of its own. !ask and !summary used to build theirs, and both
-    were missing thinking_config – so GEMINI_THINKING_BUDGET did not reach them and
-    they ran with the model's dynamic thinking, billed separately (2026-09-20).
+    A command with its own instruction or temperature passes them in rather than
+    building a config of its own: a hand-built config easily omits thinking_config,
+    and GEMINI_THINKING_BUDGET is then replaced by dynamic thinking, billed separately.
     """
     config = types.GenerateContentConfig(
         system_instruction=Content.prompt('system') if system is None else system,
@@ -142,8 +141,8 @@ async def generate_checked(contents: str | list,
             except (ValueError, AttributeError):
                 text = None
             if text:
-                # Even an answer the output filter cut short is returned as before:
-                # chat answers have always sent whatever came back
+                # An answer the output filter cut short is still returned: a chat
+                # answer sends whatever came back
                 return text, None
             candidate = response.candidates[0] if response.candidates else None
             if candidate and candidate.finish_reason in _OUTPUT_BLOCKS:

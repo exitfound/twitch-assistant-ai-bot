@@ -62,7 +62,7 @@ async def list_lore_sources():
     await init_db()
     try:
         for source, count in await lore_sources():
-            print(f'  {count:>7}  {source if source is not None else "(без источника – импорт до 2026-09-19)"}')
+            print(f'  {count:>7}  {source if source is not None else "(источник не записан)"}')
     finally:
         await close_db()
 
@@ -128,7 +128,7 @@ async def clear_lore(source: str | None, dry_run: bool):
     await init_db()
     try:
         if dry_run:
-            # --dry-run used to delete anyway: now it only counts
+            # --dry-run only counts, it deletes nothing
             count = await count_knowledge(source)
             print(f'Dry run: было бы удалено {count}' + (f' (источник «{source}»)' if source else ' (всё)'))
             return
@@ -231,7 +231,7 @@ def main():
     parser.add_argument(
         '--probe-context', nargs='*', type=int, metavar='ID',
         help='Замер контекста: реальные обращения к боту (id из chat_messages, по умолчанию '
-             '--limit последних) в вариантах now (как было до 2026-09-19) и new (как отвечает бот). Стоит денег',
+             '--limit последних) в вариантах now (узкое окно чата) и new (то, что бот отправляет). Стоит денег',
     )
     parser.add_argument(
         '--samples', type=int, default=1, metavar='N',

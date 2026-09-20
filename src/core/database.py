@@ -75,8 +75,7 @@ async def init_db() -> None:
         )
     ''')
     # source – where a row came from (a file, a Telegram chat, 'facts'), so one
-    # source can be removed whole with --clear-lore --source. Rows imported before
-    # the column (2026-09-19) have NULL and stay as they are
+    # source can be removed whole with --clear-lore --source. NULL where it is unknown
     await db.execute('''
         CREATE TABLE IF NOT EXISTS knowledge (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -175,11 +174,9 @@ async def init_db() -> None:
             ended_at   REAL
         )
     ''')
-    # The bot's memory of chatters, written by Gemini after a conversation – chat
-    # between two long silences (src/gemini/memory/). conversation is its key, the
-    # Moscow time of its first message. A chronicle row covers the messages
-    # first_id..last_id: status 'ok', 'failed' when Gemini returned nothing (not
-    # retried on every start) or 'skipped' when there were too few messages
+    # The bot's memory of chatters (src/gemini/memory/), keyed by conversation – chat
+    # between two long silences, named by the Moscow time of its first message. A row
+    # covers messages first_id..last_id; 'failed' and 'skipped' are not retried
     await _migrate_memory(db)
     await db.execute('''
         CREATE TABLE IF NOT EXISTS chronicles (
@@ -203,11 +200,9 @@ async def init_db() -> None:
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_chatter_events_user ON chatter_events(username, conversation)'
     )
-    # The memory's own state: 'built' is set once bot.py --build-memory finished the
-    # whole history. Until then the bot leaves the memory alone – a half-built one
-    # (build killed or still running) would otherwise be replayed conversation by
-    # conversation at many times the cost. A DB whose memory predates this table
-    # was built completely, so it is marked right away
+    # The memory's own state: 'built' is set once bot.py --build-memory has walked the
+    # whole history. Until then the bot leaves the memory alone, because a half-built
+    # one would be replayed conversation by conversation at many times the cost
     async with db.execute("SELECT 1 FROM sqlite_master WHERE name = 'memory_state'") as cursor:
         state_existed = await cursor.fetchone() is not None
     await db.execute('''
@@ -249,8 +244,8 @@ async def init_db() -> None:
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_bot_interactions_username ON bot_interactions(username)'
     )
-    # Live DBs created before UNIQUE(username, fact) existed rely on this
-    # index – always create it, so the dedup guarantee does not depend on the DB's age.
+    # Always created: the dedup guarantee must not depend on whether the facts table
+    # itself was built with UNIQUE(username, fact).
     await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_username_fact ON facts(username, fact)'
     )
@@ -261,8 +256,8 @@ async def init_db() -> None:
 
 
 _ROLLS_COLUMNS = {
-    # Free throw counter. Old rows get 0: past sessions are closed,
-    # and in the current one everybody starts with the full allowance
+    # Free throw counter. Defaults to 0: past sessions are closed, and in the
+    # current one everybody starts with the full allowance
     'free_throws': 'INTEGER NOT NULL DEFAULT 0',
     # Curse: ceiling of the next throw (NULL – not cursed) and the time.time()
     # moment the ceiling reached the floor – the lift is counted from it
@@ -280,11 +275,10 @@ _ROLLS_COLUMNS = {
 async def _migrate_chat_messages(db: aiosqlite.Connection) -> None:
     """Column addressed: whether the message was addressed to the bot.
 
-    Addressing is a сосур*/secur* word, a mention of the bot's @nick or a reply to
-    its message; the flag is set by the dispatcher, which determines all that anyway.
-    History is marked once by text: the word is visible in a message, but replies and
-    mentions of past sessions cannot be recovered, so the old numbers are
-    a lower bound.
+    Addressing is a сосур*/secur* word, a mention of the bot's @nick or a reply to its
+    message; the dispatcher sets the flag. Existing rows are backfilled from their text
+    alone, because past replies and mentions cannot be recovered, so their counts are a
+    lower bound.
     """
     async with db.execute('PRAGMA table_info(chat_messages)') as cursor:
         columns = {row[1] for row in await cursor.fetchall()}
@@ -308,13 +302,12 @@ async def _columns(db: aiosqlite.Connection, table: str) -> set[str]:
 
 
 async def _migrate_memory(db: aiosqlite.Connection) -> None:
-    """The first memory (2026-09-19) went by bot sessions and was named so.
+    """Rename the session-keyed memory tables to the conversation-keyed ones.
 
-    It now goes by conversations – chat between silences – and the names say
-    that: stream_chronicles → chronicles, session_id → conversation,
-    updated_session → last_conversation. Chronicles written per session get the
-    range of their session's messages, so the memory does not take them again.
-    Runs before the CREATE TABLEs, which would otherwise make empty new tables.
+    stream_chronicles → chronicles, session_id → conversation, updated_session →
+    last_conversation; a session-keyed chronicle gets the message range of its
+    session so the memory does not take it again. Runs before the CREATE TABLEs,
+    which would otherwise make the new tables empty.
     """
     # Every step checks its own result, so a process killed halfway (ALTER TABLE
     # commits on its own) resumes on the next start instead of failing
@@ -356,8 +349,8 @@ async def _migrate_rolls(db: aiosqlite.Connection) -> None:
             logger.warning('В rolls добавлена колонка %s', name)
 
 
-# Leftovers of the previous version: the bot_interactions index is no longer read,
-# but its triggers kept writing to it on every interaction.
+# Nothing reads the bot_interactions FTS index, while its triggers write to it on
+# every interaction, so both the triggers and the table are dropped.
 _LEGACY_TRIGGERS = ('bot_interactions_fts_ai', 'bot_interactions_fts_ad', 'bot_interactions_fts_au')
 _LEGACY_TABLES = ('interactions_fts',)
 
@@ -497,7 +490,7 @@ async def get_recent_chat(session_id: str, limit: int = 20,
     db = await get_db()
     where, params = ('', ()) if before_id is None else (' AND id < ?', (before_id,))
     async with db.execute(
-        # Commands are no longer stored; the filter is for the rows written before that
+        # Commands are not stored any more; the filter covers rows that still hold them
         "SELECT username, message FROM chat_messages WHERE session_id = ? AND message NOT LIKE '!%'"
         f'{where} ORDER BY id DESC LIMIT ?',
         (session_id, *params, limit),
@@ -509,8 +502,8 @@ async def get_recent_chat(session_id: str, limit: int = 20,
 async def get_previous_chat_session(session_id: str, min_messages: int) -> str | None:
     """The last session before this one with at least min_messages – the previous stream.
 
-    Taken from the chat rather than from streams: that table only exists since
-    2026-09-17, and a stream nobody wrote in has nothing to remember anyway.
+    Taken from the chat rather than from streams, which does not cover the older
+    sessions; a stream nobody wrote in has nothing to remember anyway.
     """
     db = await get_db()
     async with db.execute(
@@ -554,7 +547,7 @@ async def get_user_messages(username: str, limit: int = 30) -> list[str]:
     db = await get_db()
     async with db.execute(
         # Commands (!roll, !who …) say nothing about a person but eat up the window.
-        # New ones are no longer written to the DB, the filter is for old rows
+        # They are not written any more; the filter covers rows that still hold them
         "SELECT message FROM chat_messages WHERE username = ? AND message NOT LIKE '!%'"
         ' ORDER BY id DESC LIMIT ?',
         (username, limit),
@@ -604,10 +597,9 @@ async def get_last_tagged_interaction(
 async def get_user_interactions(username: str, limit: int = 10) -> list[tuple[str, str]]:
     """The viewer's own exchanges with the bot – free text only, no commands.
 
-    The pattern is '[%]%': a tag is a prefix, not the whole line. The old '[%]' required
-    the row to *end* in ']', so only bare tags like [follow] were filtered out, while
-    «[ask] вопрос» and «[who] ник» passed – and !who fed the model its own past answers,
-    the very thing the memory refuses to do (2026-09-20).
+    The pattern is '[%]%' because a tag is a prefix, not the whole line. A pattern that
+    matched only rows ending in ']' would let «[ask] вопрос» and «[who] ник» through, and
+    !who would feed the model its own past answers.
     """
     db = await get_db()
     async with db.execute(
@@ -632,12 +624,9 @@ async def get_tagged_answers(tags: list[str], limit: int) -> list[str]:
         return [row[0] for row in await cursor.fetchall()]
 
 
-# Addressings of the bot are counted from the chat messages themselves (the addressed
-# column), not from the answers in bot_interactions: a person counts a reply, a call
-# by word and a mention as addressing – even if the bot stayed silent (empty answer,
-# stop-list, cooldown). A call that carried a command («сосурити !roll») is not
-# counted: command messages are not stored at all since 2026-09-18.
-# Besides, bot_interactions also holds what the bot said on its own.
+# Counted from the chat messages themselves (the addressed column), not from
+# bot_interactions, which also holds what the bot said on its own: a reply, a call by
+# word and a mention count even when the bot stayed silent. Commands are not stored.
 
 
 async def get_session_stats(session_id: str) -> tuple[int, int]:
@@ -654,9 +643,8 @@ async def get_session_stats(session_id: str) -> tuple[int, int]:
 async def get_total_stats() -> tuple[int, int, int, int]:
     """Messages, addressings, streams and off-stream days, all time.
 
-    Sessions come in two kinds, and adding them into one number is unfair: before the
-    switch to stream sessions a session was a calendar day (`2026-09-16`), now it is a
-    stream (`2026-09-16 19:00`). They are told apart by the id length.
+    Session ids come in two kinds and must not be added into one number: a calendar day
+    (`YYYY-MM-DD`) and a stream (`YYYY-MM-DD HH:MM`). They are told apart by id length.
     """
     db = await get_db()
     async with db.execute('SELECT COUNT(*) FROM chat_messages') as cursor:
@@ -765,12 +753,10 @@ async def _knowledge_id_list(db: aiosqlite.Connection) -> list[int]:
 async def get_random_knowledge(limit: int = 10) -> list[str]:
     """Random sample from the lore, every row equally likely.
 
-    ORDER BY RANDOM() scanned the whole table (at 96k rows – about 19 ms per bot
-    answer). A random id with the nearest row after it was fast but not uniform:
-    the row after a gap in the ids took the whole gap's chances, and after
-    --clear-lore --source removed a big source from the middle one line showed up
-    in half the answers (found in review 2026-09-19). So the ids themselves are
-    kept (96k ints, a few MB) and sampled directly.
+    The id list is held in memory (96k ints, a few MB) and sampled directly. ORDER BY
+    RANDOM() scans the whole table, 19 ms per answer; picking a random id and taking the
+    nearest row after it is fast but not uniform – the row after a gap in the ids takes
+    the whole gap's chances, and --clear-lore --source leaves exactly such gaps.
     """
     if limit <= 0:
         return []
@@ -857,17 +843,18 @@ async def count_bot_uses(username: str, kind: str, window_minutes: int) -> int:
         return (await cursor.fetchone())[0]
 
 
-async def count_channel_bot_uses(window_minutes: int) -> int:
-    """Requests of every kind by everyone in the last window_minutes.
+async def count_channel_bot_uses(kind: str, window_minutes: int) -> int:
+    """Served requests by everyone in the last window_minutes.
 
-    The per-viewer quota holds one person's volume; this one holds the bill. Every
-    badge above follower is unlimited per person, so a handful of subscribers could
-    spend without any ceiling at all (2026-09-20).
+    The per-viewer quota holds one person's volume; this one holds the bill, since every
+    badge above follower is unlimited per person. Counted by the dispatcher's kind alone:
+    !who, !versus, !summary and !ascii write a second row each for their own per-stream
+    limit, and counting every row would make those commands cost two.
     """
     db = await get_db()
     async with db.execute(
-        "SELECT COUNT(*) FROM bot_uses WHERE created_at > datetime('now', ?)",
-        (f'-{window_minutes} minutes',),
+        "SELECT COUNT(*) FROM bot_uses WHERE kind = ? AND created_at > datetime('now', ?)",
+        (kind, f'-{window_minutes} minutes'),
     ) as cursor:
         return (await cursor.fetchone())[0]
 

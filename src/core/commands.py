@@ -12,13 +12,9 @@ Handler = Callable[['CommandContext'], Awaitable[None]]
 # Separators between the trigger and the args: "!who ник", "!ask: вопрос"
 ARG_SEPARATORS = ' :,'
 
-# Command classes. Local ones are served from SQLite and CONTENT.md text –
-# they cost nothing and answer instantly. Every Gemini command call goes to the API:
-# that is money, waiting and a slot in the semaphore.
-#
-# The class is also the cooldown scope: each has its own per-user counter,
-# so waiting out !ask does not block !help-bot. The viewer status ladder, though,
-# is one for both classes, see _cooldown_seconds() in src/core/component.py.
+# Command classes. Local ones answer from SQLite and CONTENT.md at no cost, a Gemini
+# call costs money, waiting and a semaphore slot. The class is also the cooldown scope,
+# while the status ladder is shared – see _cooldown_seconds() in src/core/component.py.
 KIND_LOCAL = 'local'
 KIND_GEMINI = 'gemini'
 

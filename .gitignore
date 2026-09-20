@@ -1,20 +1,16 @@
 .env
 .env.bak-*
+.tio.tokens.json
+.claude/settings.local.json
+
 venv/
 __pycache__/
 *.pyc
-.tio.tokens.json
+*.log
+
+data/
+backups/
 chat_history.db
 chat_history.db-wal
 chat_history.db-shm
-ChatExport*.zip
-import_tg_*.py
-.claude/settings.local.json
-.claude/memory/
 chat_history.backup-*.db
-*.log
-
-# Docker: изменяемое состояние и логи
-data/
-logs/
-backups/

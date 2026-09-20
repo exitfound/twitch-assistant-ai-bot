@@ -1,22 +1,18 @@
 """Bot texts: a single CONTENT.md, hot-reloaded by mtime.
 
-Separation of concerns: src/core/config.py reads the environment (secrets, numbers,
-flags), this module holds everything the bot says. Prompts, context section
-headings, chat replies, the emote and follow lists live in one file and
-are edited without a restart.
-
-The format is Markdown, so Russian prose sits there without quoting or escaping:
+Everything the bot says – prompts, context headings, chat replies, the emote and
+follow lists – lives in this one file and is edited without a restart; the environment
+belongs to src/core/config.py. The format is Markdown, so Russian prose needs no
+quoting or escaping:
 
     ## section
     ### key
     value up to the next heading
 
-Everything before the first `###` inside a section is a note and is ignored, as are
-`<!-- ... -->` comments, multi-line ones included.
-
-Such a file is almost impossible to break syntactically, so instead of parsing
-the format the meaning is checked: duplicate keys and unclosed sections are logged,
-and missing or extra keys are caught at startup by validate_content().
+A section's text before its first `###` is a note and is ignored, as are
+`<!-- ... -->` comments, multi-line ones included. Markdown is hard to break
+syntactically, so validation checks meaning instead: duplicate keys and unclosed
+sections are logged, missing or extra keys are caught by validate_content().
 """
 import logging
 import re
@@ -212,10 +208,9 @@ class Content:
 def validate_content() -> None:
     """Check the file structure. Called at bot startup.
 
-    A missing key is a startup error. An extra key or section is almost
-    always a typo in a heading, so it gets a warning: such a heading on its own
-    would silently break nothing, but the intended text would stay
-    unreachable.
+    A missing key is a startup error. An extra key or section only warns: it is
+    almost always a typo in a heading, which breaks nothing by itself but leaves the
+    intended text unreachable.
     """
     if not CONTENT_PATH.exists():
         raise FileNotFoundError(f'Не найден {CONTENT_PATH}')

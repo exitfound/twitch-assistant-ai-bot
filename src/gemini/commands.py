@@ -19,8 +19,8 @@ from src.gemini.responder import respond_and_save, send_chunked
 
 logger = logging.getLogger(__name__)
 
-# !versus: two descriptions plus the verdict at the end do not fit one message,
-# and trimming a single one cut exactly the verdict (owner, 2026-09-19)
+# !versus: two descriptions plus the verdict at the end do not fit one message, and
+# trimming a single message cuts exactly the verdict
 VERSUS_MAX_CHUNKS = 2
 
 ASK_TAG = '[ask]'
@@ -93,9 +93,9 @@ async def handle_summary(ctx: CommandContext) -> None:
     await _per_stream(ctx, summary.KIND, run, error='summary_error')
 
 
-# Per-stream limits of !who, !versus and !summary (owner, 2026-09-19):
-# kind → (follower, VIP, subscriber or moderator), 0 – unlimited. The broadcaster
-# is never limited; a subscribing VIP counts as a subscriber
+# Per-stream limits of !who, !versus and !summary: kind → (follower, VIP, subscriber
+# or moderator), 0 – unlimited. The broadcaster is never limited; a subscribing VIP
+# counts as a subscriber
 def _limit_for(kind: str, chatter) -> int:
     if chatter.broadcaster:
         return 0

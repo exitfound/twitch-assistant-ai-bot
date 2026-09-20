@@ -117,9 +117,8 @@ class Bot(commands.Bot):
     async def process_commands(self, payload) -> None:
         """twitchio's built-in command parsing is switched off.
 
-        Commands are parsed by our own registry in src/core/component.py; twitchio
-        has none. Without this, on every «!…» in chat and every reward redemption
-        twitchio would look up the command itself and log CommandNotFound with a
+        Commands are parsed by the registry in src/core/component.py. Without this
+        override every «!…» and every reward redemption logs CommandNotFound with a
         traceback. Component listeners receive events separately and are unaffected.
         """
 
@@ -142,13 +141,10 @@ class Bot(commands.Bot):
     async def _add_broadcaster_token(self) -> None:
         """The channel's token for rewards. Checks it belongs to the channel and has the scope.
 
-        First takes what twitchio has already loaded from .tio.tokens.json: after
-        an OAuth login via the link the token lands there on a graceful shutdown,
-        and it is fresher than the .env values, which twitchio does not touch
-        after a refresh. If it is empty there, falls back to .env.
-
-        Without the check a foreign or under-scoped token would only surface on
-        the first redemption – as an obscure Twitch error in the middle of a stream.
+        Prefers what twitchio loaded from .tio.tokens.json over the .env values, which
+        twitchio does not update after a refresh; falls back to .env when it is empty.
+        Without the check a foreign or under-scoped token surfaces only on the first
+        redemption, as an obscure Twitch error in the middle of a stream.
         """
         if not Rewards.ENABLED:
             return
@@ -187,9 +183,9 @@ class Bot(commands.Bot):
     async def _sync_stream(self) -> None:
         """Whether the stream is live right now.
 
-        Events about what happened while the bot was down will never arrive:
-        the stream may have started or ended without it. On a request error we
-        assume there is no stream, and the watch_stream() check fixes it in a few minutes.
+        Events about what happened while the bot was down will never arrive: the stream
+        may have started or ended without it. A request error counts as no stream, and
+        the watch_stream() check corrects that within a few minutes.
         """
         try:
             live = await self.fetch_live_stream()
@@ -252,11 +248,10 @@ class Bot(commands.Bot):
     def install_signal_handlers(self) -> None:
         """Take SIGTERM and SIGINT back from aiohttp.
 
-        twitchio starts its OAuth adapter as web.AppRunner(..., handle_signals=True),
-        and aiohttp installs its own handlers, replacing whatever was there – so the
-        ones run_bot() set before start() were dead from that moment on. The bot still
-        stopped, but through asyncio.run()'s emergency cleanup instead of our own
-        orderly shutdown, and nothing said a signal had arrived (2026-09-20).
+        twitchio's OAuth adapter runs as web.AppRunner(..., handle_signals=True) and
+        aiohttp replaces any handlers installed before start(). Without reinstalling
+        them a signal skips the orderly shutdown for asyncio.run()'s emergency cleanup,
+        and nothing logs that it arrived.
         """
         if self.on_shutdown_signal is None:
             return
@@ -351,14 +346,11 @@ class Bot(commands.Bot):
 
     async def _store_tokens(self, whose: str, env_name: str,
                             payload: twitchio.authentication.UserTokenPayload) -> None:
-        """Save the tokens to disk and say so, without putting them in the output.
+        """Save the tokens to disk and log that, without putting them in the output.
 
-        They used to be printed in full for copying into .env. In a terminal that
-        only reached the scrollback; in a container the same lines land in
-        `docker logs`, which keeps them on disk across restarts. So they are written
-        where twitchio reads them from anyway, the file is made owner-only, and the
-        log gets the last four characters – enough to tell one token from another
-        (2026-09-20).
+        A token printed in full lands in `docker logs`, which keeps it on disk across
+        restarts. It is written where twitchio reads it from anyway, the file is set to
+        mode 0600, and the log gets the last four characters to tell tokens apart.
         """
         await self.save_tokens()
         path = Path(TOKENS_FILE)
@@ -382,10 +374,9 @@ class Bot(commands.Bot):
     async def send_chat_message(self, text: str) -> bool:
         """Send without a reply (HTTP API). True if it went through.
 
-        Everything the bot says on its own goes through here – proactive remarks, the
-        second and later chunks of an answer, emotes, announcements – with no nick in
-        front of it. So this is where a line that would read as a chat command is
-        defused: the one place that covers all of them (2026-09-20).
+        Every self-initiated line goes through here – proactive remarks, the second and
+        later chunks of an answer, emotes, announcements – so this is the single place
+        where a line that would read as a chat command is defused.
         """
         if not self._channel_id:
             logger.warning('Отправка невозможна: ID канала не получен')
@@ -406,15 +397,9 @@ class Bot(commands.Bot):
             return False
 
     # --- the chat connection ------------------------------------------------
-    # twitchio 3.2.1 gives up on an EventSub websocket for good in several cases and
-    # says so only with a websocket_closed event: a reconnect whose welcome from
-    # Twitch takes over 11 seconds (the owner's uplink is saturated during streams),
-    # a revoked subscription, a close code it does not retry. The bot then goes on
-    # running – proactive remarks and emotes go out over HTTP – but hears nothing:
-    # on 2026-09-19 chat from 23:55 to the restart at 23:58 never reached it. A dead
-    # socket keeps _closed set (and may linger in the client's registry under a stale
-    # session id), while one that is still retrying does not, so only when no socket
-    # of the bot is left open are the subscriptions made again on a fresh one.
+    # twitchio 3.2.1 can abandon an EventSub websocket for good (a welcome over 11 s, a
+    # revoked subscription, a close code it does not retry), leaving the bot deaf. One
+    # still retrying keeps _closed clear, so a revive is due only when none is open.
 
     def _chat_socket_alive(self) -> bool:
         sockets = self._websockets.get(str(self.bot_id), {})
@@ -442,10 +427,8 @@ class Bot(commands.Bot):
     async def stop_background_tasks(self) -> None:
         """Cancel the loops and wait for them, before the database is closed.
 
-        Nothing used to cancel them. A loop waking up after close_db() calls get_db(),
-        which opens a fresh connection and with it a new non-daemon aiosqlite thread –
-        and the process never exits. That is what once looked like a Gemini call hanging
-        for minutes (2026-09-20).
+        A loop waking up after close_db() calls get_db(), which opens a fresh connection
+        and with it a new non-daemon aiosqlite thread, and the process never exits.
         """
         tasks = self._background_tasks()
         if not tasks:
@@ -461,10 +444,9 @@ class Bot(commands.Bot):
     async def _beat(self) -> None:
         """Touch a file so the container healthcheck can see the bot is still running.
 
-        Started only when BOT_HEARTBEAT is set, so nothing changes outside a container.
-        It beats from _start_background_tasks(), that is once the channel id is known and
-        the loops are up: a process that came up without them must read as unhealthy,
-        because «alive but deaf» is exactly what restart policies do not catch (2026-09-20).
+        Started only when BOT_HEARTBEAT is set, so nothing changes outside a container,
+        and only from _start_background_tasks(): a process that came up without the
+        channel id and the loops is alive but deaf, and must read as unhealthy.
         """
         path = Path(HEARTBEAT_PATH)
         logger.info('Heartbeat включён: %s (раз в %d с)', path, HEARTBEAT_SECONDS)
@@ -555,8 +537,8 @@ async def run_bot() -> None:
     loop = asyncio.get_running_loop()
 
     def _on_signal(name: str) -> None:
-        # Logged in the handler itself: without it there is no way to tell a signal
-        # that arrived from a process that stopped for its own reasons (2026-09-20)
+        # Logged here: otherwise a stop on a signal is indistinguishable from a
+        # process that stopped for its own reasons
         logger.info('Получен %s, завершаюсь...', name)
         shutdown_event.set()
 

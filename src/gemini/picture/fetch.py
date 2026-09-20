@@ -1,12 +1,11 @@
 """Downloading a picture from a link in chat.
 
-The link comes from a random viewer, so there are more checks than code. The main
-thing we guard against: a link to an internal address would turn the bot into a way
-of knocking on the owner's local network (SSRF). Hence the explicit check of every
-IP the host resolves to, and manual redirect following – automatic following would
-lead us to a private address after the check. Plus a check of the address of the
-established connection: the name is resolved a second time inside httpx, and a
-zero-TTL record would otherwise swap the address between the check and the request.
+The link comes from a random viewer, so there are more checks than code. A link to an
+internal address would turn the bot into a way of knocking on the host's local network
+(SSRF), so every IP the name resolves to is checked, redirects are followed by hand –
+automatic following would reach a private address after the check – and the address of
+the established connection is checked as well, because httpx resolves the name a second
+time and a zero-TTL record could swap it in between.
 
 Also: http/https only, image/* only, a timeout and a size cap.
 """
@@ -22,10 +21,10 @@ from src.core.config import Picture
 
 logger = logging.getLogger(__name__)
 
-# Introduce ourselves: without a User-Agent some hosts (Wikimedia, Reddit) return 403
+# Without a User-Agent some hosts (Wikimedia, Reddit) return 403
 USER_AGENT = 'sosuryan-twitch-bot/1.0 (+https://twitch.tv)'
 
-# How many redirects we follow, checking each one
+# How many redirects are followed, each one checked
 MAX_REDIRECTS = 3
 
 # Error codes – these are also key names in CONTENT.md
@@ -77,8 +76,8 @@ async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] |
             if not mime.startswith('image/'):
                 logger.info('!ascii: по ссылке не картинка, а %r', mime)
                 raise PictureError(FAILED)
-            # The header is trusted only to avoid starting a download that is surely too big:
-            # it may be missing or may lie, so we count the bytes as well
+            # The header is trusted only to avoid starting a download that is surely
+            # too big: it may be missing or may lie, so the bytes are counted as well
             declared = response.headers.get('content-length', '')
             if declared.isdigit() and int(declared) > Picture.MAX_BYTES:
                 raise PictureError(TOO_BIG)
@@ -99,11 +98,9 @@ async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] |
 def _check_peer(response: httpx.Response) -> None:
     """Check the address the connection was actually established with.
 
-    Checking the name alone is not enough: between our DNS query and httpx's
-    request the name is resolved a second time, and a zero-TTL record can hand out
-    a public address for the check and a local one for the download (DNS rebinding).
-    Here we look at the already established connection, so there is nothing
-    to swap.
+    Checking the name alone is not enough: httpx resolves it a second time, and a
+    zero-TTL record can hand out a public address for the check and a local one for the
+    download (DNS rebinding). The established connection has nothing left to swap.
     """
     stream = response.extensions.get('network_stream')
     if stream is None:

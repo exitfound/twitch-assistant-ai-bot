@@ -92,11 +92,51 @@ EN_DASH = '\u2013'
 
 # What to strip around a nick in a command argument: «!who @ник,» is the nick «ник»
 NICK_TRAILING = ',.:;!?'
+# A Twitch login is at most 25 characters: anything longer is not a nick
+NICK_MAX = 25
 
 
 def clean_nick(raw: str) -> str:
-    """A nick from a command argument: no @, no trailing punctuation, lowercased."""
-    return raw.lstrip('@').rstrip(NICK_TRAILING).lower()
+    """A nick from a command argument: no @, no trailing punctuation, lowercased.
+
+    Cut to NICK_MAX because the answer echoes it back («@ник, @цель ни разу не писал»):
+    a Twitch login is at most 25 characters, so nothing real is lost, and an argument
+    of arbitrary length cannot be turned into a message of the viewer's choosing
+    (2026-09-20).
+    """
+    return raw.lstrip('@').rstrip(NICK_TRAILING).lower()[:NICK_MAX]
+
+
+_URL_RE = re.compile(r'(?:(?:https?|ftp)://|www\.)\S+|\b\S+\.(?:com|net|org|ru|io|me|tv|gg|xyz|link)(?:/\S*)?',
+                     re.IGNORECASE)
+
+
+def strip_links(text: str) -> str:
+    """Remove anything that reads as a link.
+
+    For messages nobody is watching. The chat is part of the model's context, so a
+    viewer can plant text for the bot to repeat later; a link it repeats is the one
+    thing that turns that into harm for a third person (2026-09-20).
+    """
+    return re.sub(r'\s{2,}', ' ', _URL_RE.sub('', text)).strip()
+
+
+def strip_pings(text: str) -> str:
+    """Drop the `@` from mentions, keeping the word itself.
+
+    The name still reads, but the bot cannot be made to ping someone on demand.
+    """
+    return re.sub(r'@(\w)', r'\1', text)
+
+
+def defuse(text: str) -> str:
+    """Make a line safe to send on its own, with no nick in front of it.
+
+    A message starting with `/` or `.` reads as a chat command. The Helix endpoint the
+    bot sends through does not execute them, so this is about how it looks in chat,
+    not about privileges.
+    """
+    return text.lstrip('/.').lstrip()
 
 
 def fix_dashes(text: str) -> str:

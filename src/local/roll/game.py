@@ -127,10 +127,16 @@ def _lowered(ceiling: int, floor_at: float | None) -> tuple[int, float | None]:
 
 
 def _minutes_left(floor_at: float | None) -> int | None:
+    """Minutes until a curse sitting on the floor lifts. None – nothing to wait for.
+
+    None means either that the ceiling is still dropping (no floor_at yet) or that the
+    hold has already run out. texts.curse_note() picks a different line by exactly that,
+    so «expired» must not come back as «one minute left» (2026-09-20).
+    """
     if floor_at is None:
         return None
-    seconds = floor_at + Rewards.CURSE_HOLD_MINUTES * 60 - time.time()
-    return max(1, math.ceil(seconds / 60))
+    seconds = Rewards.CURSE_HOLD_MINUTES * 60 - (time.time() - floor_at)
+    return max(1, math.ceil(seconds / 60)) if seconds > 0 else None
 
 
 async def _throw_for(
@@ -315,14 +321,6 @@ async def status(session_id: str, user: str, *, limit: int, unlimited: bool = Fa
         shield_minutes_left=left,
         **await _standings(session_id),
     )
-
-
-def _minutes_left(floor_at: float | None) -> int | None:
-    """Minutes until a curse sitting on the floor lifts. None – the ceiling is still dropping."""
-    if floor_at is None:
-        return None
-    seconds = Rewards.CURSE_HOLD_MINUTES * 60 - (time.time() - floor_at)
-    return max(1, math.ceil(seconds / 60)) if seconds > 0 else None
 
 
 async def lift_expired_curses(session_id: str) -> list[str]:

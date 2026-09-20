@@ -16,6 +16,7 @@ from src.core.content import Content, validate_content
 from src.core.database import close_db, init_db
 from src.core.logging_setup import setup_logging
 from src.core.stream import StreamTracker, watch_stream
+from src.core.utils import defuse
 from src.gemini.memory import build as memory
 from src.gemini.proactive import proactive_loop
 from src.local.emote_spam import emote_spam_loop
@@ -39,6 +40,10 @@ CHAT_WATCH_SECONDS = 60
 # a run outside a container behaves
 HEARTBEAT_PATH = os.getenv('BOT_HEARTBEAT', '')
 HEARTBEAT_SECONDS = 60
+
+# Where twitchio keeps the tokens: the name it uses by default, next to the working
+# directory. In the container that is the /data volume
+TOKENS_FILE = '.tio.tokens.json'
 
 
 class Bot(commands.Bot):
@@ -64,6 +69,8 @@ class Bot(commands.Bot):
         self._chat_watch_task: asyncio.Task | None = None
         self._heartbeat_task: asyncio.Task | None = None
         self._chat_revive_lock = asyncio.Lock()
+        # Set by run_bot(): re-installed after the web adapter has taken the signals
+        self.on_shutdown_signal = None
         self._shutting_down = False
         self.stream = StreamTracker(end_lookup=self._stream_end_from_vod)
 
@@ -242,7 +249,23 @@ class Bot(commands.Bot):
         except Exception:
             logger.exception('Конец эфира не обработан')
 
+    def install_signal_handlers(self) -> None:
+        """Take SIGTERM and SIGINT back from aiohttp.
+
+        twitchio starts its OAuth adapter as web.AppRunner(..., handle_signals=True),
+        and aiohttp installs its own handlers, replacing whatever was there – so the
+        ones run_bot() set before start() were dead from that moment on. The bot still
+        stopped, but through asyncio.run()'s emergency cleanup instead of our own
+        orderly shutdown, and nothing said a signal had arrived (2026-09-20).
+        """
+        if self.on_shutdown_signal is None:
+            return
+        loop = asyncio.get_running_loop()
+        for sig, name in ((signal.SIGTERM, 'SIGTERM'), (signal.SIGINT, 'SIGINT')):
+            loop.add_signal_handler(sig, self.on_shutdown_signal, name)
+
     async def event_ready(self) -> None:
+        self.install_signal_handlers()
         users = await self.fetch_users(ids=[self.bot_id])
         if users:
             self._bot_name = users[0].name
@@ -318,21 +341,35 @@ class Bot(commands.Bot):
     async def event_oauth_authorized(self, payload: twitchio.authentication.UserTokenPayload):
         await self.add_token(payload.access_token, payload.refresh_token)
         if str(payload.user_id) == str(self.bot_id):
-            print(
-                f'\nAdd to .env:\n'
-                f'TWITCH_BOT_TOKEN={payload.access_token}\n'
-                f'TWITCH_BOT_REFRESH={payload.refresh_token}\n'
-            )
+            await self._store_tokens('бота', 'TWITCH_BOT_TOKEN', payload)
             if self._channel_id:
                 await self._subscribe_to_chat()
         elif self._channel_id and str(payload.user_id) == self._channel_id:
-            print(
-                f'\nAdd to .env:\n'
-                f'TWITCH_BROADCASTER_TOKEN={payload.access_token}\n'
-                f'TWITCH_BROADCASTER_REFRESH={payload.refresh_token}\n'
-            )
+            await self._store_tokens('канала', 'TWITCH_BROADCASTER_TOKEN', payload)
             self._broadcaster_token = True
             await self._start_rewards()
+
+    async def _store_tokens(self, whose: str, env_name: str,
+                            payload: twitchio.authentication.UserTokenPayload) -> None:
+        """Save the tokens to disk and say so, without putting them in the output.
+
+        They used to be printed in full for copying into .env. In a terminal that
+        only reached the scrollback; in a container the same lines land in
+        `docker logs`, which keeps them on disk across restarts. So they are written
+        where twitchio reads them from anyway, the file is made owner-only, and the
+        log gets the last four characters – enough to tell one token from another
+        (2026-09-20).
+        """
+        await self.save_tokens()
+        path = Path(TOKENS_FILE)
+        try:
+            path.chmod(0o600)
+        except OSError as e:
+            logger.warning('Не удалось ограничить права на %s: %s', path, e)
+        logger.info(
+            'Токен %s получен (…%s) и сохранён в %s. Значение для %s в .env возьми оттуда',
+            whose, payload.access_token[-4:], path, env_name,
+        )
 
     async def close(self, **options) -> None:
         # The chat watch must not resubscribe a bot that is shutting down
@@ -343,9 +380,18 @@ class Bot(commands.Bot):
         await super().close(**options)
 
     async def send_chat_message(self, text: str) -> bool:
-        """Send without a reply (HTTP API). True if it went through."""
+        """Send without a reply (HTTP API). True if it went through.
+
+        Everything the bot says on its own goes through here – proactive remarks, the
+        second and later chunks of an answer, emotes, announcements – with no nick in
+        front of it. So this is where a line that would read as a chat command is
+        defused: the one place that covers all of them (2026-09-20).
+        """
         if not self._channel_id:
             logger.warning('Отправка невозможна: ID канала не получен')
+            return False
+        text = defuse(text)
+        if not text:
             return False
         try:
             await self._http.post_chat_message(
@@ -385,6 +431,32 @@ class Bot(commands.Bot):
             self._websockets.pop(str(self.bot_id), None)
             await self._subscribe_to_chat()
             logger.warning('Чат снова подключён')
+
+    def _background_tasks(self) -> list[asyncio.Task]:
+        return [t for t in (
+            self._proactive_task, self._emote_spam_task, self._help_task,
+            self._curse_lift_task, self._stream_watch_task, self._memory_task,
+            self._chat_watch_task, self._heartbeat_task,
+        ) if t is not None]
+
+    async def stop_background_tasks(self) -> None:
+        """Cancel the loops and wait for them, before the database is closed.
+
+        Nothing used to cancel them. A loop waking up after close_db() calls get_db(),
+        which opens a fresh connection and with it a new non-daemon aiosqlite thread –
+        and the process never exits. That is what once looked like a Gemini call hanging
+        for minutes (2026-09-20).
+        """
+        tasks = self._background_tasks()
+        if not tasks:
+            return
+        for task in tasks:
+            task.cancel()
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for result in results:
+            if isinstance(result, Exception):
+                logger.warning('Фоновая задача завершилась с ошибкой: %r', result)
+        logger.info('Фоновые задачи остановлены: %d', len(tasks))
 
     async def _beat(self) -> None:
         """Touch a file so the container healthcheck can see the bot is still running.
@@ -481,22 +553,41 @@ async def run_bot() -> None:
     validate_content()
     shutdown_event = asyncio.Event()
     loop = asyncio.get_running_loop()
-    loop.add_signal_handler(signal.SIGTERM, shutdown_event.set)
-    loop.add_signal_handler(signal.SIGINT, shutdown_event.set)
+
+    def _on_signal(name: str) -> None:
+        # Logged in the handler itself: without it there is no way to tell a signal
+        # that arrived from a process that stopped for its own reasons (2026-09-20)
+        logger.info('Получен %s, завершаюсь...', name)
+        shutdown_event.set()
+
+    loop.add_signal_handler(signal.SIGTERM, _on_signal, 'SIGTERM')
+    loop.add_signal_handler(signal.SIGINT, _on_signal, 'SIGINT')
     try:
         async with Bot() as bot:
+            bot.on_shutdown_signal = _on_signal
             bot_task = asyncio.create_task(bot.start())
             shutdown_task = asyncio.create_task(shutdown_event.wait())
             done, _ = await asyncio.wait(
                 [bot_task, shutdown_task], return_when=asyncio.FIRST_COMPLETED,
             )
             if shutdown_task in done:
-                logger.info('Получен сигнал остановки, завершаюсь...')
                 bot_task.cancel()
                 try:
                     await bot_task
                 except asyncio.CancelledError:
                     pass
+            else:
+                # The bot stopped on its own. Its exception has to be taken out of the
+                # task, otherwise the process exits as if nothing happened and the
+                # traceback surfaces only as «Task exception was never retrieved»
+                shutdown_task.cancel()
+                try:
+                    await bot_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    logger.exception('Бот остановился из-за ошибки')
+            await bot.stop_background_tasks()
     finally:
         await close_db()
 

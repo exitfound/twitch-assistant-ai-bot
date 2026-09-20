@@ -51,7 +51,7 @@ REQUIRED = {
         'help', 'help_announce', 'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
         'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',
         'cooldown_local', 'cooldown_gemini', 'role_denied', 'role_denied_sub',
-        'follow_required', 'quota_exceeded',
+        'follow_required', 'quota_exceeded', 'quota_channel',
         'roll_loser_self', 'roll_loser_other', 'roll_free_left', 'roll_champion',
         'roll_cursed_self', 'roll_cursed_other',
         'roll_curse_step', 'roll_curse_hold', 'roll_curse_lifted',
@@ -72,8 +72,6 @@ REQUIRED = {
         'ascii_usage', 'ascii_bad_url', 'ascii_failed', 'ascii_too_big',
         'ascii_blocked', 'ascii_unchecked', 'ascii_no_left',
         'summary_empty', 'summary_error', 'summary_no_left', 'summary_no_previous',
-        # summary_recent: only for a bot started before 2026-09-20, remove after the restart
-        'summary_recent',
         'who_usage', 'who_unknown', 'who_failed', 'who_no_left',
         'versus_usage', 'versus_unknown', 'versus_unknown_one', 'versus_failed', 'versus_no_left',
         'no_answer', 'filtered', 'gen_error', 'gen_failed',

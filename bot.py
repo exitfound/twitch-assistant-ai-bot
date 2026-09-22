@@ -1,22 +1,27 @@
 import asyncio
 import contextlib
 import logging
-import re
 import signal
-import time
 from pathlib import Path
 
-import aiohttp
 import twitchio
 from twitchio import eventsub
 from twitchio.ext import commands
 
+from src.core import stream as twitch_stream
+from src.core.chat_socket import ChatSocketWatch, check_private_api
 from src.core.component import ChatComponent
 from src.core.config import Emote, Files, Help, Memory, Proactive, Rewards, Roll, Twitch, validate_config
 from src.core.content import Content, validate_content
+from src.core.cooldowns import Cooldowns
 from src.core.database import close_db, init_db
+from src.core.heartbeat import heartbeat_loop
 from src.core.logging_setup import setup_logging
 from src.core.stream import StreamTracker, watch_stream
+from src.core.tasks import BackgroundTasks
+from src.core.tokens import (
+    OAUTH_SCOPES, OAUTH_SCOPES_FOLLOWS, add_broadcaster_token, oauth_link, store_tokens, token_problem,
+)
 from src.core.utils import defuse
 from src.gemini.memory import build as memory
 from src.gemini.proactive import proactive_loop
@@ -28,23 +33,9 @@ from src.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
 
 logger = logging.getLogger(__name__)
 
-OAUTH_SCOPES = 'user:read:chat+user:write:chat+user:bot'
-OAUTH_SCOPES_FOLLOWS = f'{OAUTH_SCOPES}+moderator:read:followers'
-
-# A stream's recording is recognised by its start time: a VOD starts when the stream does
-VOD_MATCH_SECONDS = 300
-
-# How often the chat connection is checked (_watch_chat_socket)
-CHAT_WATCH_SECONDS = 60
-
 # Liveness file for the container healthcheck. Empty – no heartbeat, which is how
 # a run outside a container behaves
 HEARTBEAT_PATH = Files.HEARTBEAT or ''
-HEARTBEAT_SECONDS = 60
-
-# Where twitchio keeps the tokens: the name it uses by default, next to the working
-# directory. In the container that is the /data volume
-TOKENS_FILE = '.tio.tokens.json'
 
 
 class Bot(commands.Bot):
@@ -56,20 +47,14 @@ class Bot(commands.Bot):
             bot_id=Twitch.BOT_ID,
             prefix='!',
         )
-        self._cooldowns: dict[str, float] = {}
+        self._cooldowns = Cooldowns()
         self._bot_name: str | None = None
         self._channel_id: str | None = None
-        self._proactive_task: asyncio.Task | None = None
-        self._emote_spam_task: asyncio.Task | None = None
-        self._help_task: asyncio.Task | None = None
-        self._curse_lift_task: asyncio.Task | None = None
+        self._tasks = BackgroundTasks()
         self._rewards = RewardService(self)
         self._broadcaster_token = False
-        self._stream_watch_task: asyncio.Task | None = None
-        self._memory_task: asyncio.Task | None = None
-        self._chat_watch_task: asyncio.Task | None = None
-        self._heartbeat_task: asyncio.Task | None = None
-        self._chat_revive_lock = asyncio.Lock()
+        self._chat = ChatSocketWatch(self, self._subscribe_to_chat,
+                                     active=lambda: not self._shutting_down and bool(self._channel_id))
         # Set by run_bot(): re-installed after the web adapter has taken the signals
         self.on_shutdown_signal = None
         self._shutting_down = False
@@ -96,24 +81,16 @@ class Bot(commands.Bot):
     def rewards_active(self) -> bool:
         return self._rewards.active
 
-    # --- cooldowns ---------------------------------------------------------
+    # --- cooldowns (src/core/cooldowns.py) -----------------------------------
 
-    # Scopes are independent: waiting out a Gemini command does not block !help-bot.
-    # The scope is the command's class (Kind.LOCAL / Kind.GEMINI), passed explicitly.
     def cooldown_remaining(self, user: str, scope: str) -> float:
-        expiry = self._cooldowns.get(f'{scope}:{user}')
-        if expiry is None:
-            return 0.0
-        return max(0.0, expiry - time.time())
+        return self._cooldowns.remaining(user, scope)
 
     def set_cooldown(self, user: str, seconds: int, scope: str) -> None:
-        now = time.time()
-        if len(self._cooldowns) > 500:
-            self._cooldowns = {k: e for k, e in self._cooldowns.items() if e > now}
-        self._cooldowns[f'{scope}:{user}'] = now + seconds
+        self._cooldowns.set(user, seconds, scope)
 
     def clear_cooldown(self, user: str, scope: str) -> None:
-        self._cooldowns.pop(f'{scope}:{user}', None)
+        self._cooldowns.clear(user, scope)
 
     async def process_commands(self, payload) -> None:
         """twitchio's built-in command parsing is switched off.
@@ -126,6 +103,7 @@ class Bot(commands.Bot):
     # --- lifecycle -------------------------------------------------------
 
     async def setup_hook(self) -> None:
+        check_private_api(self)
         await init_db()
         if Twitch.BOT_TOKEN and Twitch.BOT_REFRESH:
             await self.add_token(Twitch.BOT_TOKEN, Twitch.BOT_REFRESH)
@@ -140,46 +118,15 @@ class Bot(commands.Bot):
         await self.add_component(RewardComponent(self._rewards))
 
     async def _add_broadcaster_token(self) -> None:
-        """The channel's token for rewards. Checks it belongs to the channel and has the scope.
-
-        Prefers what twitchio loaded from .tio.tokens.json over the .env values, which
-        twitchio does not update after a refresh; falls back to .env when it is empty.
-        Without the check a foreign or under-scoped token surfaces only on the first
-        redemption, as an obscure Twitch error in the middle of a stream.
-        """
-        if not Rewards.ENABLED:
-            return
-        stored = self._http._tokens.get(self._channel_id)
-        if stored:
-            token, refresh = stored['token'], stored['refresh']
-        elif Twitch.BROADCASTER_TOKEN and Twitch.BROADCASTER_REFRESH:
-            token, refresh = Twitch.BROADCASTER_TOKEN, Twitch.BROADCASTER_REFRESH
-        else:
-            return
-        try:
-            payload = await self.add_token(token, refresh)
-        except Exception as e:
-            logger.warning('Токен канала не принят, награды за баллы выключены: %s', e)
-            return
-        if str(payload.user_id) != self._channel_id:
-            logger.warning(
-                'TWITCH_BROADCASTER_TOKEN выдан аккаунту %s, а не каналу %s – награды за баллы выключены',
-                payload.login, Twitch.CHANNEL,
-            )
-            return
-        if REWARDS_SCOPE not in payload.scopes:
-            logger.warning('В токене канала нет права %s – награды за баллы выключены', REWARDS_SCOPE)
-            return
-        self._broadcaster_token = True
+        """The channel's token for rewards (src/core/tokens.py)."""
+        if Rewards.ENABLED:
+            self._broadcaster_token = await add_broadcaster_token(self, self._channel_id, REWARDS_SCOPE)
 
     # --- stream -----------------------------------------------------------
 
     async def fetch_live_stream(self) -> tuple[str, float] | None:
         """The channel's live stream according to Twitch: (id, start) or None. Does not swallow errors."""
-        streams = await self.fetch_streams(user_ids=[self._channel_id], type='live')
-        if not streams:
-            return None
-        return streams[0].id, streams[0].started_at.timestamp()
+        return await twitch_stream.fetch_live_stream(self, self._channel_id)
 
     async def _sync_stream(self) -> None:
         """Whether the stream is live right now.
@@ -215,21 +162,12 @@ class Bot(commands.Bot):
         It goes by silence in chat, not by the stream state, so a stream end it
         missed or one that came while the bot was down changes nothing.
         """
-        if Memory.ENABLED and not _running(self._memory_task):
+        if Memory.ENABLED:
             # event_ready fires again on a reconnect – one check is enough
-            self._memory_task = asyncio.create_task(memory.memory_loop())
+            self._tasks.start('memory', memory.memory_loop)
 
     async def _stream_end_from_vod(self, stream_id: str, started_at: float) -> float | None:
-        """The stream's end from its Twitch recording: recording start plus duration.
-
-        twitchio does not expose a video's stream id, so the recording is matched by
-        start time. No recording (VODs off) – None, the tracker estimates the end from chat.
-        """
-        videos = await self.fetch_videos(user_id=self._channel_id, type='archive', first=5)
-        for video in videos:
-            if abs(video.created_at.timestamp() - started_at) <= VOD_MATCH_SECONDS:
-                return video.created_at.timestamp() + _duration_seconds(video.duration)
-        return None
+        return await twitch_stream.end_from_vod(self, self._channel_id, started_at)
 
     async def event_stream_online(self, payload) -> None:
         # A rerun or a premiere is not a stream with the streamer
@@ -270,12 +208,10 @@ class Bot(commands.Bot):
             await self._subscribe_to_chat()
         except Exception as e:
             logger.warning('Не удалось подписаться на чат: %r', e)
-            if _token_problem(e):
+            if token_problem(e):
                 logger.warning(
                     'Похоже, нет токена бота или у него не те права. Открой в браузере и войди '
-                    'под аккаунтом бота:\nhttp://localhost:4343/oauth?scopes=%s&force_verify=true\n'
-                    '(в контейнере ссылка не откроется – запусти make oauth на хосте)',
-                    OAUTH_SCOPES,
+                    'под аккаунтом бота:\n%s', oauth_link(OAUTH_SCOPES),
                 )
         self._start_background_tasks()
         # Memory of chat conversations, including those that ended while the bot was down
@@ -291,27 +227,23 @@ class Bot(commands.Bot):
             if Proactive.ENABLED or Emote.SPAM_ENABLED or Rewards.ENABLED:
                 logger.warning('ID канала не получен – фоновые задачи не запущены')
             return
-        if HEARTBEAT_PATH and not _running(self._heartbeat_task):
-            self._heartbeat_task = asyncio.create_task(self._beat())
-        if not _running(self._chat_watch_task):
-            self._chat_watch_task = asyncio.create_task(self._watch_chat_socket())
+        tasks = self._tasks
+        if HEARTBEAT_PATH:
+            tasks.start('heartbeat', lambda: heartbeat_loop(Path(HEARTBEAT_PATH)))
+        tasks.start('chat_watch', self._chat.loop)
         # The Twitch check catches a missed stream start or end
-        if not _running(self._stream_watch_task):
-            self._stream_watch_task = asyncio.create_task(watch_stream(self))
-        if Proactive.ENABLED and not _running(self._proactive_task):
-            self._proactive_task = asyncio.create_task(proactive_loop(self))
+        tasks.start('stream_watch', lambda: watch_stream(self))
+        if Proactive.ENABLED and tasks.start('proactive', lambda: proactive_loop(self)):
             logger.info('Проактивные сообщения включены (раз в %d–%d мин)',
                         Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
         # Curses come from rewards and from the previous stream's results
-        if (Rewards.ENABLED or Roll.PERKS_ENABLED) and not _running(self._curse_lift_task):
-            self._curse_lift_task = asyncio.create_task(curse_lift_loop(self))
+        if (Rewards.ENABLED or Roll.PERKS_ENABLED) and tasks.start('curse_lift', lambda: curse_lift_loop(self)):
             logger.info('Оповещения о снятии проклятий включены')
-        if Help.ANNOUNCE_ENABLED and not _running(self._help_task):
-            self._help_task = asyncio.create_task(help_loop(self))
+        if Help.ANNOUNCE_ENABLED and tasks.start('help', lambda: help_loop(self)):
             logger.info('Напоминания о командах включены (раз в %d мин)', Help.ANNOUNCE_INTERVAL_MINUTES)
-        if Emote.SPAM_ENABLED and not _running(self._emote_spam_task):
+        if Emote.SPAM_ENABLED and not tasks.running('emote_spam'):
             if Content.items('emotes'):
-                self._emote_spam_task = asyncio.create_task(emote_spam_loop(self))
+                tasks.start('emote_spam', lambda: emote_spam_loop(self))
                 logger.info('Спам эмотами включён (раз в %d–%d мин)',
                             Emote.SPAM_INTERVAL_MIN_MINUTES, Emote.SPAM_INTERVAL_MAX_MINUTES)
             else:
@@ -327,10 +259,8 @@ class Bot(commands.Bot):
         if not self._broadcaster_token:
             logger.warning(
                 'Награды за баллы канала выключены: нет токена канала. Открой в браузере '
-                'и войди под аккаунтом канала %s:\n'
-                'http://localhost:4343/oauth?scopes=%s&force_verify=true\n'
-                '(в контейнере ссылка не откроется – запусти make oauth на хосте)',
-                Twitch.CHANNEL, REWARDS_SCOPE,
+                'и войди под аккаунтом канала %s:\n%s',
+                Twitch.CHANNEL, oauth_link(REWARDS_SCOPE),
             )
             return
         try:
@@ -341,32 +271,13 @@ class Bot(commands.Bot):
     async def event_oauth_authorized(self, payload: twitchio.authentication.UserTokenPayload):
         await self.add_token(payload.access_token, payload.refresh_token)
         if str(payload.user_id) == str(self.bot_id):
-            await self._store_tokens('бота', 'TWITCH_BOT_TOKEN', payload)
+            await store_tokens(self, 'бота', 'TWITCH_BOT_TOKEN', payload)
             if self._channel_id:
                 await self._subscribe_to_chat()
         elif self._channel_id and str(payload.user_id) == self._channel_id:
-            await self._store_tokens('канала', 'TWITCH_BROADCASTER_TOKEN', payload)
+            await store_tokens(self, 'канала', 'TWITCH_BROADCASTER_TOKEN', payload)
             self._broadcaster_token = True
             await self._start_rewards()
-
-    async def _store_tokens(self, whose: str, env_name: str,
-                            payload: twitchio.authentication.UserTokenPayload) -> None:
-        """Save the tokens to disk and log that, without putting them in the output.
-
-        A token printed in full lands in `docker logs`, which keeps it on disk across
-        restarts. It is written where twitchio reads it from anyway, the file is set to
-        mode 0600, and the log gets the last four characters to tell tokens apart.
-        """
-        await self.save_tokens()
-        path = Path(TOKENS_FILE)
-        try:
-            path.chmod(0o600)
-        except OSError as e:
-            logger.warning('Не удалось ограничить права на %s: %s', path, e)
-        logger.info(
-            'Токен %s получен (…%s) и сохранён в %s. Значение для %s в .env возьми оттуда',
-            whose, payload.access_token[-4:], path, env_name,
-        )
 
     async def close(self, **options) -> None:
         # The chat watch must not resubscribe a bot that is shutting down
@@ -404,90 +315,11 @@ class Bot(commands.Bot):
             logger.exception('Не удалось отправить сообщение в чат')
             return False
 
-    # --- the chat connection ------------------------------------------------
-    # twitchio 3.2.1 can abandon an EventSub websocket for good (a welcome over 11 s, a
-    # revoked subscription, a close code it does not retry), leaving the bot deaf. One
-    # still retrying keeps _closed clear, so a revive is due only when none is open.
-
-    def _chat_socket_alive(self) -> bool:
-        sockets = self._websockets.get(str(self.bot_id), {})
-        return any(not socket._closed for socket in sockets.values())
-
-    async def _revive_chat(self) -> None:
-        if self._shutting_down or not self._channel_id or self._chat_socket_alive():
-            return
-        async with self._chat_revive_lock:
-            if self._shutting_down or self._chat_socket_alive():
-                return
-            logger.warning('Соединение с чатом Twitch потеряно – подписываюсь заново')
-            # Dead sockets out of the registry, or subscribe_websocket() would pick one
-            self._websockets.pop(str(self.bot_id), None)
-            await self._subscribe_to_chat()
-            logger.warning('Чат снова подключён')
-
-    def _background_tasks(self) -> list[asyncio.Task]:
-        return [t for t in (
-            self._proactive_task, self._emote_spam_task, self._help_task,
-            self._curse_lift_task, self._stream_watch_task, self._memory_task,
-            self._chat_watch_task, self._heartbeat_task,
-        ) if t is not None]
-
     async def stop_background_tasks(self) -> None:
-        """Cancel the loops and wait for them, before the database is closed.
-
-        A loop waking up after close_db() calls get_db(), which opens a fresh connection
-        and with it a new non-daemon aiosqlite thread, and the process never exits.
-        """
-        # close() runs more than once on shutdown: the later calls find nothing left
-        tasks = [t for t in self._background_tasks() if not t.done()]
-        if not tasks:
-            return
-        for task in tasks:
-            task.cancel()
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for result in results:
-            if isinstance(result, Exception):
-                logger.warning('Фоновая задача завершилась с ошибкой: %r', result)
-        logger.info('Фоновые задачи остановлены: %d', len(tasks))
-
-    async def _beat(self) -> None:
-        """Touch a file so the container healthcheck can see the bot is still running.
-
-        Started only when BOT_HEARTBEAT is set, so nothing changes outside a container,
-        and only from _start_background_tasks(): a process that came up without the
-        channel id and the loops is alive but deaf, and must read as unhealthy.
-        """
-        path = Path(HEARTBEAT_PATH)
-        logger.info('Heartbeat включён: %s (раз в %d с)', path, HEARTBEAT_SECONDS)
-        while True:
-            try:
-                path.touch()
-            except OSError as e:
-                # A full or read-only volume: say so, but do not take the bot down
-                logger.warning('Не удалось обновить heartbeat: %s', e)
-            await asyncio.sleep(HEARTBEAT_SECONDS)
-
-    async def _watch_chat_socket(self) -> None:
-        logger.info('Проверка соединения с чатом включена (раз в %d с)', CHAT_WATCH_SECONDS)
-        while True:
-            await asyncio.sleep(CHAT_WATCH_SECONDS)
-            try:
-                await self._revive_chat()
-            except Exception as e:
-                # Twitch or the network is still down: the next check tries again
-                logger.warning('Переподписка на чат не удалась: %s', e)
+        await self._tasks.stop()
 
     async def event_websocket_closed(self, payload) -> None:
-        # Fired for every close, a normal reconnect included; a socket that is
-        # reconnecting stays open for _chat_socket_alive(), so this only speeds
-        # up the watch when the socket was given up
-        if self._shutting_down:
-            return
-        await asyncio.sleep(5)
-        try:
-            await self._revive_chat()
-        except Exception as e:
-            logger.warning('Переподписка на чат не удалась: %s', e)
+        await self._chat.closed()
 
     async def _subscribe_to_chat(self) -> None:
         if not self._channel_id:
@@ -508,12 +340,8 @@ class Bot(commands.Bot):
             await self.subscribe_websocket(follow_sub, as_bot=True)
             logger.info('Подписка на фоловы')
         except Exception as e:
-            logger.warning(
-                'Не удалось подписаться на фоловы: %s\n'
-                'Переавторизация: http://localhost:4343/oauth?scopes=%s&force_verify=true\n'
-                '(в контейнере ссылка не откроется – запусти make oauth на хосте)',
-                e, OAUTH_SCOPES_FOLLOWS,
-            )
+            logger.warning('Не удалось подписаться на фоловы: %s\nПереавторизация: %s',
+                           e, oauth_link(OAUTH_SCOPES_FOLLOWS))
 
         try:
             for stream_sub in (
@@ -527,29 +355,6 @@ class Bot(commands.Bot):
                 'Не удалось подписаться на начало и конец эфира: %s – '
                 'сессия переключится только при перезапуске бота', e,
             )
-
-
-def _running(task: asyncio.Task | None) -> bool:
-    return task is not None and not task.done()
-
-
-def _duration_seconds(duration: str) -> int:
-    """A Twitch video duration like «3h8m33s» in seconds."""
-    units = {'h': 3600, 'm': 60, 's': 1}
-    return sum(int(value) * units[unit] for value, unit in re.findall(r'(\d+)([hms])', duration))
-
-
-def _token_problem(error: Exception) -> bool:
-    """Whether a failed chat subscription may be about the bot's token.
-
-    Only then is the OAuth link worth printing: a network error, a Twitch outage or a
-    duplicate subscription would send the owner to re-authorise for nothing. An error of
-    an unknown kind still gets the hint – a missing token is not an HTTP error.
-    """
-    if isinstance(error, twitchio.HTTPException):
-        return error.status in (401, 403)
-    # TimeoutError is an OSError
-    return not isinstance(error, (OSError, aiohttp.ClientError))
 
 
 async def run_bot() -> None:

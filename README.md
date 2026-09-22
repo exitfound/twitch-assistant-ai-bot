@@ -705,6 +705,11 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   │   ├── database.py      # Фасад хранилища: реэкспорт src/core/db/
 │   │   ├── db/              # SQLite по темам: connection, schema, chat, interactions, knowledge, quota, streams
 │   │   ├── stream.py        # Сессия = эфир: StreamTracker, перезапуск и обрыв стрима
+│   │   ├── cooldowns.py     # Кулдауны по монотонным часам
+│   │   ├── tasks.py         # Фоновые циклы бота по имени: запуск один раз, остановка вместе
+│   │   ├── chat_socket.py   # Сторож подписки на чат и проверка приватных полей twitchio
+│   │   ├── tokens.py        # Токены Twitch: токен канала, сохранение, OAuth-ссылки
+│   │   ├── heartbeat.py     # Файл живости для healthcheck контейнера
 │   │   ├── port.py          # Что фичам нужно от бота: протоколы BotPort и StreamBot
 │   │   ├── viewer.py        # Лестница статусов зрителя: Tier, tier_of(), by_tier()
 │   │   ├── followers.py     # FollowerCache: фолловер ли зритель, по Helix с TTL-кешем

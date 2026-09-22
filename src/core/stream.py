@@ -14,8 +14,11 @@ the next stream counts as an outage.
 """
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
+
+from twitchio.ext import commands
 
 from src.core.config import Stream
 from src.core.database import (
@@ -31,6 +34,10 @@ logger = logging.getLogger(__name__)
 # minute or two at the start and end of a stream, so one check is not enough
 CHECK_SECONDS = 120
 CONFIRMATIONS = 3
+
+# A stream's recording is recognised by its start time: a VOD starts when the stream does
+VOD_MATCH_SECONDS = 300
+
 
 # (stream_id, started_at) → time.time() of the stream end, or None if there is no way to tell
 EndLookup = Callable[[str, float], Awaitable[float | None]]
@@ -175,3 +182,32 @@ async def watch_stream(bot: StreamBot) -> None:
         raise
     finally:
         logger.info('Сверка эфира остановлена')
+
+
+# --- Twitch's side ------------------------------------------------------------
+
+async def fetch_live_stream(client: commands.Bot, channel_id: str) -> tuple[str, float] | None:
+    """The channel's live stream according to Twitch: (id, start) or None. Does not swallow errors."""
+    streams = await client.fetch_streams(user_ids=[channel_id], type='live')
+    if not streams:
+        return None
+    return streams[0].id, streams[0].started_at.timestamp()
+
+
+async def end_from_vod(client: commands.Bot, channel_id: str, started_at: float) -> float | None:
+    """The stream's end from its Twitch recording: recording start plus duration.
+
+    twitchio does not expose a video's stream id, so the recording is matched by start
+    time. No recording (VODs off) – None, the tracker estimates the end from chat.
+    """
+    videos = await client.fetch_videos(user_id=channel_id, type='archive', first=5)
+    for video in videos:
+        if abs(video.created_at.timestamp() - started_at) <= VOD_MATCH_SECONDS:
+            return video.created_at.timestamp() + duration_seconds(video.duration)
+    return None
+
+
+def duration_seconds(duration: str) -> int:
+    """A Twitch video duration like «3h8m33s» in seconds."""
+    units = {'h': 3600, 'm': 60, 's': 1}
+    return sum(int(value) * units[unit] for value, unit in re.findall(r'(\d+)([hms])', duration))

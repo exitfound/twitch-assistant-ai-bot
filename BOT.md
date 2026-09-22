@@ -20,23 +20,22 @@ asyncio.run(run_bot())
 ```
 
 При создании `Bot()` инициализируются:
-- `_cooldowns = {}` – словарь `{область:username → expiry_time}` для per-user кулдаунов (хранит время истечения, не время начала). Область – класс команды: `local` или `gemini`
+- `_cooldowns = Cooldowns()` – кулдауны `{область:username → время истечения}` по монотонным часам (`src/core/cooldowns.py`): скачок системного времени их не растягивает и не обнуляет. Область – класс команды: `local` или `gemini`
 - `_bot_name = None` – имя бота (заполняется позже из Twitch API)
 - `_channel_id = None` – числовой ID канала стримера (заполняется позже)
-- `_proactive_task = None` – ссылка на asyncio-таск проактивного цикла (для reconnect guard)
-- `_emote_spam_task = None` – ссылка на asyncio-таск спама эмотами (для reconnect guard)
-- `_curse_lift_task = None` – ссылка на asyncio-таск оповещений о снятии проклятия (для reconnect guard)
+- `_tasks = BackgroundTasks()` – фоновые циклы по имени (`src/core/tasks.py`); запущенный цикл второй раз не стартует
 - `_rewards = RewardService(self)` – награды за баллы канала, см. [Награды за баллы канала](#награды-за-баллы-канала)
 - `_broadcaster_token = False` – принят ли токен владельца канала
-- `_stream_watch_task = None` – ссылка на asyncio-таск сверки эфира с Twitch (для reconnect guard)
+- `_chat = ChatSocketWatch(...)` – сторож подписки на чат (`src/core/chat_socket.py`)
 - `stream = StreamTracker(end_lookup=self._stream_end_from_vod)` – текущий эфир и его сессия, см. [Сессии](#сессии)
 
 ### setup_hook (до подключения к Twitch)
 
+0. **`check_private_api()`** – проверяет, что у twitchio есть приватные поля, которые читает сторож чата и проверка токена. После обновления twitchio с другими именами бот остановится на старте, а не оглохнет молча
 1. **`init_db()`** – открывает SQLite-подключение, создаёт таблицы если их нет, прогоняет миграции
 2. **Загрузка токена** – если `TWITCH_BOT_TOKEN` и `TWITCH_BOT_REFRESH` заданы в `.env`, добавляет их в twitchio через `add_token()`
 3. **Получение ID канала** – `fetch_users(logins=[CHANNEL])` → сохраняет числовой ID стримера в `_channel_id`
-4. **Токен канала** – `_add_broadcaster_token()`: токен канала берётся из хранилища twitchio (оно загружено из `.tio.tokens.json` ещё до `setup_hook`), а если там его нет – из `TWITCH_BROADCASTER_TOKEN` и `_REFRESH`. Файл в приоритете: twitchio пишет туда обновлённый токен, а `.env` не трогает. Токен добавляется и проверяется – владелец должен совпасть с каналом, в правах должен быть `channel:manage:redemptions`. Чужой или урезанный токен иначе всплыл бы только при первом выкупе, невнятной ошибкой посреди эфира
+4. **Токен канала** – `_add_broadcaster_token()` (`src/core/tokens.py`): токен канала берётся из хранилища twitchio (оно загружено из `.tio.tokens.json` ещё до `setup_hook`), а если там его нет – из `TWITCH_BROADCASTER_TOKEN` и `_REFRESH`. Файл в приоритете: twitchio пишет туда обновлённый токен, а `.env` не трогает. Токен добавляется и проверяется – владелец должен совпасть с каналом, в правах должен быть `channel:manage:redemptions`. Чужой или урезанный токен иначе всплыл бы только при первом выкупе, невнятной ошибкой посреди эфира
 4а. **Эфир** – `_sync_stream()`: `fetch_streams(type='live')`. Стрим идёт – `StreamTracker.online()` с id эфира: знакомый id (перезапуск) и новый id вскоре после конца прошлого (обрыв) продолжают прежнюю сессию. Стрима нет – `settle_missed_end()` закрывает эфир, конец которого бот не видел, по записи эфира в Twitch, а без неё – по последнему сообщению чата в его сессии
 5. **Регистрация компонентов** – `add_component(ChatComponent(self))` и `add_component(RewardComponent(self._rewards))`
 
@@ -45,7 +44,7 @@ asyncio.run(run_bot())
 1. **Получение имени бота** – `fetch_users(ids=[bot_id])` → сохраняет ник в `_bot_name`
 2. **Подписка на чат и события** – `_subscribe_to_chat()` создаёт `ChatMessageSubscription`, `ChannelFollowSubscription`, `StreamOnlineSubscription` и `StreamOfflineSubscription` через EventSub WebSocket
 3. **Запуск фоновых задач** – `_start_background_tasks()`. Пять независимых циклов: `help_loop` при `HELP_ANNOUNCE_ENABLED=true`, `proactive_loop` при `PROACTIVE_ENABLED=true`, `curse_lift_loop` при `REWARDS_ENABLED=true` или `ROLL_PERKS_ENABLED=true`, `watch_stream` (сверка эфира с Twitch, `src/core/stream.py`) всегда, `emote_spam_loop` при `EMOTE_SPAM_ENABLED=true` и непустом списке `lists.emotes`. Все требуют известного `_channel_id` и стартуют **независимо** друг от друга
-4. **Reconnect guard** – если таск уже запущен (`task.done() == False`), повторный `event_ready` не создаёт дубликат. Если `_channel_id` не получен или список эмотов пуст, в лог пишется предупреждение, а не тишина
+4. **Reconnect guard** – `BackgroundTasks.start()` не запускает цикл, который уже работает, поэтому повторный `event_ready` не создаёт дубликат. Если `_channel_id` не получен или список эмотов пуст, в лог пишется предупреждение, а не тишина
 5. **Запуск наград** – `_start_rewards()`: при `REWARDS_ENABLED=true` и принятом токене канала вызывает `RewardService.start()`. Токена нет – в лог уходит OAuth-ссылка для аккаунта канала. Повторный `event_ready` награды заново не запускает. Награды открываются, только если идёт эфир
 6. **Итоги прошлого эфира** – если стрим идёт, `perks.on_stream_start()` выдаёт бонусы. Выданное второй раз не выдаётся, поэтому переподключение и перезапуск не задваивают объявление
 7. **Память** – `_start_memory()` запускает фоном `memory.memory_loop()`: сразу и дальше раз в 10 минут пишет хроники и профили законченных разговоров, в том числе закончившихся, пока бота не было. Повторный `event_ready` вторую проверку не запускает
@@ -344,7 +343,7 @@ asyncio.run(run_bot())
 
 ## Проактивные сообщения
 
-Фоновая задача `proactive_loop()` из `src/gemini/proactive.py`, запускается через `_start_background_tasks()` в `event_ready`. Ссылка на таск хранится в `Bot._proactive_task`. Reconnect guard: повторный вызов `event_ready` не создаёт дубликат, если предыдущий таск жив.
+Фоновая задача `proactive_loop()` из `src/gemini/proactive.py`, запускается через `_start_background_tasks()` в `event_ready`. Таск хранится в `Bot._tasks` под именем `proactive`. Повторный вызов `event_ready` не создаёт дубликат, если предыдущий таск жив.
 
 ### Логика
 
@@ -455,7 +454,7 @@ asyncio.run(run_bot())
 
 ## Напоминание о командах
 
-Фоновая задача `help_loop()` из `src/local/help_announce.py`, ссылка на таск – `Bot._help_task`. Активна при `HELP_ANNOUNCE_ENABLED=true`.
+Фоновая задача `help_loop()` из `src/local/help_announce.py`, таск – `Bot._tasks` под именем `help`. Активна при `HELP_ANNOUNCE_ENABLED=true`.
 
 1. Ждёт `HELP_ANNOUNCE_INTERVAL_MINUTES` (30) после старта, дальше раз в интервал
 2. Эфира нет – пропускает: вне стрима чат пустой, а команды игры всё равно закрыты

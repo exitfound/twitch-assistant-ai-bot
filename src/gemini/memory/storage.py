@@ -384,6 +384,21 @@ async def get_profile(username: str) -> Profile | None:
     return Profile(row[0], row[1], _relations(row[2]), row[3], row[4])
 
 
+async def get_profiles(usernames: list[str]) -> dict[str, Profile]:
+    """The profiles of those of the usernames that have one, in one query."""
+    if not usernames:
+        return {}
+    db = await get_db()
+    marks = ', '.join('?' * len(usernames))
+    async with db.execute(
+        'SELECT username, portrait, relations, last_conversation, sessions_seen'
+        f' FROM chatter_profiles WHERE username IN ({marks})',
+        usernames,
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return {row[0]: Profile(row[0], row[1], _relations(row[2]), row[3], row[4]) for row in rows}
+
+
 def _relations(raw: str | None) -> list[dict]:
     """The stored relations, only well-formed {nick, note} entries: readers index them
     directly, and one bad entry would break every answer that mentions the chatter."""

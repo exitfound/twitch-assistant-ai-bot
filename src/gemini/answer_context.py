@@ -43,7 +43,9 @@ logger = logging.getLogger(__name__)
 
 # Profiles in one answer: the asker plus up to three people named in the question
 MAX_PEOPLE = 4
-_NICK = re.compile(r'@?[\w]{3,}')
+# A Twitch login: 4–25 Latin letters, digits and underscores, standing as a whole word.
+# Russian words are never logins, so they are not looked up
+_NICK = re.compile(r'(?<!\w)[a-z0-9_]{4,25}(?!\w)', re.IGNORECASE)
 
 
 @dataclass
@@ -68,11 +70,13 @@ def is_stream_session(session_id: str) -> bool:
 async def _people(user: str, prompt: str) -> list[str]:
     """Profiles of the asker and of the chatters named in the question."""
     named = [clean_nick(w) for w in _NICK.findall(prompt)]
+    nicks = list(dict.fromkeys([user, *named]))
+    profiles = await storage.get_profiles(nicks)
     lines = []
-    for nick in dict.fromkeys([user, *named]):
+    for nick in nicks:
         if len(lines) >= MAX_PEOPLE:
             break
-        profile = await storage.get_profile(nick)
+        profile = profiles.get(nick)
         if profile is None:
             continue
         relations = '; '.join(f'{r["nick"]} – {r["note"]}' for r in profile.relations)

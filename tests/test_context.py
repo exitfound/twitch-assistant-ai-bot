@@ -2,7 +2,7 @@
 from unittest.mock import AsyncMock
 
 from src.core.config import Context, Memory
-from src.core.database import save_chat_message
+from src.core.database import get_db, save_chat_message
 from src.gemini import answer_context, summary
 from src.gemini.answer_context import Question
 from src.gemini.context import chat_chars, tail_within
@@ -58,3 +58,22 @@ async def test_summary_keeps_to_the_budget(db, monkeypatch):
     await summary.now(NOW, 'gop')
     first = walk.await_args.args[0][0][1]
     assert 'now059' in first and 'now040' in first and 'now039' not in first
+
+
+async def _profile(nick: str) -> None:
+    db = await get_db()
+    await db.execute(
+        'INSERT INTO chatter_profiles (username, portrait, relations, last_conversation, sessions_seen)'
+        " VALUES (?, ?, '[]', 'k', 1)", (nick, f'портрет {nick}'))
+    await db.commit()
+
+
+async def test_people_are_the_asker_and_the_logins_named(db):
+    for nick in ('gop', 'nosok222', 'dv4mp1r3'):
+        await _profile(nick)
+    lines = await answer_context._people('gop', 'что скажешь про @Nosok222, dv4mp1r3 и васю')
+    assert [line.split(':')[0] for line in lines] == ['gop', 'nosok222', 'dv4mp1r3']
+
+
+def test_russian_words_are_not_logins():
+    assert answer_context._NICK.findall('привет как дела gop5ter @ne2oi iphoneы') == ['gop5ter', 'ne2oi']

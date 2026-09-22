@@ -299,7 +299,7 @@ Session ID = **the stream** while the channel is live (`YYYY-MM-DD HH:MM` of its
 
 Context of a free-text answer (in order), built by `src/gemini/answer_context.py`:
 1. `[Сохранённые факты]` – asking user's own facts (always) + other users' facts matching prompt words
-2. `[Память о людях]` – profiles of the asker and of nicks named in the question (up to 4); `[Хроника прошлого стрима]` – the previous stream's chronicle
+2. `[Память о людях]` – profiles of the asker and of nicks named in the question (up to 4; a nick is a whole word of 4–25 Latin letters, digits and `_`, a Twitch login, fetched in one query by `storage.get_profiles()`); `[Хроника прошлого стрима]` – the previous stream's chronicle
 3. `[Прошлый стрим]` – the whole previous stream (last session before this one with `MEMORY_CONVERSATION_MIN_MESSAGES`+ messages); during a stream only
 4. `[Последние сообщения в чате]` – the whole current stream up to `CONTEXT_STREAM_MAX_MESSAGES` (2000, a safety cap; the longest stream had 1521); offline the day's last `CONTEXT_CHAT_MESSAGES`
 

@@ -48,6 +48,15 @@ async def test_covered_messages_are_not_taken_again(db):
     assert await storage.chat_blocks(Memory.SILENCE_MINUTES, uncovered=True) == [second]
 
 
+async def test_a_covered_conversation_between_two_uncovered_ones(db):
+    for hours_ago in (20, 12, 6):
+        await _say('a', f'разговор {hours_ago}', hours_ago)
+        await _say('b', f'ответ {hours_ago}', hours_ago - 0.1)
+    first, middle, last = await storage.chat_blocks(Memory.SILENCE_MINUTES, uncovered=False)
+    await storage.save_chronicle(middle, 'хроника', storage.ChronicleStatus.OK, [])
+    assert await storage.chat_blocks(Memory.SILENCE_MINUTES, uncovered=True) == [first, last]
+
+
 async def test_short_conversation_is_skipped_without_gemini(db):
     block = Block('2026-09-22 20:00', 1, 10, Memory.CONVERSATION_MIN_MESSAGES - 1)
     assert await build.process_block(block)

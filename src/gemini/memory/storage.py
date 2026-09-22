@@ -74,9 +74,12 @@ async def chat_blocks(silence_minutes: int, *, uncovered: bool) -> list[Block]:
     been quiet for silence_minutes; until then it may still go on.
     """
     db = await get_db()
+    # Chronicle ranges never overlap, so only the one starting last at or before a
+    # message can cover it: one lookup in idx_chronicles_first instead of a scan
+    # of every chronicle per message
     cover = (
-        ' AND NOT EXISTS (SELECT 1 FROM chronicles c'
-        ' WHERE m.id BETWEEN c.first_id AND c.last_id)'
+        ' AND COALESCE((SELECT c.last_id FROM chronicles c WHERE c.first_id <= m.id'
+        ' ORDER BY c.first_id DESC LIMIT 1), -1) < m.id'
     ) if uncovered else ''
     async with db.execute(
         f"SELECT m.id, CAST(strftime('%s', m.created_at) AS INTEGER) FROM chat_messages m"

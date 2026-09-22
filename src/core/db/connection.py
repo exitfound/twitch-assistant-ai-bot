@@ -5,6 +5,7 @@ connection: asyncio.gather over queries gives ordering, not parallelism.
 """
 import asyncio
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from contextvars import ContextVar
 from pathlib import Path
@@ -13,6 +14,8 @@ import aiosqlite
 
 # DB_PATH may be moved by BOT_DB_PATH – see src/core/paths.py
 from src.core.paths import DB_PATH
+
+logger = logging.getLogger(__name__)
 
 _db: aiosqlite.Connection | None = None
 _db_lock = asyncio.Lock()
@@ -67,13 +70,20 @@ async def transaction() -> AsyncIterator[aiosqlite.Connection]:
     async with _write_lock:
         token = _in_transaction.set(True)
         try:
-            await db.execute('BEGIN IMMEDIATE')
+            if db.in_transaction:
+                # Left open by something outside transaction(): every BEGIN would fail after it
+                logger.warning('База: незакрытая транзакция перед записью – откатываю')
+                await db.rollback()
             try:
+                await db.execute('BEGIN IMMEDIATE')
                 yield db
+                await db.commit()
             except BaseException:
+                # Unconditional: a cancelled BEGIN still runs in aiosqlite's thread, and the
+                # rollback is queued after it. A failed COMMIT would otherwise stay open and
+                # every later write fail – the bot deaf while its heartbeat reads healthy
                 await db.rollback()
                 raise
-            await db.commit()
         finally:
             _in_transaction.reset(token)
 

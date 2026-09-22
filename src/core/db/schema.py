@@ -32,7 +32,7 @@ async def init_db() -> None:
             logger.error('Схема: шаг «%s» не выполнен', name)
             raise
     if version != SCHEMA_VERSION:
-        # Written in the same transaction as the steps, after all of them succeeded
+        # Written last: only a start that went through every step records the version
         await db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
         logger.info('Схема: версия %d → %d', version, SCHEMA_VERSION)
     await db.commit()

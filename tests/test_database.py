@@ -1,5 +1,6 @@
 """Schema, quotas and the chat queries in src/core/db/, on a temporary database."""
 import asyncio
+import contextlib
 
 import pytest
 
@@ -160,3 +161,37 @@ async def test_another_writer_does_not_commit_a_half_done_transaction(db):
     with pytest.raises(RuntimeError):
         await task
     assert await _messages(db) == ['chat']
+
+
+async def test_a_failed_commit_does_not_block_every_later_write(db, monkeypatch):
+    """A commit that raises (a full or broken volume) left the transaction open, and every
+    later BEGIN failed: the bot went deaf while the heartbeat kept it «healthy»."""
+    real_commit = db.commit
+    calls = []
+
+    async def failing_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError('disk full')
+        await real_commit()
+    monkeypatch.setattr(db, 'commit', failing_once)
+    with pytest.raises(OSError):
+        await save_chat_message('s', 'a', 'lost')
+    await save_chat_message('s', 'b', 'next')
+    assert await _messages(db) == ['next']
+
+
+async def test_a_cancelled_begin_does_not_block_every_later_write(db):
+    """aiosqlite still runs a queued BEGIN after its awaiting task is cancelled: nobody
+    rolled it back, and the next transaction could not begin."""
+    async def write():
+        async with transaction() as tx:
+            await tx.execute("INSERT INTO chat_messages (session_id, username, message) VALUES ('s', 'a', 'x')")
+
+    task = asyncio.create_task(write())
+    await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await save_chat_message('s', 'b', 'next')
+    assert await _messages(db) == ['next']

@@ -28,10 +28,8 @@ async def emote_spam_loop(bot) -> None:
                 if not emotes:
                     continue
                 count = random.randint(Emote.SPAM_MIN, Emote.SPAM_MAX)
-                if len(emotes) >= count:
-                    sample = random.sample(emotes, count)
-                else:
-                    sample = random.choices(emotes, k=count)
+                # Fewer emotes than the batch size: repeats are allowed then
+                sample = random.sample(emotes, count) if len(emotes) >= count else random.choices(emotes, k=count)
                 await bot.send_chat_message(' '.join(sample))
             except Exception:
                 logger.exception('Спам эмотами не отправлен')

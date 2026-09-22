@@ -110,9 +110,7 @@ def _has_role(role: str | None, chatter) -> bool:
         return True
     if chatter.broadcaster or chatter.moderator or chatter.vip:
         return True
-    if role == ROLE_SUB_VIP_MOD_BROADCASTER and (chatter.subscriber or chatter.founder):
-        return True
-    return False
+    return role == ROLE_SUB_VIP_MOD_BROADCASTER and (chatter.subscriber or chatter.founder)
 
 
 def _cooldown_seconds(status: str) -> int:
@@ -206,11 +204,19 @@ class ChatComponent(commands.Component):
                              command=entry.trigger)
             return
 
+        # The cooldown is taken right after its check, with no await in between: twitchio
+        # runs every event in its own task, and two quick messages would both pass it
+        if seconds:
+            self.bot.set_cooldown(user, seconds, kind)
+
         # Quota on top of the cooldown: only Gemini requests count – they cost
-        # money. Local commands are held by the cooldown alone
-        if kind == KIND_GEMINI and not await self._within_channel_quota(message, user, status):
-            return
-        if kind == KIND_GEMINI and not await self._within_quota(message, user, status):
+        # money. Local commands are held by the cooldown alone. A refusal gives the
+        # cooldown back: nothing was served
+        if kind == KIND_GEMINI and not (
+            await self._within_channel_quota(message, user, status)
+            and await self._within_quota(message, user, status)
+        ):
+            self.bot.clear_cooldown(user, kind)
             return
 
         ctx = CommandContext(
@@ -224,10 +230,6 @@ class ChatComponent(commands.Component):
             args=entry.extract_args(prompt) if entry else '',
         )
 
-        # The cooldown is set before the network call – otherwise fast spam
-        # manages to start several generations in a row.
-        if seconds:
-            self.bot.set_cooldown(user, seconds, kind)
         if kind == KIND_GEMINI:
             # Recorded before generation: a failed request also cost a queue slot and money
             await record_bot_use(user, kind)
@@ -315,15 +317,20 @@ class ChatComponent(commands.Component):
         if entry is not None:
             return entry, lowered, False
 
-        bot_tag = f'@{self.bot.bot_name}'.lower()
-        is_mention = bot_tag in lowered
+        # The whole nick only: @botname_fan is somebody else
+        mention = re.compile(re.escape(f'@{self.bot.bot_name}') + r'(?!\w)', re.IGNORECASE)
+        is_mention = bool(mention.search(text))
         is_sosur = bool(SOSUR_RE.search(text))
         is_reply = reply_to_bot(message, self.bot.bot_id) is not None
         if not (is_mention or is_sosur or is_reply):
             return None, None, False
 
-        prompt = re.sub(re.escape(bot_tag), '', lowered)
-        prompt = SOSUR_RE.sub('', prompt).strip()
+        prompt = mention.sub('', lowered)
+        if not is_mention:
+            # Addressed by word: that one word goes, the rest is the question – a nick
+            # like securityexpert in it must reach the model
+            prompt = SOSUR_RE.sub('', prompt, count=1)
+        prompt = prompt.strip()
         if not prompt:
             prompt = lowered
         return self._registry.resolve(prompt), prompt, True

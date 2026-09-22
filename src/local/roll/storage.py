@@ -88,7 +88,7 @@ async def get_reward_ids() -> dict[str, str]:
     db = await get_db()
     async with db.execute('SELECT action, reward_id FROM rewards') as cursor:
         rows = await cursor.fetchall()
-    return {action: reward_id for action, reward_id in rows}
+    return dict(rows)
 
 
 async def save_reward_id(action: str, reward_id: str) -> None:

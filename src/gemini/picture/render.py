@@ -59,6 +59,11 @@ PREVIEW_QUALITY = 85
 # expands into hundreds of megapixels, and decoding would eat the memory
 MAX_PIXELS = 40_000_000
 
+# Longest side a picture is shrunk to right after decoding. The art is at most 52 dots
+# wide and the preview 512 px, so nothing is lost, while every later step – colour
+# conversion, compositing, crop – works on a copy that is megabytes, not hundreds of them
+WORK_PX = 1024
+
 
 def render(data: bytes, *, limit: int, max_cols: int) -> str | None:
     """A finished chat message, or None if drawing failed.
@@ -66,17 +71,8 @@ def render(data: bytes, *, limit: int, max_cols: int) -> str | None:
     A blocking function: decoding and resizing are CPU-bound,
     so it should be called via asyncio.to_thread.
     """
-    try:
-        img = Image.open(io.BytesIO(data))
-        # The size is known from the header and must be checked BEFORE load(): a
-        # hundred-kilobyte png expands into hundreds of megapixels, and decoding would
-        # eat the memory before there is any chance to refuse
-        if img.width * img.height > MAX_PIXELS:
-            logger.info('!ascii: картинка слишком большая: %dx%d', img.width, img.height)
-            return None
-        img.load()
-    except Exception:
-        logger.info('!ascii: файл не открылся как картинка')
+    img = _open(data)
+    if img is None:
         return None
 
     img, shape = _to_grayscale(img)
@@ -104,11 +100,10 @@ def preview(data: bytes, max_side: int = PREVIEW_PX) -> tuple[bytes, str] | None
     A small picture is enough to say what is drawn and whether it may be shown, while
     an original phone photo weighs megabytes and costs accordingly.
     """
+    img = _open(data)
+    if img is None:
+        return None
     try:
-        img = Image.open(io.BytesIO(data))
-        if img.width * img.height > MAX_PIXELS:
-            return None
-        img.load()
         # JPEG has no transparency, and it is not needed here anyway
         if img.mode not in ('RGB', 'L'):
             img = img.convert('RGB')
@@ -119,6 +114,28 @@ def preview(data: bytes, max_side: int = PREVIEW_PX) -> tuple[bytes, str] | None
         logger.info('!ascii: не удалось уменьшить картинку для Gemini', exc_info=True)
         return None
     return buffer.getvalue(), 'image/jpeg'
+
+
+def _open(data: bytes) -> Image.Image | None:
+    """Decode a picture, shrunk to WORK_PX before anything else touches it.
+
+    The size is known from the header and is checked BEFORE decoding: a hundred-kilobyte
+    png expands into hundreds of megapixels, and decoding would eat the memory before
+    there is any chance to refuse. A JPEG is decoded at a reduced scale right away (draft).
+    """
+    try:
+        img = Image.open(io.BytesIO(data))
+        if img.width * img.height > MAX_PIXELS:
+            logger.info('!ascii: картинка слишком большая: %dx%d', img.width, img.height)
+            return None
+        img.draft(img.mode, (WORK_PX, WORK_PX))
+        img.load()
+        if max(img.size) > WORK_PX:
+            img.thumbnail((WORK_PX, WORK_PX), Image.LANCZOS)
+    except Exception:
+        logger.info('!ascii: файл не открылся как картинка')
+        return None
+    return img
 
 
 def _binarize(img: Image.Image) -> Image.Image:

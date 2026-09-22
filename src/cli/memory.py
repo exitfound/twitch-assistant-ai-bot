@@ -8,6 +8,7 @@ chatters without a profile.
 import asyncio
 
 from src.core.config import Memory
+from src.core.utils import gather_cancelling
 from src.gemini import client
 from src.gemini.memory import build, storage
 
@@ -51,8 +52,8 @@ async def _chronicles(blocks: list[storage.Block], save: bool) -> dict[str, buil
         print(f'  {block.key}: {"готово" if chronicle else "Gemini ничего не вернул"}')
         return chronicle
 
-    results = await asyncio.gather(*(one(b) for b in blocks))
-    return {b.key: c for b, c in zip(blocks, results)}
+    results = await gather_cancelling(*(one(b) for b in blocks))
+    return {b.key: c for b, c in zip(blocks, results, strict=True)}
 
 
 async def build_memory(dry_run: bool, limit: int) -> None:
@@ -101,7 +102,7 @@ async def build_memory(dry_run: bool, limit: int) -> None:
         print(f'  {username}: {"готово" if profile else "не получилось"}')
         return profile is not None
 
-    done = await asyncio.gather(*(one(u) for u in missing))
+    done = await gather_cancelling(*(one(u) for u in missing))
 
     moved = await storage.move_unaddressed_facts()
     print(f'\nФакты без @ника перенесены в knowledge: {moved} новых строк')
@@ -141,7 +142,7 @@ async def _preview(blocks: list[storage.Block], chatters: dict[str, storage.Bloc
         build.first_profile(u, chatters[u], save=False, extra_events=events.get(u, []))
         for u in top
     ), return_exceptions=True)
-    for username, profile in zip(top, profiles):
+    for username, profile in zip(top, profiles, strict=True):
         if isinstance(profile, build.Unavailable):
             profile = None
         elif isinstance(profile, BaseException):
@@ -155,3 +156,7 @@ async def _preview(blocks: list[storage.Block], chatters: dict[str, storage.Bloc
 
 async def clear() -> None:
     await storage.clear_memory()
+
+
+async def counts() -> dict[str, int]:
+    return await storage.memory_counts()

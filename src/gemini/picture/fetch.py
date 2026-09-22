@@ -27,6 +27,9 @@ USER_AGENT = 'sosuryan-twitch-bot/1.0 (+https://twitch.tv)'
 # How many redirects are followed, each one checked
 MAX_REDIRECTS = 3
 
+# The whole download, redirects included, in units of PICTURE_TIMEOUT
+DEADLINE_FACTOR = 2
+
 # Error codes – these are also key names in CONTENT.md
 BAD_URL = 'ascii_bad_url'
 TOO_BIG = 'ascii_too_big'
@@ -42,17 +45,30 @@ class PictureError(Exception):
 
 
 async def fetch(url: str) -> tuple[bytes, str]:
-    """Download a picture. Returns (bytes, mime) or raises PictureError."""
-    async with httpx.AsyncClient(
-        follow_redirects=False,
-        timeout=Picture.TIMEOUT,
-        headers={'User-Agent': USER_AGENT},
-    ) as client:
-        for _ in range(MAX_REDIRECTS + 1):
-            await _check_url(url)
-            result, url = await _get(client, url)
-            if result is not None:
-                return result
+    """Download a picture. Returns (bytes, mime) or raises PictureError.
+
+    httpx's timeout applies to each connect and read separately, so a server dripping
+    a byte at a time never trips it: the whole download, redirects included, gets a
+    deadline of its own. The environment's proxy settings are ignored – behind a proxy
+    the peer check would see the proxy, not the host – and the body is asked for
+    uncompressed, since a compressed one is decoded past the size cap chunk by chunk.
+    """
+    try:
+        async with asyncio.timeout(Picture.TIMEOUT * DEADLINE_FACTOR):
+            async with httpx.AsyncClient(
+                follow_redirects=False,
+                timeout=Picture.TIMEOUT,
+                trust_env=False,
+                headers={'User-Agent': USER_AGENT, 'Accept-Encoding': 'identity'},
+            ) as client:
+                for _ in range(MAX_REDIRECTS + 1):
+                    await _check_url(url)
+                    result, url = await _get(client, url)
+                    if result is not None:
+                        return result
+    except TimeoutError:
+        logger.info('!ascii: скачивание не уложилось в %s с', Picture.TIMEOUT * DEADLINE_FACTOR)
+        raise PictureError(FAILED) from None
     logger.info('!ascii: слишком много переадресаций')
     raise PictureError(FAILED)
 
@@ -103,15 +119,15 @@ def _check_peer(response: httpx.Response) -> None:
     download (DNS rebinding). The established connection has nothing left to swap.
     """
     stream = response.extensions.get('network_stream')
-    if stream is None:
-        return
-    peer = stream.get_extra_info('server_addr')
-    if not peer:
-        return
+    peer = stream.get_extra_info('server_addr') if stream is not None else None
     try:
-        address = ipaddress.ip_address(peer[0])
+        address = ipaddress.ip_address(peer[0]) if peer else None
     except ValueError:
-        return
+        address = None
+    if address is None:
+        # Nothing to check means nothing proves the address is public
+        logger.warning('!ascii: не удалось узнать адрес соединения – отказ')
+        raise PictureError(BAD_URL)
     if not address.is_global:
         logger.warning('!ascii: соединение ушло на непубличный адрес %s', address)
         raise PictureError(BAD_URL)

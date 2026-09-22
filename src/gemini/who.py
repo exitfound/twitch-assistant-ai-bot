@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from src.core.config import Context
 from src.core.content import Content
 from src.core.database import (
-    get_relevant_facts, get_tagged_answers, get_user_interactions, get_user_messages,
+    get_tagged_answers, get_user_interactions, get_user_messages,
 )
 from src.gemini.answer_context import unique_rungs
 from src.gemini.context import ContextBuilder
@@ -95,7 +95,7 @@ class Material:
 async def material(nick: str, part: float, messages_n: int) -> Material:
     """A fresh sample of the chatter; part – the share of !who's sample sizes."""
     facts, events, sample, messages, interactions, profile = await asyncio.gather(
-        get_relevant_facts(nick, ''),
+        storage.facts_naming(nick),
         storage.random_events(nick, round(Context.WHO_EVENTS * part)),
         storage.random_messages(nick, round(Context.WHO_SAMPLE_MESSAGES * part), MIN_CHARS),
         get_user_messages(nick, messages_n),

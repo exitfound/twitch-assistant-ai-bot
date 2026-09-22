@@ -14,7 +14,8 @@ streams. A blocked request is asked again with less, one rung at a time:
   4. the same without memory, search and «language»
 A block comes back in ~0.3 s, so a rung costs almost no time. The output filter is
 random rather than about the size, so an answer it stopped is asked once more on the
-same rung; any other empty answer goes straight to the last rung.
+same rung; an answer with nothing in it goes straight to the last rung, and no answer
+at all (timeout, network) ends the walk.
 
 The ladder only decides how much of the stored data goes into one request. The context
 probe (src/cli/probe.py) uses this module too, so what is measured is what is sent.
@@ -67,7 +68,7 @@ async def _people(user: str, prompt: str) -> list[str]:
     """Profiles of the asker and of the chatters named in the question."""
     named = [clean_nick(w) for w in _NICK.findall(prompt)]
     lines = []
-    for nick in dict.fromkeys([user] + named):
+    for nick in dict.fromkeys([user, *named]):
         if len(lines) >= MAX_PEOPLE:
             break
         profile = await storage.get_profile(nick)
@@ -148,8 +149,11 @@ async def walk(rungs: list[tuple[str, str]], config: types.GenerateContentConfig
                user: str) -> tuple[str | None, str]:
     """The answer and the rung that gave it. Walks down the rungs while Gemini's
     input filter blocks the request; the random output filter gets one retry of the
-    same rung; any other empty answer jumps to the last rung. !who, !versus and !summary walk
-    their own rungs."""
+    same rung; an answer with nothing in it or a request the API refused for its content
+    jumps to the last rung. No answer at all (timeout, network, a bad key) ends the walk:
+    it says nothing about the prompt, and
+    another rung would only double the wait. !who, !versus and !summary walk their own
+    rungs."""
     for i, (name, prompt) in enumerate(rungs):
         text, block = await generate_checked(prompt, config)
         if not text and block == BLOCK_OUTPUT:
@@ -161,13 +165,17 @@ async def walk(rungs: list[tuple[str, str]], config: types.GenerateContentConfig
             if i:
                 logger.info('Ответ %s получен на ступени «%s»', user, name)
             return text, name
+        if block is None:
+            logger.warning('Gemini не ответил для %s на ступени «%s»', user, name)
+            return None, name
         if i == len(rungs) - 1:
             break
         if block == BLOCK_INPUT:
             logger.info('Запрос %s заблокирован фильтром Gemini на ступени «%s» – беру меньше',
                         user, name)
             continue
-        # Not a block: less context would not help, so jump to the last rung
+        # Answered with nothing (EMPTY, an output block twice) or rejected by the API
+        # (ERROR, which may be the size): go straight to the narrowest rung
         logger.warning('Пустой ответ для %s, повтор на последней ступени', user)
         name, prompt = rungs[-1]
         text, _ = await generate_checked(prompt, config)

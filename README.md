@@ -713,6 +713,7 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   │   ├── context.py       # ContextBuilder: сборка секционированных промптов
 │   │   ├── output.py        # Вывод Gemini в чат: лимиты Twitch, CAPS, markdown, тире, обрезка, куски
 │   │   ├── responder.py     # Конвейер ответа: очистка, стоп-лист, CAPS, эмот, отправка
+│   │   ├── limits.py        # Лимит за эфир для !who, !versus, !summary и !ascii: PerStreamLimit
 │   │   ├── ladder.py        # Лестница фолбэков: тот же запрос с меньшим контекстом при блокировке
 │   │   ├── answer_context.py # Контекст свободного ответа и его ступени
 │   │   ├── commands.py      # Болталка, !ask, !summary, !who, !versus, лимиты за эфир

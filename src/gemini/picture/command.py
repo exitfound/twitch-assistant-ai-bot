@@ -16,11 +16,10 @@ from google.genai import types
 from src.core.commands import CommandContext
 from src.core.config import Picture
 from src.core.content import Content
-from src.core.database import (
-    count_bot_uses_this_stream, record_bot_use, save_bot_interaction,
-)
+from src.core.database import save_bot_interaction
 from src.core.viewer import by_tier, tier_of
 from src.gemini.client import SAFETY_CHECK, generate, make_gen_config
+from src.gemini.limits import PerStreamLimit
 from src.gemini.output import TWITCH_MSG_MAX
 from src.gemini.picture.fetch import BAD_URL, PictureError, fetch
 from src.gemini.picture.render import preview, render
@@ -61,44 +60,18 @@ CHECK_TEMPERATURE = 0.2
 CACHE_SIZE = 32
 _cache: OrderedDict[str, tuple[str, str | None]] = OrderedDict()
 
-# Who is currently waiting for their picture. The limit is checked at the start and
-# counted after sending, seconds later, and a sub has neither cooldown nor quota, so
-# without one-at-a-time several commands pass the same check and overshoot the limit
-_busy: set[str] = set()
-
-
 async def handle_ascii(ctx: CommandContext) -> None:
-    if ctx.user in _busy:
-        # The first command is still drawing and will answer itself: silently drop
-        # the repeat and refund its quota
-        await ctx.refuse()
-        return
-    _busy.add(ctx.user)
-    try:
-        await _serve(ctx)
-    except Exception:
-        # Anything past the expected refusals (a Pillow or database error): the viewer
-        # paid a quota slot and must hear something rather than nothing
-        logger.exception('!ascii: ошибка для %s', ctx.user)
-        await ctx.message.respond(Content.text('ascii_failed', user=ctx.user))
-    finally:
-        _busy.discard(ctx.user)
+    await LIMIT.run(ctx, lambda: _serve(ctx))
 
 
-async def _serve(ctx: CommandContext) -> None:
-    limit = _limit_for(ctx.message.chatter)
-    if limit and await count_bot_uses_this_stream(ctx.user, USE_KIND, ctx.session_id) >= limit:
-        # Limit used up – spend neither traffic nor generation, refund the quota
-        await ctx.refuse()
-        await ctx.message.respond(Content.text('ascii_no_left', user=ctx.user, limit=limit))
-        return
-
+async def _serve(ctx: CommandContext) -> bool:
+    """Draw the picture from the command's link. True – it reached chat."""
     url = _find_url(ctx)
     if not url:
         # No link – no traffic or generation spent, refund the quota
         await ctx.refuse()
         await ctx.message.respond(Content.text('ascii_usage', user=ctx.user))
-        return
+        return False
 
     cached = _cache.get(url)
     if cached is not None:
@@ -107,7 +80,7 @@ async def _serve(ctx: CommandContext) -> None:
     else:
         result = await _draw(ctx, url)
         if result is None:
-            return
+            return False
         art, verdict = result
         if verdict is None or _verdict_word(verdict):
             _remember(url, art, verdict)
@@ -119,7 +92,7 @@ async def _serve(ctx: CommandContext) -> None:
             logger.info('!ascii: %s принёс картинку, которую Gemini показывать не дал: %r',
                         ctx.user, verdict.strip()[:100])
             await ctx.message.respond(Content.text('ascii_blocked', user=ctx.user))
-            return
+            return False
 
     # The art goes out without a reply: a reply prepends a nick, and the first
     # visual line is already taken by the bot's nick
@@ -127,19 +100,18 @@ async def _serve(ctx: CommandContext) -> None:
         # Not sent – the viewer saw no picture, nothing to charge the limit for
         logger.warning('!ascii: картинка для %s не ушла в чат', ctx.user)
         await ctx.message.respond(Content.text('ascii_failed', user=ctx.user))
-        return
-    # Recorded after sending: a refusal for any reason costs no limit.
-    # A cache repeat counts – the viewer still filled the chat with a picture.
-    # The picture is already in chat, so an error here is logged, not answered
-    try:
-        await record_bot_use(ctx.user, USE_KIND)
-        if description:
-            # Not said in chat, but remembered: otherwise the bot does not know what it
-            # showed at all and cannot talk about it later
-            logger.info('!ascii: %s принёс %s – %s', ctx.user, url, description)
+        return False
+    if description:
+        # Not said in chat, but remembered: otherwise the bot does not know what it
+        # showed at all and cannot talk about it later. The picture is already in chat,
+        # so an error here is logged, not answered
+        logger.info('!ascii: %s принёс %s – %s', ctx.user, url, description)
+        try:
             await save_bot_interaction(ctx.session_id, ctx.user, f'{TAG} {url}', description)
-    except Exception:
-        logger.exception('!ascii: картинка для %s показана, но не записана', ctx.user)
+        except Exception:
+            logger.exception('!ascii: картинка для %s показана, но не записана', ctx.user)
+    # A cache repeat counts too – the viewer still filled the chat with a picture
+    return True
 
 
 def _allowed(verdict: str) -> str | None:
@@ -207,6 +179,9 @@ def _limit_for(chatter) -> int:
     """
     return by_tier(tier_of(chatter), broadcaster=0, sub=Picture.PER_STREAM_SUB,
                    vip=Picture.PER_STREAM_VIP, regular=Picture.PER_STREAM_VIP)
+
+
+LIMIT = PerStreamLimit(USE_KIND, _limit_for, 'ascii_failed')
 
 
 def _find_url(ctx: CommandContext) -> str | None:

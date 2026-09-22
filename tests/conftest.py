@@ -60,8 +60,8 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(game, '_lock', asyncio.Lock())
     monkeypatch.setattr(build, '_slots', asyncio.Semaphore(build.MEMORY_CONCURRENCY))
     monkeypatch.setattr(build, '_lock', asyncio.Lock())
-    monkeypatch.setattr(commands, '_busy', collections.defaultdict(set))
-    monkeypatch.setattr(picture_command, '_busy', set())
+    for limit in [*commands.LIMITS.values(), picture_command.LIMIT]:
+        monkeypatch.setattr(limit, 'busy', set())
     monkeypatch.setattr(picture_command, '_cache', collections.OrderedDict())
     monkeypatch.setattr(perks, '_pending', {})
     monkeypatch.setattr(help_announce, '_help_shown_at', 0.0)

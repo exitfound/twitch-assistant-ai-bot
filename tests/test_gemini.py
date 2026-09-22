@@ -11,7 +11,7 @@ from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, Kind
 from src.core.config import Caps, Emote, Gemini, Who
 from src.core.database import count_bot_uses, get_db
-from src.gemini import client, commands, ladder, responder
+from src.gemini import client, commands, ladder, limits, responder
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR
 from src.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
 from src.gemini.who import WHO_KIND
@@ -253,27 +253,36 @@ async def test_send_chunked_says_so_when_there_is_nothing(db, ctx):
 async def test_per_stream_limit_counts_only_what_reached_chat(db, ctx, monkeypatch):
     monkeypatch.setattr(Who, 'PER_STREAM_FOLLOWER', 1)
     run = AsyncMock(return_value=False)
-    await commands._per_stream(ctx, WHO_KIND, run)
+    await commands.LIMITS[WHO_KIND].run(ctx, run)
     assert await count_bot_uses('gop', WHO_KIND, 60) == 0
 
     run.return_value = True
-    await commands._per_stream(ctx, WHO_KIND, run)
+    await commands.LIMITS[WHO_KIND].run(ctx, run)
     assert await count_bot_uses('gop', WHO_KIND, 60) == 1
 
     run.reset_mock()
-    await commands._per_stream(ctx, WHO_KIND, run)
+    await commands.LIMITS[WHO_KIND].run(ctx, run)
     run.assert_not_awaited()
     ctx.message.respond.assert_awaited_with('texts.who_no_left')
 
 
 async def test_one_command_per_viewer_at_a_time(db, ctx):
-    commands._busy[WHO_KIND].add('gop')
+    commands.LIMITS[WHO_KIND].busy.add('gop')
     run = AsyncMock(return_value=True)
-    await commands._per_stream(ctx, WHO_KIND, run)
+    await commands.LIMITS[WHO_KIND].run(ctx, run)
     run.assert_not_awaited()
 
 
 async def test_a_failing_command_answers_with_the_error_text(db, ctx):
-    await commands._per_stream(ctx, WHO_KIND, AsyncMock(side_effect=RuntimeError), error='who_failed')
-    ctx.message.respond.assert_awaited_with('texts.who_failed')
-    assert 'gop' not in commands._busy[WHO_KIND]
+    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(side_effect=RuntimeError))
+    ctx.message.respond.assert_awaited_with('texts.gen_failed')
+    assert 'gop' not in commands.LIMITS[WHO_KIND].busy
+
+
+async def test_a_bookkeeping_error_after_the_answer_is_not_reported(db, ctx, monkeypatch):
+    """The answer is already in chat: a failing count must not add «failed» under it."""
+    async def broken(*args):
+        raise RuntimeError('db locked')
+    monkeypatch.setattr(limits, 'record_bot_use', broken)
+    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    ctx.message.respond.assert_not_awaited()

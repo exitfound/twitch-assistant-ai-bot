@@ -17,7 +17,7 @@ person, so two people fit one request.
 A blocked request is asked again with less, as free-text answers do
 (ladder.walk()): the whole sample → a smaller one → the old context.
 
-The per-stream limits live with the handlers (_per_stream() in commands.py).
+The per-stream limits live with the handlers (LIMITS in commands.py, see limits.py).
 """
 import asyncio
 import random

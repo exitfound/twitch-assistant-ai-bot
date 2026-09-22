@@ -1,20 +1,19 @@
 """Commands that call Gemini."""
+import functools
 import logging
-from collections import defaultdict
 
 
 from src.core.commands import CommandContext
 from src.core.config import Gemini, Summary, Who
 from src.core.content import Content
-from src.core.database import (
-    count_bot_uses_this_stream, get_last_tagged_interaction, record_bot_use,
-)
+from src.core.database import get_last_tagged_interaction
 from src.core.utils import clean_nick, reply_to_bot
 from src.core.viewer import by_tier, tier_of
 from src.gemini import summary, who
 from src.gemini.answer_context import Question, answer
 from src.gemini.client import generate, make_gen_config
 from src.gemini.ladder import walk
+from src.gemini.limits import PerStreamLimit
 from src.gemini.output import WHO_MAX
 from src.gemini.responder import respond_and_save, send_chunked
 
@@ -93,7 +92,7 @@ async def handle_summary(ctx: CommandContext) -> None:
             return False
         return await send_chunked(ctx, result[0], tag)
 
-    await _per_stream(ctx, summary.KIND, run, error='summary_error')
+    await LIMITS[summary.KIND].run(ctx, run)
 
 
 # Per-stream limits of !who, !versus and !summary: kind → (follower, VIP, subscriber
@@ -108,36 +107,12 @@ def _limit_for(kind: str, chatter) -> int:
     return by_tier(tier_of(chatter), broadcaster=0, sub=sub, vip=vip, regular=follower)
 
 
-# Who is waiting for an answer right now, per command. The limit is checked before
-# generation and counted after sending, seconds later: a VIP's 10-second cooldown
-# could let a second command through with the same count. Hence one at a time
-_busy: dict[str, set[str]] = defaultdict(set)
-
-
-async def _per_stream(ctx: CommandContext, kind: str, run, error: str = 'gen_failed') -> None:
-    """A command under its per-stream limit, counted in bot_uses under `kind` like
-    !ascii pictures. run() sends the answer and returns whether it reached chat:
-    only that is counted, so a refusal costs nothing and a restart resets nothing."""
-    busy = _busy[kind]
-    if ctx.user in busy:
-        # The first command is still being written and will answer itself
-        await ctx.refuse()
-        return
-    # Taken before the first await, or two commands at once both pass the check
-    busy.add(ctx.user)
-    try:
-        limit = _limit_for(kind, ctx.message.chatter)
-        if limit and await count_bot_uses_this_stream(ctx.user, kind, ctx.session_id) >= limit:
-            await ctx.refuse()
-            await ctx.message.respond(Content.text(f'{kind}_no_left', user=ctx.user, limit=limit))
-            return
-        if await run():
-            await record_bot_use(ctx.user, kind)
-    except Exception:
-        logger.exception('Gemini !%s: ошибка для %s', kind, ctx.user)
-        await ctx.message.respond(Content.text(error, user=ctx.user))
-    finally:
-        busy.discard(ctx.user)
+# One limit per command. The limit function reads the config on every call
+LIMITS = {
+    who.WHO_KIND: PerStreamLimit(who.WHO_KIND, functools.partial(_limit_for, who.WHO_KIND), 'gen_failed'),
+    who.VERSUS_KIND: PerStreamLimit(who.VERSUS_KIND, functools.partial(_limit_for, who.VERSUS_KIND), 'gen_failed'),
+    summary.KIND: PerStreamLimit(summary.KIND, functools.partial(_limit_for, summary.KIND), 'summary_error'),
+}
 
 
 async def handle_who(ctx: CommandContext) -> None:
@@ -163,7 +138,7 @@ async def handle_who(ctx: CommandContext) -> None:
         await ctx.message.respond(Content.text('who_failed', user=ctx.user, target=target))
         return False
 
-    await _per_stream(ctx, who.WHO_KIND, run)
+    await LIMITS[who.WHO_KIND].run(ctx, run)
 
 
 async def handle_versus(ctx: CommandContext) -> None:
@@ -197,5 +172,5 @@ async def handle_versus(ctx: CommandContext) -> None:
         await ctx.message.respond(Content.text('versus_failed', user=ctx.user))
         return False
 
-    await _per_stream(ctx, who.VERSUS_KIND, run)
+    await LIMITS[who.VERSUS_KIND].run(ctx, run)
 

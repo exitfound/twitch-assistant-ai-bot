@@ -11,7 +11,7 @@ the memory – a few hundred characters, almost free. The chronicle appears only
 MEMORY_SILENCE_MINUTES of silence, so until then that stream's chat is retold instead,
 with the same ladder.
 
-Limited per viewer and stream like !who and !versus (_per_stream() in commands.py), the
+Limited per viewer and stream like !who and !versus (LIMITS in commands.py), the
 current and the previous stream sharing one count.
 """
 

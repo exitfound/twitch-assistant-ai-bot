@@ -12,6 +12,7 @@ from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, Kind
 from src.core.config import Gemini
 from src.core.database import count_bot_uses
+from src.gemini import limits
 from src.gemini.picture import command, fetch, render
 from src.gemini.picture.fetch import BAD_URL, PictureError
 
@@ -210,7 +211,7 @@ async def test_unexpected_error_answers_the_viewer(db, monkeypatch):
     ctx = _ascii_ctx()
     await command.handle_ascii(ctx)
     ctx.message.respond.assert_awaited_once_with('texts.ascii_failed')
-    assert 'gop' not in command._busy
+    assert 'gop' not in command.LIMIT.busy
 
 
 async def test_art_that_did_not_reach_chat_is_reported_and_not_counted(db, monkeypatch):
@@ -236,7 +237,7 @@ async def test_bookkeeping_error_after_the_art_is_not_reported_as_a_failure(db, 
         raise RuntimeError('db locked')
     monkeypatch.setattr(command, 'fetch', picture)
     monkeypatch.setattr(command.Picture, 'CHECK', False)
-    monkeypatch.setattr(command, 'record_bot_use', broken)
+    monkeypatch.setattr(limits, 'record_bot_use', broken)
     ctx = _ascii_ctx()
     await command.handle_ascii(ctx)
     ctx.bot.send_chat_message.assert_awaited_once()

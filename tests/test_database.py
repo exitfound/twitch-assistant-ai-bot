@@ -41,7 +41,7 @@ async def test_schema_has_every_table(db):
 
 
 def test_fts_query_is_sanitized():
-    assert _sanitize_fts_query('"; DROP TABLE x --') == 'DROP* OR TABLE* OR x'
+    assert _sanitize_fts_query('"; DROP TABLE x --') == 'drop* OR table* OR x'
     assert _sanitize_fts_query('!!!') == ''
 
 
@@ -49,6 +49,12 @@ async def test_search_finds_chat_and_survives_fts_syntax(db):
     await save_chat_message('s', 'gop', 'обсуждаем терраформ и кубернетес')
     assert await search_context('терраформ') == ['gop: обсуждаем терраформ и кубернетес']
     assert await search_context('" OR NEAR(') == []
+
+
+async def test_uppercase_operators_are_plain_words(db):
+    """Free text keeps its case: «NOT» or «OR» in a question must not break the search."""
+    await save_chat_message('s', 'gop', 'почему not работает')
+    assert await search_context('почему NOT работает AND OR', 5) == ['gop: почему not работает']
 
 
 async def test_has_chatted_looks_at_three_tables(db):

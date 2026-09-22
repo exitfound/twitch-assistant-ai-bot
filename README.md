@@ -707,10 +707,11 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   │   ├── viewer.py        # Лестница статусов зрителя: Tier, tier_of(), by_tier()
 │   │   ├── followers.py     # FollowerCache: фолловер ли зритель, по Helix с TTL-кешем
 │   │   ├── logging_setup.py # setup_logging(): консоль + опциональный файл с ротацией
-│   │   └── utils.py         # Чистые утилиты: CAPS, markdown, чанки, safe_format, стоп-лист
+│   │   └── utils.py         # Общие утилиты: ники, шаблоны, SOSUR_RE, локальное время
 │   ├── gemini/              # Всё, что стоит запроса к Gemini
 │   │   ├── client.py        # Gemini-клиент, generate() с ретраями, make_gen_config(), SAFETY_OFF
 │   │   ├── context.py       # ContextBuilder: сборка секционированных промптов
+│   │   ├── output.py        # Вывод Gemini в чат: лимиты Twitch, CAPS, markdown, тире, обрезка, куски
 │   │   ├── responder.py     # Конвейер ответа: очистка, стоп-лист, CAPS, эмот, отправка
 │   │   ├── answer_context.py # Контекст свободного ответа и лестница фолбэков при блокировке
 │   │   ├── commands.py      # Болталка, !ask, !summary, !who, !versus, лимиты за эфир

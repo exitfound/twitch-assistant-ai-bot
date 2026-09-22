@@ -7,10 +7,10 @@ from src.core.commands import CommandContext
 from src.core.config import Caps, Chat, Emote
 from src.core.content import Content
 from src.core.database import save_bot_interaction
-from src.core.utils import (
+from src.gemini.output import (
     caps_preserve_mentions, cleanup_response, find_banned, fix_dashes, is_caps,
     split_into_chunks, strip_markdown, trim_to_sentence,
-    CHUNK_SEND_DELAY, TWITCH_CHUNK_MAX, TWITCH_MSG_MAX,
+    CHUNK_SEND_DELAY, TWITCH_MSG_MAX,
 )
 
 logger = logging.getLogger(__name__)
@@ -53,7 +53,7 @@ async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
     if not text:
         return False
     if max_chunks > 1:
-        max_len = max_chunks * (TWITCH_CHUNK_MAX - CHUNK_SLACK)
+        max_len = max_chunks * (TWITCH_MSG_MAX - CHUNK_SLACK)
     text = cleanup_response(text, ctx.user, max_len)
     if not text or not passes_moderation(text):
         return False
@@ -64,7 +64,7 @@ async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
         await ctx.message.respond(f'@{ctx.user} {text}')
         await save_bot_interaction(ctx.session_id, ctx.user, tag, text)
         return True
-    chunks = split_into_chunks(text, TWITCH_CHUNK_MAX, TWITCH_CHUNK_MAX * max_chunks)[:max_chunks]
+    chunks = split_into_chunks(text, TWITCH_MSG_MAX, TWITCH_MSG_MAX * max_chunks)[:max_chunks]
     sent = await _send_chunks(ctx, chunks, tag)
     if sent:
         await save_bot_interaction(ctx.session_id, ctx.user, tag, ' '.join(sent))
@@ -111,8 +111,8 @@ async def send_chunked(
     # Trim up front and at a sentence end, with CHUNK_SLACK in reserve per chunk:
     # chunks are split at words and lose a few characters each, so a text of exactly
     # limit × 450 would spread over limit + 1 chunks – and the last one would be lost
-    text = trim_to_sentence(text, limit * (TWITCH_CHUNK_MAX - CHUNK_SLACK))
-    chunks = split_into_chunks(text, TWITCH_CHUNK_MAX, TWITCH_CHUNK_MAX * limit)[:limit]
+    text = trim_to_sentence(text, limit * (TWITCH_MSG_MAX - CHUNK_SLACK))
+    chunks = split_into_chunks(text, TWITCH_MSG_MAX, TWITCH_MSG_MAX * limit)[:limit]
     sent = await _send_chunks(ctx, chunks, tag)
     if sent:
         await save_bot_interaction(ctx.session_id, ctx.user, tag, ' '.join(sent))

@@ -18,6 +18,7 @@ from typing import NamedTuple
 from src.core.database import get_db, invalidate_knowledge_cache
 from src.core.utils import local_time
 
+
 class ChronicleStatus(StrEnum):
     OK = 'ok'
     FAILED = 'failed'

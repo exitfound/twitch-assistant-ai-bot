@@ -9,11 +9,10 @@ from src.core.content import Content
 from src.core.database import (
     count_bot_uses_this_stream, get_last_tagged_interaction, record_bot_use,
 )
-from src.core.utils import (
-    WHO_MAX, clean_nick, reply_to_bot,
-)
+from src.core.utils import clean_nick, reply_to_bot
 from src.core.viewer import by_tier, tier_of
 from src.gemini import summary, who
+from src.gemini.output import WHO_MAX
 from src.gemini.answer_context import Question, answer, walk
 from src.gemini.client import generate, make_gen_config
 from src.gemini.responder import respond_and_save, send_chunked

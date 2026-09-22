@@ -19,9 +19,9 @@ from src.core.content import Content
 from src.core.database import (
     count_bot_uses_this_stream, record_bot_use, save_bot_interaction,
 )
-from src.core.utils import TWITCH_MSG_MAX
 from src.core.viewer import by_tier, tier_of
 from src.gemini.client import SAFETY_CHECK, generate, make_gen_config
+from src.gemini.output import TWITCH_MSG_MAX
 from src.gemini.picture.fetch import BAD_URL, PictureError, fetch
 from src.gemini.picture.render import preview, render
 

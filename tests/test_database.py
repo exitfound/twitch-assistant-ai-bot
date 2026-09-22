@@ -1,10 +1,13 @@
 """Schema, quotas and the chat queries in src/core/db/, on a temporary database."""
+import pytest
+
 from src.core import database
 from src.core.database import (
     count_bot_uses, count_channel_bot_uses, forget_bot_use,
     get_user_interactions, has_chatted, init_db, record_bot_use, save_bot_interaction,
     save_chat_message, search_context,
 )
+from src.core.db import schema
 from src.core.db.knowledge import _sanitize_fts_query
 from src.local.roll.storage import save_roll
 
@@ -98,3 +101,18 @@ async def test_connection_waits_out_a_cli_writer(db):
     5 s the bot's chat inserts failed with «database is locked» and were lost."""
     async with db.execute('PRAGMA busy_timeout') as cursor:
         assert (await cursor.fetchone())[0] >= 30_000
+
+
+async def test_schema_version_is_recorded(db):
+    async with db.execute('PRAGMA user_version') as cursor:
+        assert (await cursor.fetchone())[0] == schema.SCHEMA_VERSION == len(schema.STEPS)
+
+
+async def test_a_failing_step_names_itself(db, monkeypatch, caplog):
+    """A migration that breaks on the live database must say which one it was."""
+    async def broken(db):
+        raise RuntimeError('disk I/O error')
+    monkeypatch.setattr(schema, 'STEPS', [*schema.STEPS[:2], ('rolls', broken)])
+    with pytest.raises(RuntimeError):
+        await init_db()
+    assert 'rolls' in caplog.text

@@ -14,9 +14,32 @@ logger = logging.getLogger(__name__)
 
 
 async def init_db() -> None:
+    """Bring the schema up to date, step by step, and open the database for use.
+
+    Each step checks for itself what is already done, because it runs on every start and
+    from every CLI command against the live database, possibly while an older bot process
+    is running on it. user_version records how many steps the file has been through.
+    """
     # The one explicit way to open the database again after close_db()
     reopen()
     db = await get_db()
+    async with db.execute('PRAGMA user_version') as cursor:
+        (version,) = await cursor.fetchone()
+    for name, step in STEPS:
+        try:
+            await step(db)
+        except Exception:
+            logger.error('Схема: шаг «%s» не выполнен', name)
+            raise
+    if version != SCHEMA_VERSION:
+        # Written in the same transaction as the steps, after all of them succeeded
+        await db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+        logger.info('Схема: версия %d → %d', version, SCHEMA_VERSION)
+    await db.commit()
+
+
+async def _chat_messages(db: aiosqlite.Connection) -> None:
+    """Chat_messages and its addressed column."""
     await db.execute('''
         CREATE TABLE IF NOT EXISTS chat_messages (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,6 +51,10 @@ async def init_db() -> None:
         )
     ''')
     await _migrate_chat_messages(db)
+
+
+async def _bot_interactions(db: aiosqlite.Connection) -> None:
+    """Bot_interactions: what the bot answered."""
     await db.execute('''
         CREATE TABLE IF NOT EXISTS bot_interactions (
             id           INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,6 +65,10 @@ async def init_db() -> None:
             created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+
+async def _facts(db: aiosqlite.Connection) -> None:
+    """Facts from the retired !fact."""
     await db.execute('''
         CREATE TABLE IF NOT EXISTS facts (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,6 +78,10 @@ async def init_db() -> None:
             UNIQUE(username, fact)
         )
     ''')
+
+
+async def _knowledge(db: aiosqlite.Connection) -> None:
+    """Knowledge, with the source column and its index."""
     # source – where a row came from (a file, a Telegram chat, 'facts'), so one
     # source can be removed whole with --clear-lore --source. NULL where it is unknown
     await db.execute('''
@@ -62,6 +97,10 @@ async def init_db() -> None:
         await db.execute('ALTER TABLE knowledge ADD COLUMN source TEXT')
         logger.warning('В knowledge добавлена колонка source')
     await db.execute('CREATE INDEX IF NOT EXISTS idx_knowledge_source ON knowledge(source)')
+
+
+async def _bot_uses(db: aiosqlite.Connection) -> None:
+    """Bot_uses: the journal of Gemini requests."""
     # Journal of Gemini requests: the viewer's hourly quota is counted from it.
     # In the DB, not in memory, so a bot restart does not reset the limits
     await db.execute('''
@@ -75,6 +114,10 @@ async def init_db() -> None:
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_bot_uses_user_time ON bot_uses(username, created_at)'
     )
+
+
+async def _rolls(db: aiosqlite.Connection) -> None:
+    """Rolls and its added columns."""
     # Tables of the !roll game: rolls, rewards, roll_actions, roll_perks. Schema and migrations
     # live here with all the others, their queries – in src/local/roll/storage.py
     await db.execute('''
@@ -93,6 +136,10 @@ async def init_db() -> None:
         )
     ''')
     await _migrate_rolls(db)
+
+
+async def _rewards(db: aiosqlite.Connection) -> None:
+    """Rewards: action → Twitch reward id."""
     # Which channel-points rewards the bot has already created in Twitch: the id is
     # needed so that renaming a reward does not spawn duplicates
     await db.execute('''
@@ -101,6 +148,10 @@ async def init_db() -> None:
             reward_id TEXT NOT NULL
         )
     ''')
+
+
+async def _roll_actions(db: aiosqlite.Connection) -> None:
+    """Roll_actions: the journal of redemptions."""
     # Journal of redeemed rewards: who, whom, with what, what it was and what it became.
     # It also guards against reprocessing and stores shields – a shield is a successful entry
     await db.execute('''
@@ -121,6 +172,10 @@ async def init_db() -> None:
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_roll_actions_target ON roll_actions(session_id, target, action)'
     )
+
+
+async def _roll_perks(db: aiosqlite.Connection) -> None:
+    """Roll_perks: perks from the previous stream."""
     # Game perks from the previous stream's results: a shield for the «китежанин»,
     # a curse for the «залупа». active_from – first appearance in the stream, the
     # countdown starts from it
@@ -136,6 +191,10 @@ async def init_db() -> None:
             PRIMARY KEY (session_id, username, perk)
         )
     ''')
+
+
+async def _streams(db: aiosqlite.Connection) -> None:
+    """Streams: Twitch stream id → bot session."""
     # Channel streams. The bot session is the stream, not the calendar day: the stream id
     # is bound to the session, so a restart mid-stream continues the same one.
     # A short outage gives a new id but the same session
@@ -147,6 +206,10 @@ async def init_db() -> None:
             ended_at   REAL
         )
     ''')
+
+
+async def _memory(db: aiosqlite.Connection) -> None:
+    """The memory: chronicles, chatter_events, memory_state, chatter_profiles."""
     # The bot's memory of chatters (src/gemini/memory/), keyed by conversation – chat
     # between two long silences, named by the Moscow time of its first message. A row
     # covers messages first_id..last_id; 'failed' and 'skipped' are not retried
@@ -202,6 +265,10 @@ async def init_db() -> None:
             updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
+
+
+async def _indexes(db: aiosqlite.Connection) -> None:
+    """Indexes on the older tables."""
     await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_knowledge_content ON knowledge(content)'
     )
@@ -222,10 +289,38 @@ async def init_db() -> None:
     await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_username_fact ON facts(username, fact)'
     )
+
+
+async def _legacy(db: aiosqlite.Connection) -> None:
+    """Drop retired tables and triggers."""
     await _drop_legacy_objects(db)
+
+
+async def _fts(db: aiosqlite.Connection) -> None:
+    """FTS5 tables and their sync triggers."""
     await _migrate_fts(db)
     await _create_fts_triggers(db)
-    await db.commit()
+
+
+# In this order: the memory migration renames tables the later steps create anew, and
+# the indexes and FTS tables need the tables they are built on
+STEPS = [
+    ('chat_messages', _chat_messages),
+    ('bot_interactions', _bot_interactions),
+    ('facts', _facts),
+    ('knowledge', _knowledge),
+    ('bot_uses', _bot_uses),
+    ('rolls', _rolls),
+    ('rewards', _rewards),
+    ('roll_actions', _roll_actions),
+    ('roll_perks', _roll_perks),
+    ('streams', _streams),
+    ('memory', _memory),
+    ('indexes', _indexes),
+    ('legacy', _legacy),
+    ('fts', _fts),
+]
+SCHEMA_VERSION = len(STEPS)
 
 
 _ROLLS_COLUMNS = {

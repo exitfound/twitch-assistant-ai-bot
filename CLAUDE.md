@@ -109,7 +109,7 @@ A feature that grows its own tables, texts and background loops gets **its own s
 - `src/core/database.py` – the facade: re-exports `src/core/db/`, so callers import every query from one place and do not care which module holds it
 - `src/core/db/` – SQLite async (aiosqlite), one module per concern:
   - `connection.py` – the shared connection `get_db()` / `close_db()` / `reopen()` (the module state tests patch), `backup_db()`, `vacuum_db()`
-  - `schema.py` – `init_db()`: schema and migrations for **all** tables, roll ones included
+  - `schema.py` – `init_db()`: schema and migrations for **all** tables, roll ones included, as named steps in `STEPS`; `user_version` = `SCHEMA_VERSION`
   - `chat.py` – `chat_messages`: `save_chat_message()`, the chat windows, `has_chatted()`, `get_chat_after()` for the command reminder, the `!stat` numbers
   - `interactions.py` – `bot_interactions`: `get_last_tagged_interaction()` for `!ask` follow-ups, tagged answers
   - `knowledge.py` – `knowledge` and `facts`: FTS5 search, the random «language» sample and its id cache, facts
@@ -361,4 +361,4 @@ Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_C
 - Adding a text: `CONTENT.md` + `REQUIRED` in `src/core/content.py`. Never inline a chat-visible string in a handler
 - Editing `CONTENT.md` while the bot runs: the running process hot-reloads it and renders it with **its own, old** code. Adding a placeholder to an existing key before the restart makes `safe_format()` fail and the raw template (`@{user} выбил {value}…`) goes to chat. Add a new key instead
 - Changing rewards: title/prompt in `CONTENT.md`, cost/limit in `.env` – both reach Twitch only on restart. Never create the rewards by hand in the dashboard
-- Changing the DB schema: `init_db()` must stay idempotent – it runs on every start against a live 90-session database
+- Changing the DB schema: `init_db()` must stay idempotent – it runs on every start against a live 90-session database. It is a list of named steps, `STEPS` in `src/core/db/schema.py`, walked in order; a change is a new step at the end (or an edit inside the step that owns the table) that checks for itself whether it is already done. `PRAGMA user_version` holds `len(STEPS)` and is written with the steps, and a step that fails is named in the log

@@ -185,7 +185,7 @@ docker compose run --rm bot /app/bot.py --backup /data/copy.db
 | Класс | Команды | Чем обслуживается |
 |---|---|---|
 | **локальные** | `!help-bot`, `!stat`, `!roll`, `!rollstat` | SQLite и текст из `CONTENT.md` – отвечают мгновенно и ничего не стоят |
-| **Gemini** | `!ascii`, `!ask`, `!summary`, `!who`, `!versus` и любое свободное обращение к боту | Запрос к Gemini API: деньги, ожидание до минуты, место в семафоре |
+| **Gemini** | `!ascii`, `!ask`, `!summary`, `!who`, `!versus` и любое свободное обращение к боту | Запрос к Gemini API: деньги, ожидание до `GEMINI_ANSWER_DEADLINE` (30 с), место в семафоре |
 
 Счётчики независимы: пока висит пауза после `!ask`, нажать `!help-bot` можно.
 
@@ -602,6 +602,7 @@ docker compose run --rm bot /app/bot.py --lore-sources
 | `GEMINI_CONCURRENCY` | `5` | Одновременных запросов к Gemini |
 | `GEMINI_TIMEOUT` | `60` | Таймаут запроса, сек |
 | `GEMINI_RETRIES` | `2` | Повторы на транзиентных ошибках (429/5xx/сеть). Таймаут не повторяется |
+| `GEMINI_ANSWER_DEADLINE` | `30` | Дедлайн ответа в чат целиком, сек: очередь, повторы, ступени лестницы. Память его не имеет |
 | `LOG_LEVEL` | `INFO` | Уровень логирования бота (для CLI-команд – `WARNING`) |
 | `LOG_FILE` | – | Файл логов с ротацией. Пусто – только консоль |
 | `LOG_FILE_MAX_BYTES` | `5000000` | Размер файла лога до ротации |

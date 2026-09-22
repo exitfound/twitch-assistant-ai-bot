@@ -169,6 +169,9 @@ class Gemini:
     CONCURRENCY: int = _env_int('GEMINI_CONCURRENCY', 5, 1, 50)
     TIMEOUT: int = _env_int('GEMINI_TIMEOUT', 60, 5, 600)
     RETRIES: int = _env_int('GEMINI_RETRIES', 2, 0, 5)
+    # One answer in chat, all of it: the wait for a slot, retries, pauses and fallback
+    # rungs. GEMINI_TIMEOUT bounds a single request; the memory has no deadline
+    ANSWER_DEADLINE: int = _env_int('GEMINI_ANSWER_DEADLINE', 30, 5, 600)
 
 class Chat:
     # !summary's message cap, the same 2 as !ask and !versus

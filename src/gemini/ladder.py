@@ -4,10 +4,12 @@ Gemini's input filter cannot be switched off and judges a request by combination
 messages, so a blocked request is asked again with less. Free-text answers
 (answer_context.py), !who, !versus and !summary build their own rungs and walk them here.
 """
+import asyncio
 import logging
 
 from google.genai import types
 
+from src.core.config import Gemini
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, generate_checked
 
 logger = logging.getLogger(__name__)
@@ -31,8 +33,23 @@ async def walk(rungs: list[Rung], config: types.GenerateContentConfig, user: str
     input filter blocks the request; the random output filter gets one retry of the
     same rung; an answer with nothing in it or a request the API refused for its content
     jumps to the last rung. No answer at all (timeout, network, a bad key) ends the walk:
-    it says nothing about the prompt, and another rung would only double the wait."""
+    it says nothing about the prompt, and another rung would only double the wait.
+    The whole walk fits in Gemini.ANSWER_DEADLINE."""
+    reached = [rungs[0][0]]
+    try:
+        async with asyncio.timeout(Gemini.ANSWER_DEADLINE):
+            return await _walk(rungs, config, user, reached)
+    except TimeoutError:
+        logger.warning('Ответ %s не уложился в %d с, ступень «%s»',
+                       user, Gemini.ANSWER_DEADLINE, reached[0])
+        return None, reached[0]
+
+
+async def _walk(rungs: list[Rung], config: types.GenerateContentConfig, user: str,
+                reached: list[str]) -> tuple[str | None, str]:
+    """walk() without the deadline; reached[0] is the rung being asked."""
     for i, (name, prompt) in enumerate(rungs):
+        reached[0] = name
         text, block = await generate_checked(prompt, config)
         if not text and block == BLOCK_OUTPUT:
             # The output filter is random – the same prompt usually passes on the
@@ -56,6 +73,7 @@ async def walk(rungs: list[Rung], config: types.GenerateContentConfig, user: str
         # (ERROR, which may be the size): go straight to the narrowest rung
         logger.warning('Пустой ответ для %s, повтор на последней ступени', user)
         name, prompt = rungs[-1]
+        reached[0] = name
         text, _ = await generate_checked(prompt, config)
         return text, name
     return None, rungs[-1][0]

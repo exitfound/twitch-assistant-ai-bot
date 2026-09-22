@@ -24,8 +24,7 @@ class Kind(StrEnum):
 
 
 class Role(StrEnum):
-    VIP_MOD_BROADCASTER = 'vip_mod_broadcaster'
-    # Same ladder, but a subscriber passes too: !ascii is open from the sub badge up
+    # From the subscriber badge up: VIP, moderator and broadcaster pass too (!ascii)
     SUB_VIP_MOD_BROADCASTER = 'sub_vip_mod_broadcaster'
 
 
@@ -82,7 +81,7 @@ class CommandEntry:
     trigger: str
     handler: Handler
     prefix: bool
-    role: Role | None           # None = everyone, Role.VIP_MOD_BROADCASTER = VIP/mod/broadcaster
+    role: Role | None           # None = everyone, otherwise the badges it needs
     kind: Kind                  # Kind.LOCAL | Kind.GEMINI
 
     def match(self, prompt: str) -> bool:

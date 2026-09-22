@@ -67,7 +67,6 @@ def _quota_per_hour(tier: Tier) -> int:
 
 # Which refusal to show when the badge is not enough
 ROLE_DENIED_TEXTS = {
-    Role.VIP_MOD_BROADCASTER: 'role_denied',
     Role.SUB_VIP_MOD_BROADCASTER: 'role_denied_sub',
 }
 
@@ -81,9 +80,9 @@ def _has_role(role: Role | None, chatter: twitchio.Chatter) -> bool:
     """
     if role is None:
         return True
-    if chatter.broadcaster or chatter.moderator or chatter.vip:
-        return True
-    return role == Role.SUB_VIP_MOD_BROADCASTER and (chatter.subscriber or chatter.founder)
+    # The one role there is: from the subscriber badge up
+    return bool(chatter.broadcaster or chatter.moderator or chatter.vip
+                or chatter.subscriber or chatter.founder)
 
 
 def _cooldown_seconds(tier: Tier) -> int:

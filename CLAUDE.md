@@ -190,7 +190,7 @@ Flow:
    - `perks.on_chat()` – a player's first message in the stream starts their perk countdown and announces it
    - `route()` (via `_route()`, which adds the reply check) returns `(entry, prompt, addressed)` and runs **before** the message is saved, because `addressed` is stored with it: **every command matches the raw text first**, no addressing needed, and its args are taken verbatim (so `!who securityexpert` keeps the nick). Free text requires `(?:сосур|secur)\w*` (variants listed in `SOSUR_VARIANTS`) / `@botname` (the whole nick: `@botname_fan` is someone else) / reply to the bot, after which the trigger is stripped – the mention, or when there is none the first call word only, so a nick like `securityexpert` in the question itself reaches the model – and the command lookup runs again (`сосурян !who ник` still works)
    - Resolves the wait from the chatter's status alone (one ladder for everything), then checks it in the scope of the command's class
-   - Checks `role='vip_mod_broadcaster'` against `chatter.vip/moderator/broadcaster`
+   - Checks the entry's role against the badges: the one role there is, `Role.SUB_VIP_MOD_BROADCASTER` (`!ascii`), lets in a subscriber (founder included), VIP, moderator or broadcaster
    - Sets the cooldown in the class scope declared on the entry **right after its check, with no `await` in between**: twitchio runs every event in its own task, and two messages a millisecond apart would otherwise both pass and start two generations. The quota checks come after, and a quota refusal gives the cooldown back
    - Builds `CommandContext` with `args` extracted by the matched entry, records the Gemini use, calls the handler
    - Falls through to `handle_default(ctx)` if no command matched

@@ -48,7 +48,7 @@ REQUIRED = {
     'texts': (
         'help', 'help_announce', 'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
         'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',
-        'cooldown_local', 'cooldown_gemini', 'role_denied', 'role_denied_sub',
+        'cooldown_local', 'cooldown_gemini', 'role_denied_sub',
         'follow_required', 'quota_exceeded', 'quota_channel',
         'roll_loser_self', 'roll_loser_other', 'roll_free_left', 'roll_champion',
         'roll_cursed_self', 'roll_cursed_other',

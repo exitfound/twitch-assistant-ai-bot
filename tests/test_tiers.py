@@ -54,18 +54,18 @@ def test_cooldown_and_quota(who_, cooldown, quota):
     assert component._quota_per_hour(tier) == quota
 
 
-@pytest.mark.parametrize(('who_', 'vip_role', 'sub_role'), [
-    ('broadcaster', True, True),
-    ('moderator', True, True),
-    ('vip', True, True),
-    ('subscriber', False, True),
-    ('founder', False, True),
-    ('regular', False, False),
+@pytest.mark.parametrize(('who_', 'sub_role'), [
+    ('broadcaster', True),
+    ('moderator', True),
+    ('vip', True),
+    ('subscriber', True),
+    ('founder', True),
+    ('sub_vip', True),
+    ('regular', False),
 ])
-def test_roles_look_at_badges(who_, vip_role, sub_role):
+def test_roles_look_at_badges(who_, sub_role):
     chatter = make_chatter(**BADGES[who_])
     assert component._has_role(None, chatter)
-    assert component._has_role(Role.VIP_MOD_BROADCASTER, chatter) is vip_role
     assert component._has_role(Role.SUB_VIP_MOD_BROADCASTER, chatter) is sub_role
 
 

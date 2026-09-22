@@ -12,6 +12,7 @@ from src.core.database import (
 from src.core.utils import (
     WHO_MAX, clean_nick, reply_to_bot,
 )
+from src.core.viewer import by_tier, tier_of
 from src.gemini import summary, who
 from src.gemini.answer_context import Question, answer, walk
 from src.gemini.client import generate, make_gen_config
@@ -99,18 +100,12 @@ async def handle_summary(ctx: CommandContext) -> None:
 # or moderator), 0 – unlimited. The broadcaster is never limited; a subscribing VIP
 # counts as a subscriber
 def _limit_for(kind: str, chatter) -> int:
-    if chatter.broadcaster:
-        return 0
     follower, vip, sub = {
         who.WHO_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
         who.VERSUS_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
         summary.KIND: (Summary.PER_STREAM_FOLLOWER, Summary.PER_STREAM_VIP, Summary.PER_STREAM_SUB),
     }[kind]
-    if chatter.moderator or chatter.subscriber or chatter.founder:
-        return sub
-    if chatter.vip:
-        return vip
-    return follower
+    return by_tier(tier_of(chatter), broadcaster=0, sub=sub, vip=vip, regular=follower)
 
 
 # Who is waiting for an answer right now, per command. The limit is checked before

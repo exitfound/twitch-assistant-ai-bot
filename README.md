@@ -703,6 +703,7 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   │   ├── content.py       # Загрузка CONTENT.md: Content.prompt/label/text/items, mtime-кеш
 │   │   ├── database.py      # SQLite: схема и миграции всех таблиц, FTS5, запросы чата, фактов и лора, бэкап
 │   │   ├── stream.py        # Сессия = эфир: StreamTracker, перезапуск и обрыв стрима
+│   │   ├── viewer.py        # Лестница статусов зрителя: Tier, tier_of(), by_tier()
 │   │   ├── followers.py     # FollowerCache: фолловер ли зритель, по Helix с TTL-кешем
 │   │   ├── logging_setup.py # setup_logging(): консоль + опциональный файл с ротацией
 │   │   └── utils.py         # Чистые утилиты: CAPS, markdown, чанки, safe_format, стоп-лист

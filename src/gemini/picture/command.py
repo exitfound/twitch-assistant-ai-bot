@@ -20,6 +20,7 @@ from src.core.database import (
     count_bot_uses_this_stream, record_bot_use, save_bot_interaction,
 )
 from src.core.utils import TWITCH_MSG_MAX
+from src.core.viewer import by_tier, tier_of
 from src.gemini.client import SAFETY_CHECK, generate, make_gen_config
 from src.gemini.picture.fetch import BAD_URL, PictureError, fetch
 from src.gemini.picture.render import preview, render
@@ -202,13 +203,10 @@ def _limit_for(chatter) -> int:
 
     Only those the dispatcher let in get this far: the command is open from the
     subscriber badge up, and is not available at all to a follower or a
-    non-follower. So the last branch is the VIP.
+    non-follower, so a regular viewer never gets here.
     """
-    if chatter.broadcaster:
-        return 0
-    if chatter.moderator or chatter.subscriber or chatter.founder:
-        return Picture.PER_STREAM_SUB
-    return Picture.PER_STREAM_VIP
+    return by_tier(tier_of(chatter), broadcaster=0, sub=Picture.PER_STREAM_SUB,
+                   vip=Picture.PER_STREAM_VIP, regular=Picture.PER_STREAM_VIP)
 
 
 def _find_url(ctx: CommandContext) -> str | None:

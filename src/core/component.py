@@ -22,6 +22,7 @@ from src.core.database import (
 )
 from src.core.followers import FollowerCache
 from src.core.utils import SOSUR_RE, SOSUR_VARIANTS, reply_to_bot  # noqa: F401  (SOSUR_VARIANTS – the public place to edit the list)
+from src.core.viewer import Tier, by_tier, tier_of
 from src.gemini.commands import (
     handle_ask, handle_default, handle_summary, handle_versus, handle_who,
 )
@@ -43,12 +44,6 @@ ROLL_TRIGGER = '!roll'
 ROLLSTAT_TRIGGER = '!rollstat'
 ASCII_TRIGGER = '!ascii'
 
-# Viewer status – the cooldown length depends on it
-STATUS_BROADCASTER = 'broadcaster'
-STATUS_MODERATOR = 'moderator'
-STATUS_SUB = 'subscriber'
-STATUS_VIP = 'vip'
-STATUS_REGULAR = 'regular'
 # Cooldown scope for the «follow the channel» hint: so the bot does not repeat it
 # on every message of a non-following viewer
 FOLLOW_HINT_SCOPE = 'follow_hint'
@@ -60,36 +55,14 @@ DENY_SCOPE = 'deny'
 DENY_REPEAT_SECONDS = 30
 
 
-def _status_of(chatter) -> str:
-    """Status for cooldowns.
-
-    Sub is checked before VIP: someone who is both gets the gentler
-    cooldown. Channel founders wear their own badge instead of the
-    subscriber one, so it counts too.
-    """
-    if chatter.broadcaster:
-        return STATUS_BROADCASTER
-    if chatter.moderator:
-        return STATUS_MODERATOR
-    if chatter.subscriber or chatter.founder:
-        return STATUS_SUB
-    if chatter.vip:
-        return STATUS_VIP
-    return STATUS_REGULAR
-
-
-def _quota_per_hour(status: str) -> int:
+def _quota_per_hour(tier: Tier) -> int:
     """Cap on Gemini requests per window. 0 – no limit.
 
     Same ladder as the cooldown: whoever paid or wears a badge is not
     limited at all. A limit on top of the cooldown guards against slow but
     constant draining: the cooldown holds the pace, the quota holds the volume.
     """
-    if status in (STATUS_BROADCASTER, STATUS_MODERATOR, STATUS_SUB):
-        return 0
-    if status == STATUS_VIP:
-        return Quota.VIP_PER_HOUR
-    return Quota.FOLLOWER_PER_HOUR
+    return by_tier(tier, broadcaster=0, sub=0, vip=Quota.VIP_PER_HOUR, regular=Quota.FOLLOWER_PER_HOUR)
 
 
 # Which refusal to show when the badge is not enough
@@ -102,7 +75,7 @@ ROLE_DENIED_TEXTS = {
 def _has_role(role: str | None, chatter) -> bool:
     """Whether the badges are enough for the command.
 
-    Badges are checked directly, not through _status_of(): that one folds
+    Badges are checked directly, not through tier_of(): that one folds
     subscriber and VIP into one status for the cooldown, and a subscribing VIP
     would otherwise be refused where VIPs are let in.
     """
@@ -113,17 +86,13 @@ def _has_role(role: str | None, chatter) -> bool:
     return role == ROLE_SUB_VIP_MOD_BROADCASTER and (chatter.subscriber or chatter.founder)
 
 
-def _cooldown_seconds(status: str) -> int:
-    """Wait in seconds for a viewer status. 0 – no cooldown.
+def _cooldown_seconds(tier: Tier) -> int:
+    """Wait in seconds for a viewer tier. 0 – no cooldown.
 
     One ladder for both command classes and for free text addressed to the bot.
     Whoever paid or wears a badge does not wait at all.
     """
-    if status in (STATUS_BROADCASTER, STATUS_MODERATOR, STATUS_SUB):
-        return 0
-    if status == STATUS_VIP:
-        return Cooldown.VIP
-    return Cooldown.REGULAR
+    return by_tier(tier, broadcaster=0, sub=0, vip=Cooldown.VIP, regular=Cooldown.REGULAR)
 
 
 
@@ -182,12 +151,12 @@ class ChatComponent(commands.Component):
         # Free text addressed to the bot goes to Gemini just like !ask, so it
         # shares the counter with Gemini commands, not with local ones.
         kind = entry.kind if entry is not None else KIND_GEMINI
-        status = _status_of(chatter)
-        seconds = _cooldown_seconds(status)
+        tier = tier_of(chatter)
+        seconds = _cooldown_seconds(tier)
 
         # Without a follow the bot does not answer: the exception is help, which
         # is how a viewer learns what following is for
-        if status == STATUS_REGULAR and not await self._allowed_without_follow(message, user, entry):
+        if tier == Tier.REGULAR and not await self._allowed_without_follow(message, user, entry):
             return
 
         if seconds:
@@ -213,8 +182,8 @@ class ChatComponent(commands.Component):
         # money. Local commands are held by the cooldown alone. A refusal gives the
         # cooldown back: nothing was served
         if kind == KIND_GEMINI and not (
-            await self._within_channel_quota(message, user, status)
-            and await self._within_quota(message, user, status)
+            await self._within_channel_quota(message, user, tier)
+            and await self._within_quota(message, user, tier)
         ):
             self.bot.clear_cooldown(user, kind)
             return
@@ -266,7 +235,7 @@ class ChatComponent(commands.Component):
         self.bot.set_cooldown(user, DENY_REPEAT_SECONDS, DENY_SCOPE)
         await message.respond(Content.text(key, user=user, **values))
 
-    async def _within_channel_quota(self, message, user: str, status: str) -> bool:
+    async def _within_channel_quota(self, message, user: str, tier: Tier) -> bool:
         """Whether the channel as a whole is within its window. False – already refused.
 
         A ceiling over everyone, on top of the per-viewer quota, which bounds one person
@@ -274,7 +243,7 @@ class ChatComponent(commands.Component):
         all. The broadcaster is exempt, and local commands keep working – only paid ones
         are refused.
         """
-        if not Quota.CHANNEL_PER_HOUR or status == STATUS_BROADCASTER:
+        if not Quota.CHANNEL_PER_HOUR or tier == Tier.BROADCASTER:
             return True
         used = await count_channel_bot_uses(KIND_GEMINI, Quota.WINDOW_MINUTES)
         if used < Quota.CHANNEL_PER_HOUR:
@@ -286,9 +255,9 @@ class ChatComponent(commands.Component):
         await self._deny(message, user, 'quota_channel', window=Quota.WINDOW_MINUTES)
         return False
 
-    async def _within_quota(self, message, user: str, status: str) -> bool:
+    async def _within_quota(self, message, user: str, tier: Tier) -> bool:
         """Whether the viewer is within the hourly quota. False – they have already been refused."""
-        limit = _quota_per_hour(status)
+        limit = _quota_per_hour(tier)
         if not limit:
             return True
         used = await count_bot_uses(user, KIND_GEMINI, Quota.WINDOW_MINUTES)

@@ -4,6 +4,7 @@ import logging
 from src.core.commands import CommandContext
 from src.core.config import Roll
 from src.core.content import Content
+from src.core.viewer import by_tier, tier_of
 from src.local.roll import game
 from src.local.roll.texts import champion_note, curse_note, reward_title
 
@@ -15,13 +16,11 @@ def free_limit_for(chatter) -> int:
 
     Same ladder as the cooldown and the quota: a subscription or moderator status
     gives the most, VIP the middle, everyone else the base limit. The broadcaster
-    rolls without limit and never gets here, a non-follower never reaches the game.
+    rolls without limit, a non-follower never reaches the game.
     """
-    if chatter.moderator or chatter.subscriber or chatter.founder:
-        return Roll.FREE_SUB
-    if chatter.vip:
-        return Roll.FREE_VIP
-    return Roll.FREE_PER_SESSION
+    # The broadcaster's value is only stored for extra, which compares throws with it
+    return by_tier(tier_of(chatter), sub=Roll.FREE_SUB, vip=Roll.FREE_VIP,
+                   regular=Roll.FREE_PER_SESSION, broadcaster=Roll.FREE_PER_SESSION)
 
 
 async def handle_roll(ctx: CommandContext) -> None:

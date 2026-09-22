@@ -9,6 +9,7 @@ from fakes import make_chatter
 from src.core import component
 from src.core.commands import ROLE_SUB_VIP_MOD_BROADCASTER, ROLE_VIP_MOD_BROADCASTER
 from src.core.config import Cooldown, Picture, Quota, Roll, Summary, Who
+from src.core.viewer import Tier, tier_of
 from src.gemini import commands as gemini_commands
 from src.gemini import summary, who
 from src.gemini.picture import command as picture_command
@@ -24,20 +25,20 @@ BADGES = {
     'regular': {},
 }
 
-STATUS = {
-    'broadcaster': component.STATUS_BROADCASTER,
-    'moderator': component.STATUS_MODERATOR,
-    'subscriber': component.STATUS_SUB,
-    'founder': component.STATUS_SUB,
-    'sub_vip': component.STATUS_SUB,
-    'vip': component.STATUS_VIP,
-    'regular': component.STATUS_REGULAR,
+TIER = {
+    'broadcaster': Tier.BROADCASTER,
+    'moderator': Tier.MODERATOR,
+    'subscriber': Tier.SUB,
+    'founder': Tier.SUB,
+    'sub_vip': Tier.SUB,
+    'vip': Tier.VIP,
+    'regular': Tier.REGULAR,
 }
 
 
 @pytest.mark.parametrize('who_', BADGES)
-def test_status(who_):
-    assert component._status_of(make_chatter(**BADGES[who_])) == STATUS[who_]
+def test_tier(who_):
+    assert tier_of(make_chatter(**BADGES[who_])) == TIER[who_]
 
 
 @pytest.mark.parametrize(('who_', 'cooldown', 'quota'), [
@@ -48,9 +49,9 @@ def test_status(who_):
     ('regular', Cooldown.REGULAR, Quota.FOLLOWER_PER_HOUR),
 ])
 def test_cooldown_and_quota(who_, cooldown, quota):
-    status = STATUS[who_]
-    assert component._cooldown_seconds(status) == cooldown
-    assert component._quota_per_hour(status) == quota
+    tier = TIER[who_]
+    assert component._cooldown_seconds(tier) == cooldown
+    assert component._quota_per_hour(tier) == quota
 
 
 @pytest.mark.parametrize(('who_', 'vip_role', 'sub_role'), [
@@ -69,6 +70,7 @@ def test_roles_look_at_badges(who_, vip_role, sub_role):
 
 
 @pytest.mark.parametrize(('who_', 'limit'), [
+    ('broadcaster', Roll.FREE_PER_SESSION),
     ('moderator', Roll.FREE_SUB),
     ('subscriber', Roll.FREE_SUB),
     ('founder', Roll.FREE_SUB),

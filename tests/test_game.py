@@ -9,7 +9,7 @@ import pytest
 
 from src.core.config import Rewards, Roll
 from src.core.database import get_db, save_chat_message, save_stream
-from src.local.roll import game
+from src.local.roll import game, rules
 from src.local.roll.storage import (
     RollRow, add_perk, get_pending_perk_users, get_perk, get_roll, get_session_champion,
     get_session_loser, save_roll, set_curse,
@@ -26,14 +26,14 @@ def redeem(action: str, actor: str, user_input: str = '', session: str = S):
 @pytest.fixture
 def top(monkeypatch):
     """Every throw lands on its ceiling: randint(a, b) == b."""
-    monkeypatch.setattr(game.random, 'randint', lambda a, b: b)
+    monkeypatch.setattr(rules.random, 'randint', lambda a, b: b)
 
 
 @pytest.fixture
 def fixed(monkeypatch):
     """Throws return the values put into the returned list, in order."""
     values: list[int] = []
-    monkeypatch.setattr(game.random, 'randint', lambda a, b: values.pop(0))
+    monkeypatch.setattr(rules.random, 'randint', lambda a, b: values.pop(0))
     return values
 
 
@@ -123,17 +123,16 @@ async def test_curse_ladder_reaches_the_floor_and_holds(db, top):
     assert (await get_roll(S, 'victim')).curse_floor_at == floor_at
 
 
-def test_curse_expires_on_the_hold_and_on_the_deadline(monkeypatch):
+def test_curse_expires_on_the_hold_and_on_the_deadline():
     now = 1_000_000.0
-    monkeypatch.setattr(game.time, 'time', lambda: now)
     hold = Rewards.CURSE_HOLD_MINUTES * 60
     row = RollRow(value=30, free_throws=1, curse_ceiling=25, curse_floor_at=None, curse_until=None, free_limit=3)
-    assert game._curse_of(row) == (25, None)
-    assert game._curse_of(row._replace(curse_floor_at=now - hold + 1)) is not None
-    assert game._curse_of(row._replace(curse_floor_at=now - hold)) is None
-    assert game._curse_of(row._replace(curse_until=now)) is None
-    assert game._curse_of(row._replace(curse_ceiling=None)) is None
-    assert game._curse_of(None) is None
+    assert rules.curse_of(row, now) == (25, None)
+    assert rules.curse_of(row._replace(curse_floor_at=now - hold + 1), now) is not None
+    assert rules.curse_of(row._replace(curse_floor_at=now - hold), now) is None
+    assert rules.curse_of(row._replace(curse_until=now), now) is None
+    assert rules.curse_of(row._replace(curse_ceiling=None), now) is None
+    assert rules.curse_of(None, now) is None
 
 
 async def test_lifted_curse_is_reported_once(db):
@@ -238,7 +237,7 @@ async def test_duplicate_redemption_changes_nothing(db, fixed, monkeypatch):
     fixed.append(40)
     first = await game.redeem(game.Action.REROLL, S, 'actor', 'victim', 'same-id')
     assert first.ok
-    monkeypatch.setattr(game.random, 'randint', lambda a, b: pytest.fail('a duplicate must not throw'))
+    monkeypatch.setattr(rules.random, 'randint', lambda a, b: pytest.fail('a duplicate must not throw'))
     again = await game.redeem(game.Action.REROLL, S, 'actor', 'victim', 'same-id')
     assert again.status == game.Status.DUPLICATE
     assert (await get_roll(S, 'victim')).value == 40
@@ -322,19 +321,18 @@ async def test_perk_curse_is_laid_on_the_first_throw_once(db, top):
     ('@Nick', 'nick'), ('nick, и ещё', 'nick'), ('Nick!', 'nick'), ('ник', None), ('', None), ('x' * 26, None),
 ])
 def test_parse_nick(raw, nick):
-    assert game.parse_nick(raw) == nick
+    assert rules.parse_nick(raw) == nick
 
 
-def test_minutes_left_take_the_earlier_deadline(monkeypatch):
+def test_minutes_left_take_the_earlier_deadline():
     """The previous stream's loser curse also ends at curse_until: announcing the floor's
     full hold would promise a lift time the curse never reaches."""
     now = 1_000_000.0
-    monkeypatch.setattr(game.time, 'time', lambda: now)
     hold = Rewards.CURSE_HOLD_MINUTES
-    assert game._minutes_left(now - 60) == hold - 1
-    assert game._minutes_left(now - 60, now + 5 * 60) == 5
-    assert game._minutes_left(now - 60, now + 3600) == hold - 1
-    assert game._minutes_left(None, now + 5 * 60) is None
+    assert rules.minutes_left(now - 60, None, now) == hold - 1
+    assert rules.minutes_left(now - 60, now + 5 * 60, now) == 5
+    assert rules.minutes_left(now - 60, now + 3600, now) == hold - 1
+    assert rules.minutes_left(None, now + 5 * 60, now) is None
 
 
 async def test_perk_curse_on_the_floor_reports_its_deadline(db, top, monkeypatch):
@@ -347,3 +345,14 @@ async def test_perk_curse_on_the_floor_reports_its_deadline(db, top, monkeypatch
     assert outcome.curse_minutes_left == 5
     standing = await game.status(S, 'loser', limit=3)
     assert standing.curse_minutes_left == 5
+
+
+@pytest.mark.parametrize(('seconds', 'minutes'), [(1, 1), (60, 1), (61, 2), (0, None), (-5, None)])
+def test_whole_minutes_round_up_to_the_end(seconds, minutes):
+    assert rules.whole_minutes(seconds) == minutes
+
+
+def test_champion_is_hidden_when_it_is_the_loser():
+    assert rules.visible_champion(('a', 1), ('a', 1)) is None
+    assert rules.visible_champion(('a', 1), ('b', 99)) == ('b', 99)
+    assert rules.visible_champion(None, ('b', 99)) == ('b', 99)

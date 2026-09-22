@@ -733,6 +733,7 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   │   ├── emote_spam.py    # Спам эмотами раз в интервал
 │   │   ├── help_announce.py # Напоминание о командах раз в интервал
 │   │   └── roll/            # Игра «залупа стрима»
+│   │       ├── rules.py       # Правила чистыми функциями: бросок, проклятие, минуты, ник
 │   │       ├── game.py        # Механика: лимит бесплатных бросков, переброс, проклятие, щит, бонусы
 │   │       ├── storage.py     # Запросы к rolls, rewards, roll_actions, roll_perks
 │   │       ├── command.py     # !roll и !rollstat

@@ -19,6 +19,17 @@ def test_tail_within_keeps_the_latest_messages():
     assert tail_within(pairs, 5) == []
 
 
+def test_a_stepped_cut_stays_put_while_the_chat_grows():
+    """The cut moves only every step messages, so consecutive prompts share a prefix."""
+    chat = [(f'u{i:03d}', 'x' * 6) for i in range(130)]     # 13 characters each
+    budget = 13 * 60
+    assert tail_within(chat[:100], budget, 50) == chat[50:100]
+    # Five more messages: still cut at message 50, the kept part only grows at its end
+    assert tail_within(chat[:105], budget, 50) == chat[50:105]
+    # Past the next step the cut jumps to message 100
+    assert tail_within(chat[:115], budget, 50) == chat[100:115]
+
+
 async def _fill(session_id: str, count: int, tag: str) -> None:
     for i in range(count):
         await save_chat_message(session_id, 'gop', f'{tag}{i:03d} ' + 'x' * 40)
@@ -39,6 +50,7 @@ async def test_ladder_cuts_the_previous_stream_first(db, monkeypatch):
 
 async def test_ladder_cuts_the_start_of_a_huge_current_stream(db, monkeypatch):
     monkeypatch.setattr(Memory, 'CONVERSATION_MIN_MESSAGES', 1)
+    monkeypatch.setattr(answer_context, 'CUT_STEP', 1)
     await _fill(PREV, 10, 'old')
     await _fill(NOW, 60, 'now')
     per_message = chat_chars([('gop', 'now000 ' + 'x' * 40)])

@@ -6,8 +6,12 @@ def chat_chars(pairs: Chat) -> int:
     return sum(len(u) + len(t) + 3 for u, t in pairs)
 
 
-def tail_within(pairs: Chat, budget: int) -> Chat:
-    """The latest pairs that fit in budget characters, oldest first."""
+def tail_within(pairs: Chat, budget: int, step: int = 1) -> Chat:
+    """The latest pairs that fit in budget characters, oldest first.
+
+    step > 1 cuts only at every step-th pair counted from the first one, so while
+    the chat grows the cut stays put and the prompt keeps its prefix for Gemini's cache.
+    """
     start = len(pairs)
     while start:
         size = chat_chars(pairs[start - 1:start])
@@ -15,7 +19,7 @@ def tail_within(pairs: Chat, budget: int) -> Chat:
             break
         budget -= size
         start -= 1
-    return pairs[start:]
+    return pairs[-(-start // step) * step:]
 
 
 class ContextBuilder:

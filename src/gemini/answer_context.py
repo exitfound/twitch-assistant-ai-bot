@@ -43,6 +43,9 @@ logger = logging.getLogger(__name__)
 
 # Profiles in one answer: the asker plus up to three people named in the question
 MAX_PEOPLE = 4
+# Over the character budget a stream loses its start in steps of this many messages:
+# a cut moving with every new message would break the prefix Gemini caches
+CUT_STEP = 50
 # A Twitch login: 4–25 Latin letters, digits and underscores, standing as a whole word.
 # Russian words are never logins, so they are not looked up
 _NICK = re.compile(r'(?<!\w)[a-z0-9_]{4,25}(?!\w)', re.IGNORECASE)
@@ -104,8 +107,8 @@ async def ladder(q: Question) -> list[Rung]:
         storage.chronicle_before(q.session_id if stream else None),
     )
     # Over the budget the start of the previous stream goes first, then of the current one
-    current = tail_within(current, Context.STREAM_MAX_CHARS)
-    previous = tail_within(previous, Context.STREAM_MAX_CHARS - chat_chars(current))
+    current = tail_within(current, Context.STREAM_MAX_CHARS, CUT_STEP)
+    previous = tail_within(previous, Context.STREAM_MAX_CHARS - chat_chars(current), CUT_STEP)
     recent = current[-Context.CHAT_MESSAGES:]
     question = Content.prompt('user_question', user=q.user, prompt=q.prompt)
 

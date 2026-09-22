@@ -15,7 +15,7 @@ import time
 from enum import StrEnum
 
 from src.core.config import Rewards, Roll
-from src.core.database import get_previous_stream_session, get_session_start, has_chatted
+from src.core.database import get_previous_stream_session, get_session_start, has_chatted, transaction
 from src.local.roll import rules
 from src.local.roll.storage import (
     RollRow, activate_perks, add_perk, consume_perk, get_action_status, get_expired_curses,
@@ -190,7 +190,7 @@ async def grant_perks(session_id: str) -> tuple[str | None, str | None] | None:
     None – nothing to grant or everything is already granted. Safe to repeat after
     a restart or a stream outage: nothing is granted a second time.
     """
-    async with _lock:
+    async with _lock, transaction():
         previous = await _previous_session(session_id)
         if previous is None:
             return None
@@ -205,7 +205,7 @@ async def grant_perks(session_id: str) -> tuple[str | None, str | None] | None:
 
 async def appear(session_id: str, user: str) -> list[str]:
     """A player showed up in the stream chat: start their perk countdown. Returns which started."""
-    async with _lock:
+    async with _lock, transaction():
         return await _activate_perks(session_id, user)
 
 
@@ -221,7 +221,7 @@ async def free_throw(
     unlimited (broadcaster) still counts the throw, so the paid extra roll behaves the
     same for them, and free_left is None since there is no remainder to mention.
     """
-    async with _lock:
+    async with _lock, transaction():
         row = await get_roll(session_id, user)
         used = row.free_throws if row else 0
         if not unlimited and used >= limit:
@@ -280,7 +280,7 @@ async def lift_expired_curses(session_id: str) -> list[str]:
     row will not be selected again. Under the shared lock, so as not to erase a
     curse laid anew between the select and the write.
     """
-    async with _lock:
+    async with _lock, transaction():
         now = time.time()
         users = await get_expired_curses(session_id, now - Rewards.CURSE_HOLD_MINUTES * 60, now)
         for user in users:
@@ -297,7 +297,7 @@ async def redeem(
     and the second one must not throw. The check and the write run under the same
     lock as the throw itself, so a duplicate cannot slip in between them.
     """
-    async with _lock:
+    async with _lock, transaction():
         if await get_action_status(redemption_id) is not None:
             return Outcome(Status.DUPLICATE)
         if action == Action.EXTRA:

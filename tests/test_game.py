@@ -356,3 +356,17 @@ def test_champion_is_hidden_when_it_is_the_loser():
     assert rules.visible_champion(('a', 1), ('a', 1)) is None
     assert rules.visible_champion(('a', 1), ('b', 99)) == ('b', 99)
     assert rules.visible_champion(None, ('b', 99)) == ('b', 99)
+
+
+async def test_a_redemption_that_fails_to_journal_leaves_the_roll_as_it_was(db, monkeypatch):
+    """The throw and its journal row are one transaction: a reroll that could not be
+    recorded must not stay applied, or the retry after a restart would throw again."""
+    await save_roll(S, 'victim', 90, free_throw=True)
+    await save_chat_message(S, 'victim', 'привет')
+
+    async def broken(*args):
+        raise RuntimeError('db locked')
+    monkeypatch.setattr(game, 'save_action', broken)
+    with pytest.raises(RuntimeError):
+        await game.redeem(game.Action.REROLL, S, 'gop', 'victim', 'r1')
+    assert (await get_roll(S, 'victim')).value == 90

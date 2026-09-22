@@ -1,17 +1,16 @@
 """chat_messages: saving, the chat windows for context, activity checks and !stat numbers."""
-from src.core.db.connection import get_db
+from src.core.db.connection import get_db, transaction
 
 
 async def save_chat_message(
     session_id: str, username: str, message: str, *, addressed: bool = False,
 ) -> None:
     """Save a chat message. addressed – whether it was addressed to the bot."""
-    db = await get_db()
-    await db.execute(
-        'INSERT INTO chat_messages (session_id, username, message, addressed) VALUES (?, ?, ?, ?)',
-        (session_id, username, message, int(addressed)),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO chat_messages (session_id, username, message, addressed) VALUES (?, ?, ?, ?)',
+            (session_id, username, message, int(addressed)),
+        )
 
 
 async def get_recent_chat(session_id: str, limit: int = 20,

@@ -1,11 +1,13 @@
 """Schema, quotas and the chat queries in src/core/db/, on a temporary database."""
+import asyncio
+
 import pytest
 
 from src.core import database
 from src.core.database import (
     count_bot_uses, count_channel_bot_uses, forget_bot_use,
     get_user_interactions, has_chatted, init_db, record_bot_use, save_bot_interaction,
-    save_chat_message, search_context,
+    save_chat_message, search_context, transaction,
 )
 from src.core.db import schema
 from src.core.db.knowledge import _sanitize_fts_query
@@ -116,3 +118,45 @@ async def test_a_failing_step_names_itself(db, monkeypatch, caplog):
     with pytest.raises(RuntimeError):
         await init_db()
     assert 'rolls' in caplog.text
+
+
+async def _messages(db) -> list[str]:
+    async with db.execute('SELECT message FROM chat_messages ORDER BY id') as cursor:
+        return [m for (m,) in await cursor.fetchall()]
+
+
+async def test_a_failed_transaction_leaves_nothing(db):
+    with pytest.raises(RuntimeError):
+        async with transaction() as tx:
+            await tx.execute("INSERT INTO chat_messages (session_id, username, message) VALUES ('s', 'a', 'x')")
+            raise RuntimeError('halfway')
+    assert await _messages(db) == []
+
+
+async def test_a_nested_write_joins_the_outer_transaction(db):
+    """save_chat_message() inside a transaction must not commit the outer half on its own."""
+    with pytest.raises(RuntimeError):
+        async with transaction():
+            await save_chat_message('s', 'a', 'inner')
+            raise RuntimeError('halfway')
+    assert await _messages(db) == []
+
+
+async def test_another_writer_does_not_commit_a_half_done_transaction(db):
+    """On one shared connection a commit() from anyone committed everything pending: a chat
+    message saved in the middle of a multi-step write made its first half permanent."""
+    halfway = asyncio.Event()
+
+    async def multi_step():
+        async with transaction() as tx:
+            await tx.execute("INSERT INTO chat_messages (session_id, username, message) VALUES ('s', 'a', 'half')")
+            halfway.set()
+            await asyncio.sleep(0.05)
+            raise RuntimeError('second step failed')
+
+    task = asyncio.create_task(multi_step())
+    await halfway.wait()
+    await save_chat_message('s', 'b', 'chat')
+    with pytest.raises(RuntimeError):
+        await task
+    assert await _messages(db) == ['chat']

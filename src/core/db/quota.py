@@ -1,13 +1,12 @@
 """bot_uses: the hourly quota, the channel ceiling and the per-stream limits."""
-from src.core.db.connection import get_db
+from src.core.db.connection import get_db, transaction
 from src.core.db.streams import get_session_start
 
 
 async def record_bot_use(username: str, kind: str) -> None:
     """Record a bot request: the hourly quota is counted from this journal."""
-    db = await get_db()
-    await db.execute('INSERT INTO bot_uses (username, kind) VALUES (?, ?)', (username, kind))
-    await db.commit()
+    async with transaction() as db:
+        await db.execute('INSERT INTO bot_uses (username, kind) VALUES (?, ?)', (username, kind))
 
 
 async def forget_bot_use(username: str, kind: str) -> None:
@@ -17,12 +16,11 @@ async def forget_bot_use(username: str, kind: str) -> None:
     handler, and a handler that generated nothing gives the quota slot back –
     the same way it gives back the cooldown.
     """
-    db = await get_db()
-    await db.execute(
-        'DELETE FROM bot_uses WHERE id = (SELECT MAX(id) FROM bot_uses WHERE username = ? AND kind = ?)',
-        (username, kind),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'DELETE FROM bot_uses WHERE id = (SELECT MAX(id) FROM bot_uses WHERE username = ? AND kind = ?)',
+            (username, kind),
+        )
 
 
 async def count_bot_uses_since(username: str, kind: str, since: float) -> int:

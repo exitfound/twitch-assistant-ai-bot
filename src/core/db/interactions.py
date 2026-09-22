@@ -1,14 +1,13 @@
 """bot_interactions: what the bot answered, by tag and by viewer."""
-from src.core.db.connection import get_db
+from src.core.db.connection import get_db, transaction
 
 
 async def save_bot_interaction(session_id: str, username: str, user_message: str, bot_response: str) -> None:
-    db = await get_db()
-    await db.execute(
-        'INSERT INTO bot_interactions (session_id, username, user_message, bot_response) VALUES (?, ?, ?, ?)',
-        (session_id, username, user_message, bot_response),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO bot_interactions (session_id, username, user_message, bot_response) VALUES (?, ?, ?, ?)',
+            (session_id, username, user_message, bot_response),
+        )
 
 
 async def get_last_tagged_interaction(

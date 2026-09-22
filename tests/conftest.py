@@ -57,6 +57,7 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(connection, '_db', None)
     monkeypatch.setattr(connection, '_closed', False)
     monkeypatch.setattr(connection, '_db_lock', asyncio.Lock())
+    monkeypatch.setattr(connection, '_write_lock', asyncio.Lock())
     monkeypatch.setattr(db_knowledge, '_knowledge_ids', None)
     monkeypatch.setattr(client, '_semaphore', asyncio.Semaphore(Gemini.CONCURRENCY))
     monkeypatch.setattr(game, '_lock', asyncio.Lock())

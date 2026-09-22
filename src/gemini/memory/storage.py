@@ -15,7 +15,7 @@ import time
 from enum import StrEnum
 from typing import NamedTuple
 
-from src.core.database import get_db, invalidate_knowledge_cache
+from src.core.database import get_db, invalidate_knowledge_cache, transaction
 from src.core.utils import local_time
 
 
@@ -117,11 +117,10 @@ async def memory_built() -> bool:
 
 
 async def mark_built() -> None:
-    db = await get_db()
-    await db.execute(
-        "INSERT OR REPLACE INTO memory_state (key, value) VALUES ('built', datetime('now'))"
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO memory_state (key, value) VALUES ('built', datetime('now'))"
+        )
 
 
 async def failed_blocks() -> list[Block]:
@@ -264,18 +263,17 @@ async def save_chronicle(block: Block, text: str, status: str,
 
     The row covers the conversation's messages: the memory will not take them again.
     """
-    db = await get_db()
-    await db.execute('DELETE FROM chatter_events WHERE conversation = ?', (block.key,))
-    await db.executemany(
-        'INSERT INTO chatter_events (conversation, username, event) VALUES (?, ?, ?)',
-        [(block.key, nick, event) for nick, event in events],
-    )
-    await db.execute(
-        'INSERT OR REPLACE INTO chronicles'
-        ' (conversation, text, status, message_count, first_id, last_id) VALUES (?, ?, ?, ?, ?, ?)',
-        (block.key, text, status, block.count, block.first_id, block.last_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute('DELETE FROM chatter_events WHERE conversation = ?', (block.key,))
+        await db.executemany(
+            'INSERT INTO chatter_events (conversation, username, event) VALUES (?, ?, ?)',
+            [(block.key, nick, event) for nick, event in events],
+        )
+        await db.execute(
+            'INSERT OR REPLACE INTO chronicles'
+            ' (conversation, text, status, message_count, first_id, last_id) VALUES (?, ?, ?, ?, ?, ?)',
+            (block.key, text, status, block.count, block.first_id, block.last_id),
+        )
 
 
 async def user_events(username: str, limit: int, before: str | None = None) -> list[tuple[str, str]]:
@@ -397,25 +395,23 @@ def _relations(raw: str | None) -> list[dict]:
 
 
 async def save_profile(profile: Profile) -> None:
-    db = await get_db()
-    await db.execute(
-        'INSERT OR REPLACE INTO chatter_profiles'
-        ' (username, portrait, relations, last_conversation, sessions_seen, updated_at)'
-        ' VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-        (profile.username, profile.portrait, json.dumps(profile.relations, ensure_ascii=False),
-         profile.last_conversation, profile.sessions_seen),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'INSERT OR REPLACE INTO chatter_profiles'
+            ' (username, portrait, relations, last_conversation, sessions_seen, updated_at)'
+            ' VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+            (profile.username, profile.portrait, json.dumps(profile.relations, ensure_ascii=False),
+             profile.last_conversation, profile.sessions_seen),
+        )
 
 
 MEMORY_TABLES = ('chronicles', 'chatter_events', 'chatter_profiles', 'memory_state')
 
 
 async def clear_memory() -> None:
-    db = await get_db()
-    for table in MEMORY_TABLES:
-        await db.execute(f'DELETE FROM {table}')
-    await db.commit()
+    async with transaction() as db:
+        for table in MEMORY_TABLES:
+            await db.execute(f'DELETE FROM {table}')
 
 
 async def memory_counts() -> dict[str, int]:
@@ -455,16 +451,15 @@ async def move_unaddressed_facts() -> int:
     Facts that name a chatter by @nick belong in that chatter's profile instead, so
     only the rest is copied. The facts table itself is left in place.
     """
-    db = await get_db()
-    async with db.execute("SELECT fact FROM facts WHERE fact NOT LIKE '%@%' ORDER BY id") as cursor:
-        facts = [row[0] for row in await cursor.fetchall()]
-    added = 0
-    for fact in facts:
-        cursor = await db.execute(
-            "INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, 'facts')", (fact,),
-        )
-        added += cursor.rowcount
-    await db.commit()
+    async with transaction() as db:
+        async with db.execute("SELECT fact FROM facts WHERE fact NOT LIKE '%@%' ORDER BY id") as cursor:
+            facts = [row[0] for row in await cursor.fetchall()]
+        added = 0
+        for fact in facts:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, 'facts')", (fact,),
+            )
+            added += cursor.rowcount
     if added:
         invalidate_knowledge_cache()
     return added

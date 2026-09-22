@@ -58,7 +58,7 @@ async def _send_proactive(bot, watch: ChatWatch) -> None:
 
     prompt_ctx = (
         ContextBuilder()
-        .add_chat(Content.label('chat'), recent_chat)
+        .add_pairs(Content.label('chat'), recent_chat)
         .add_lines(Content.label('language'), random_knowledge)
         .add_raw(event_prompt)
     )

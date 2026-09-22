@@ -11,7 +11,7 @@ from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, Kind
 from src.core.config import Caps, Emote, Gemini, Who
 from src.core.database import count_bot_uses, get_db
-from src.gemini import answer_context, client, commands, responder
+from src.gemini import client, commands, ladder, responder
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR
 from src.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
 from src.gemini.who import WHO_KIND
@@ -130,12 +130,12 @@ def script(monkeypatch):
     async def fake(prompt, config):
         sent.append(prompt)
         return answers.pop(0)
-    monkeypatch.setattr(answer_context, 'generate_checked', fake)
+    monkeypatch.setattr(ladder, 'generate_checked', fake)
     return answers, sent
 
 
 async def _walk():
-    return await answer_context.walk(RUNGS, types.GenerateContentConfig(), 'gop')
+    return await ladder.walk(RUNGS, types.GenerateContentConfig(), 'gop')
 
 
 async def test_walk_goes_down_while_the_input_is_blocked(script):
@@ -183,7 +183,7 @@ async def test_walk_gives_up_at_the_bottom(script):
 
 
 def test_identical_rungs_are_dropped():
-    assert answer_context.unique_rungs([('a', 'x'), ('b', 'x'), ('c', 'y')]) == [('a', 'x'), ('c', 'y')]
+    assert ladder.unique_rungs([('a', 'x'), ('b', 'x'), ('c', 'y')]) == [('a', 'x'), ('c', 'y')]
 
 
 # --- sending to chat --------------------------------------------------------

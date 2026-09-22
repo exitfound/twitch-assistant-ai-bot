@@ -66,8 +66,8 @@ async def _now(q: _Question, config) -> tuple[str | None, str]:
         search_context(q.prompt, Context.SEARCH_RESULTS),
         get_random_knowledge(Context.KNOWLEDGE_RANDOM),
     )
-    builder = (ContextBuilder().add_facts(Content.label('facts'), facts)
-               .add_chat(Content.label('chat'), chat)
+    builder = (ContextBuilder().add_pairs(Content.label('facts'), facts)
+               .add_pairs(Content.label('chat'), chat)
                .add_lines(Content.label('channel'), found)
                .add_lines(Content.label('language'), language)
                .add_raw(Content.prompt('user_question', user=q.user, prompt=q.prompt)))

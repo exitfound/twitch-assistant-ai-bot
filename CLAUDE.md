@@ -118,7 +118,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **core**
 - `component.py` – `ChatComponent`: the registry of all commands, `event_message`, the pure `route()` and the gate `_gate()` (follow, cooldown, role, quota), `event_follow`. BOT.md «Обработка сообщений»
-- `commands.py` – `CommandContext`, `CommandEntry`, `CommandRegistry`, `Kind` and `Role` (`StrEnum`)
+- `commands.py` – `CommandContext`, `CommandEntry`, `CommandRegistry`, `Kind` and `Role` (`StrEnum`: their values are the plain strings stored in cooldown keys and `bot_uses.kind`)
 - `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `Summary`, `Who`, `Picture`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`
 - `paths.py` – `DB_PATH`, `CONTENT_PATH`: the repository root, or `BOT_DB_PATH` / `BOT_CONTENT_PATH`
 - `content.py` – `CONTENT.md` access (`Content.prompt/label/text/items`), mtime cache, `REQUIRED`, `validate_content()`
@@ -131,7 +131,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `db/quota.py` – `bot_uses`: hourly quota, channel ceiling, per-stream counts
 - `db/streams.py` – `streams`: stream id → session, start, end
 - `activity.py` – `ChatWatch`: «has anyone written since» for the chat loops
-- `port.py` – `BotPort` / `StreamBot`: what features need from the bot; `tests/fakes.py`'s `FakeBot` implements it
+- `port.py` – `BotPort` / `StreamBot`: what features need from the bot. Core and the features never import `bot.py`; `tests/test_bot.py` checks that both `Bot` and `tests/fakes.py`'s `FakeBot` have every member
 - `viewer.py` – `Tier`, `tier_of()`, `by_tier()`: the one status ladder behind every per-status number
 - `followers.py` – `FollowerCache`: follower check via Helix with a TTL, fails open
 - `cooldowns.py` – `Cooldowns` on the monotonic clock
@@ -141,10 +141,10 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `heartbeat.py` – `heartbeat_loop()` for the container healthcheck
 - `stream.py` – `StreamTracker` (session = stream, resume rules), `watch_stream()`, `fetch_live_stream()`, `end_from_vod()`. BOT.md «Сессии»
 - `logging_setup.py` – `setup_logging()`
-- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `safe_format`, `defuse`, `reply_to_bot`, `local_time`, `random_delay`, `gather_cancelling`
+- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `safe_format`, `defuse`, `reply_to_bot`, `local_time`, `random_delay`, `gather_cancelling`. `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
 
 **gemini**
-- `client.py` – `get_client()`, `generate()` (chat, with the answer deadline), `generate_checked()` (the reason there is no text), `make_gen_config()`, `SAFETY_OFF` / `SAFETY_CHECK`, `usage`, `cost_estimate()`. BOT.md «Шаг 10: Вызов Gemini»
+- `client.py` – `get_client()`, `generate()` (chat, with the answer deadline), `generate_checked()` (the reason there is no text), `make_gen_config()`, `SAFETY_OFF` / `SAFETY_CHECK`, `usage`, `cost_estimate()` (the one place the Gemini prices live). BOT.md «Шаг 10: Вызов Gemini»
 - `context.py` – `ContextBuilder`, `chat_chars()`, `tail_within()`
 - `ladder.py` – `Rung`, `walk()` (the fallback ladder), `unique_rungs()`
 - `answer_context.py` – free-text context: `Question`, `ladder()`, `answer()`; shared with `--probe-context`. BOT.md «Контекст Gemini»

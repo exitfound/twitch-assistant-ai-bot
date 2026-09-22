@@ -21,7 +21,7 @@ def local_time(ts: float | None = None) -> datetime:
 
 
 # Addressing the bot by word: «сосур» in Cyrillic and «secur» in Latin, one entry per
-# variant. It lives here rather than in the dispatcher because src/core/database.py
+# variant. It lives here rather than in the dispatcher because src/core/db/schema.py
 # uses the same pattern to mark addressings in stored chat messages.
 SOSUR_VARIANTS = ('сосур', 'secur')
 SOSUR_RE = re.compile(

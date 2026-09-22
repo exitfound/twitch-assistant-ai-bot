@@ -1,10 +1,11 @@
-"""Schema, quotas and the chat queries in src/core/database.py, on a temporary database."""
+"""Schema, quotas and the chat queries in src/core/db/, on a temporary database."""
 from src.core import database
 from src.core.database import (
-    _sanitize_fts_query, count_bot_uses, count_channel_bot_uses, forget_bot_use,
+    count_bot_uses, count_channel_bot_uses, forget_bot_use,
     get_user_interactions, has_chatted, init_db, record_bot_use, save_bot_interaction,
     save_chat_message, search_context,
 )
+from src.core.db.knowledge import _sanitize_fts_query
 from src.local.roll.storage import save_roll
 
 

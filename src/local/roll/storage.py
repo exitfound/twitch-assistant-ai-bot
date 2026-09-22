@@ -1,7 +1,7 @@
 """The game's SQLite queries: rolls, rewards, roll_actions, roll_perks.
 
 The tables themselves and their migrations are created by init_db() in
-src/core/database.py: the schema lives in one place, which makes it easier to keep
+src/core/db/schema.py: the schema lives in one place, which makes it easier to keep
 startup on the live database idempotent.
 """
 from typing import NamedTuple

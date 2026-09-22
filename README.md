@@ -702,7 +702,8 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   │   ├── config.py        # Только .env: секреты, числа, флаги – с валидацией диапазонов
 │   │   ├── paths.py         # Пути к базе и CONTENT.md: корень проекта или BOT_DB_PATH / BOT_CONTENT_PATH
 │   │   ├── content.py       # Загрузка CONTENT.md: Content.prompt/label/text/items, mtime-кеш
-│   │   ├── database.py      # SQLite: схема и миграции всех таблиц, FTS5, запросы чата, фактов и лора, бэкап
+│   │   ├── database.py      # Фасад хранилища: реэкспорт src/core/db/
+│   │   ├── db/              # SQLite по темам: connection, schema, chat, interactions, knowledge, quota, streams
 │   │   ├── stream.py        # Сессия = эфир: StreamTracker, перезапуск и обрыв стрима
 │   │   ├── port.py          # Что фичам нужно от бота: протоколы BotPort и StreamBot
 │   │   ├── viewer.py        # Лестница статусов зрителя: Tier, tier_of(), by_tier()

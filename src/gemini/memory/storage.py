@@ -3,7 +3,7 @@
 The memory works on conversations (Block), not on bot sessions: chat split by
 silence, keyed by the Moscow time of its first message.
 
-The schema lives in init_db() (src/core/database.py) with all the others. Chat rows
+The schema lives in init_db() (src/core/db/schema.py) with all the others. Chat rows
 are read with the same «not a command» filter as everywhere else, which covers the
 rows that still hold commands.
 """

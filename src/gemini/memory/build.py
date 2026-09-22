@@ -369,6 +369,16 @@ async def first_profile(username: str, last: Block, *, save: bool = True,
 
 # --- a conversation ------------------------------------------------------------
 
+async def save_result(block: Block, chronicle: Chronicle | None) -> None:
+    """Mark a conversation done: its chronicle, or a failed row – --build-memory retries those."""
+    await storage.save_chronicle(
+        block,
+        chronicle.text if chronicle else '',
+        storage.ChronicleStatus.OK if chronicle else storage.ChronicleStatus.FAILED,
+        chronicle.events if chronicle else [],
+    )
+
+
 async def process_block(block: Block) -> bool:
     """Chronicle and profile updates for one finished conversation. False – Gemini is down.
 
@@ -394,12 +404,7 @@ async def process_block(block: Block) -> bool:
     except Unavailable:
         logger.warning('Память: Gemini не отвечает, разговор %s повторю в следующий раз', block.key)
         return False
-    await storage.save_chronicle(
-        block,
-        chronicle.text if chronicle else '',
-        storage.ChronicleStatus.OK if chronicle else storage.ChronicleStatus.FAILED,
-        chronicle.events if chronicle else [],
-    )
+    await save_result(block, chronicle)
     logger.info('Память: разговор %s (%d сообщений) – хроника %s, профилей обновлено %d из %d',
                 block.key, block.count, 'есть' if chronicle else 'нет', updated, len(chatters))
     return True

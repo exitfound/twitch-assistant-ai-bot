@@ -5,9 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from src.cli import emotes, knowledge, main
+from src.cli import emotes, knowledge, main, probe
 from src.cli.knowledge import LoreError, clear_knowledge, import_entries, lore_sources, parse_lore_file
 from src.core import content, database
+from src.core.database import save_chat_message
 from src.gemini.memory import storage
 from src.gemini.memory.storage import Block
 
@@ -179,3 +180,12 @@ def test_malformed_lore_is_a_clear_error(tmp_path, fmt, content):
     path.write_bytes(content)
     with pytest.raises(LoreError):
         parse_lore_file(str(path), fmt)
+
+
+async def test_probe_takes_questions_with_an_exclamation_mark(db):
+    """Only commands are skipped: a question that merely ends in «!» is still a question."""
+    await save_chat_message('s', 'gop', 'сосурян ну ты даёшь, расскажи про стрим!', addressed=True)
+    await save_chat_message('s', 'gop', 'сосурян !who кто-то там из чата сегодня', addressed=True)
+    await save_chat_message('s', 'gop', '!ask что такое терраформ и зачем он', addressed=True)
+    questions = await probe._questions([], 10)
+    assert [q.text for q in questions] == ['сосурян ну ты даёшь, расскажи про стрим!']

@@ -466,6 +466,13 @@ def _contains_ci(haystack: str, needle: str) -> bool:
     return needle.casefold() in haystack.casefold()
 
 
+async def get_all_facts() -> list[tuple[str, str, str]]:
+    """Every saved fact as (author, fact, created_at), grouped by author – for --list-facts."""
+    db = await get_db()
+    async with db.execute('SELECT username, fact, created_at FROM facts ORDER BY username, id') as cursor:
+        return await cursor.fetchall()
+
+
 async def get_relevant_facts(username: str, query: str) -> list[tuple[str, str]]:
     db = await get_db()
     async with db.execute(

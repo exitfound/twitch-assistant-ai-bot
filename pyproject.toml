@@ -1,0 +1,33 @@
+# Tool configuration only: the bot is not an installable package.
+# Dependencies live in requirements.txt (direct, pinned) and requirements.lock (full, hashed)
+
+[project]
+name = "twitch-assistant-ai-bot"
+version = "0.1.0"
+description = "Twitch chat bot powered by Gemini"
+requires-python = ">=3.11,<3.12"
+license = "MIT"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["venv"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "B", "UP", "SIM", "RUF", "ASYNC", "C4", "PERF"]
+# RUF001-003 flag the en dash, which is house style, and every Cyrillic letter.
+# No import sorting (I): ruff wraps a long import one name per line, while the
+# code wraps several per line, and the formatter is not used for the same reason.
+# ASYNC240: the only Path calls in async code are a chmod, a touch and a mkdir – microseconds,
+# not worth a thread
+ignore = ["RUF001", "RUF002", "RUF003", "ASYNC240"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    # twitchio's OAuth adapter subclasses aiohttp's Application; nothing to act on here
+    "ignore:Inheritance class AiohttpAdapter:DeprecationWarning",
+]

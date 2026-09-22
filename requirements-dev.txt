@@ -1,0 +1,9 @@
+# Development tools: tests, lint, dependency audit. Installed after requirements.lock in a
+# second step – the lock carries hashes, and pip would demand them for every line here too.
+# The bot image installs requirements.lock only, none of this reaches it
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.16.8
+pip-audit==2.10.1
+pip-tools==7.6.1

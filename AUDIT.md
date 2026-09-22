@@ -487,6 +487,8 @@
 - **Тесты:** `conftest` сбрасывает `help_announce._help_shown_at` и `client.usage`.
 - **Документация:** число тестов, несуществующие `mark_sent()` / `busy` в описании `summary.py`, фоновые задачи `_chat_watch_task` и `_heartbeat_task`, обещанная в 7.8 строка про `--vacuum`, `walk()` и классы ошибок Gemini в CLAUDE.md и BOT.md.
 
+**Раскладка зависимостей – по соглашению pip-tools.** Имена `requirements.txt` + `requirements.lock` были непривычными. Теперь прямые зависимости лежат в `requirements.in`, собранный lock-файл с хешами – в `requirements.txt`, инструменты – в `requirements-dev.in` → `requirements-dev.txt`, тоже с хешами и с версиями бота (`-c requirements.txt`). Установка в два шага больше не нужна: `make venv` ставит оба файла одной командой с `--require-hashes`. Пины основного набора не изменились (37 пакетов, сверено построчно).
+
 **Не подтвердилось или оставлено:**
 - **4.9:** `__pycache__/` в корне появляется снова, потому что `tests/test_bot.py` импортирует `bot`. Каталог в `.gitignore`, вреда нет.
 - **Отказ по роли за кулдауном:** зритель без бейджа, который только что обращался к боту, на `!ascii` получает «подожди N сек», а не отказ по роли. Порядок проверок прежний; поменять его можно при выносе `_gate()` в 8.13.
@@ -715,7 +717,7 @@
 
 **Этап 4:**
 - `./venv/bin/ruff check .` чистый, `./venv/bin/pytest --co` находит тесты;
-- `pip-audit -r requirements.lock` без находок.
+- `make audit` (`pip-audit` по `requirements.txt` и `requirements-dev.txt`) без находок.
 
 **Этап 5:**
 - `./venv/bin/python3 -m pytest` зелёный за секунды, без сети и без `.env`: переименование `.env` на время прогона ничего не меняет;

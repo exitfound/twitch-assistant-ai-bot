@@ -1,0 +1,10 @@
+# Development tools: tests, lint, dependency audit. `make lock` compiles it into
+# requirements-dev.txt with hashes; a package shared with the bot keeps the bot's version.
+# None of this reaches the image
+-c requirements.txt
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+ruff==0.16.8
+pip-audit==2.10.1
+pip-tools==7.6.1

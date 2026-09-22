@@ -46,7 +46,7 @@ Twitch API работает с числовыми user ID, а не с никам
 git clone https://github.com/exitfound/twitch-assistant-ai-bot
 cd twitch-assistant-ai-bot
 python3.11 -m venv venv
-./venv/bin/pip install --require-hashes -r requirements.lock
+./venv/bin/pip install --require-hashes -r requirements.txt
 ```
 
 Нужен именно Python 3.11 – на нём работает образ. Для разработки вместо этого `make venv`: тот же venv плюс pytest, ruff и pip-audit из `requirements-dev.txt`.
@@ -499,7 +499,7 @@ SQLite-файл `chat_history.db` в WAL-режиме. Используется 
 - **Дерево монтируется в `/app` только на чтение.** `CONTENT.md` перечитывается по mtime без перезапуска, CLI-команды видят те же файлы, что и на хосте, но процесс бота не может переписать собственный код и `.env`, который тоже лежит в дереве. Пишет бот только в `/data`. Единственная команда, которая правит дерево, – `--sync-emotes` (пишет `CONTENT.md`), она запускается из venv на хосте.
 - **Портов нет.** OAuth-адаптер twitchio слушает `localhost` внутри контейнера, опубликованный порт до него не доходил. Новые токены – через `make oauth` на хосте, см. [первый запуск](#7-первый-запуск--oauth-авторизация).
 - **`working_dir: /data`** – twitchio пишет `.tio.tokens.json` по относительному имени. Без этого токены оставались бы внутри контейнера и терялись при каждом пересоздании.
-- **Образ собирается в две стадии.** Зависимости ставятся в `python:3.11-slim-bookworm` – той же Debian, что у финального образа, чтобы собранный из исходников пакет не разошёлся с его glibc, – строго по `requirements.lock` с проверкой хешей, а в финальный образ едет только каталог с пакетами и код: база – `gcr.io/distroless/python3-debian12`, без пакетного менеджера, шелла и прочего лишнего. Итог 118 МБ против 209 МБ у однослойной сборки на slim. Побочный эффект: **шелла в контейнере нет**, поэтому `docker compose exec bot sh` не сработает, а healthcheck написан на Python, а не на `test`/`stat`.
+- **Образ собирается в две стадии.** Зависимости ставятся в `python:3.11-slim-bookworm` – той же Debian, что у финального образа, чтобы собранный из исходников пакет не разошёлся с его glibc, – строго по `requirements.txt` с проверкой хешей, а в финальный образ едет только каталог с пакетами и код: база – `gcr.io/distroless/python3-debian12`, без пакетного менеджера, шелла и прочего лишнего. Итог 118 МБ против 209 МБ у однослойной сборки на slim. Побочный эффект: **шелла в контейнере нет**, поэтому `docker compose exec bot sh` не сработает, а healthcheck написан на Python, а не на `test`/`stat`.
 - **Пакеты лежат в `/deps`, а не внутри `/app`.** Дерево проекта монтируется в `/app` и перекрыло бы их собой – контейнер остался бы без зависимостей. Путь подключается через `PYTHONPATH`.
 - **`USER 1000:1000`** (и `user: "1000:1000"` в compose) – тот же UID и та же группа, что у владельца каталогов на хосте, иначе бот не запишет ни базу, ни токены на тома. Без группы процесс работал с gid 0, и файлы базы на томе доставались группе `root`.
 - **`TZ=Europe/Moscow`** задаётся явно: в контейнере по умолчанию UTC, а `session_id` берёт локальную зону процесса, и идентификаторы сессий уехали бы на три часа. Зоны в distroless уже есть, ставить `tzdata` не нужно. Осторожно с именами: неизвестная зона молча откатывается в UTC, без ошибки в логах – так, ссылки `Europe/Kiev` в актуальном `tzdata` уже не существует. Той же зоне подчинён `KEY_TIMEZONE` в `src/gemini/memory/storage.py`, чтобы ключ разговора и `session_id` не разъезжались.
@@ -521,11 +521,11 @@ make venv     # venv на Python 3.11 с инструментами из require
 make test     # pytest: ~280 тестов меньше чем за три секунды, без сети, Gemini и .env
 make check    # ruff + pytest – перед слиянием ветки
 make fix      # автоисправления ruff
-make audit    # известные уязвимости в requirements.lock
-make lock     # пересобрать requirements.lock после правки requirements.txt
+make audit    # известные уязвимости в requirements.txt и requirements-dev.txt
+make lock     # пересобрать requirements*.txt после правки requirements*.in
 ```
 
-Зависимости живут в двух файлах: `requirements.txt` – прямые, то есть всё, что импортирует код, с закреплёнными версиями, `requirements.lock` – всё дерево с хешами, собирается из первого через `make lock`. Образ ставит только lock, поэтому новая версия пакета доходит до бота, только если пересобрать lock и образ. Тесты лежат в `tests/` и запускаются только на хосте: в образе distroless нет pytest. Каждый тест получает пустую временную базу, а `CONTENT.md` – сгенерированный из `REQUIRED`; до боевой базы, `.env` и Gemini они не дотягиваются. Один тест проверяет настоящий `CONTENT.md`: новый текст без записи в `REQUIRED` падает там, а не при старте бота. Правила ruff – в `pyproject.toml`; форматтер и сортировка импортов не используются, чтобы не ломать принятую раскладку кода.
+Зависимости разложены по соглашению pip-tools. В `requirements.in` – прямые, то есть всё, что импортирует код, с закреплёнными версиями; `make lock` собирает из него `requirements.txt` – всё дерево с хешами. Так же `requirements-dev.in` собирается в `requirements-dev.txt`: pytest, ruff, pip-audit и pip-tools с хешами, а общие с ботом пакеты – в версиях бота (`-c requirements.txt`). Правят только `.in`, файлы `.txt` генерируются. Образ ставит только `requirements.txt`, поэтому новая версия пакета доходит до бота, только если пересобрать его и образ. Тесты лежат в `tests/` и запускаются только на хосте: в образе distroless нет pytest. Каждый тест получает пустую временную базу, а `CONTENT.md` – сгенерированный из `REQUIRED`; до боевой базы, `.env` и Gemini они не дотягиваются. Один тест проверяет настоящий `CONTENT.md`: новый текст без записи в `REQUIRED` падает там, а не при старте бота. Правила ruff – в `pyproject.toml`; форматтер и сортировка импортов не используются, чтобы не ломать принятую раскладку кода.
 
 ---
 
@@ -746,9 +746,10 @@ docker compose run --rm bot /app/bot.py --lore-sources
 ├── docker-compose.yml       # Сервис бота: тома, зона, heartbeat, политика перезапуска
 ├── .dockerignore            # Секреты и данные в образ не попадают
 ├── data/                    # Изменяемое состояние: база, токены, heartbeat (не коммитится)
-├── requirements.txt         # Прямые зависимости, версии закреплены: twitchio, aiohttp, google-genai, python-dotenv, aiosqlite, httpx, Pillow
-├── requirements.lock        # Полный набор с транзитивными пакетами и хешами – его ставит образ (make lock)
-├── requirements-dev.txt     # Ставится после lock: pytest, pytest-asyncio, ruff, pip-audit, pip-tools
+├── requirements.in          # Прямые зависимости, версии закреплены: twitchio, aiohttp, google-genai, python-dotenv, aiosqlite, httpx, Pillow
+├── requirements.txt         # Собран из .in (make lock): полный набор с хешами – его ставит образ
+├── requirements-dev.in      # Инструменты разработки: pytest, pytest-asyncio, ruff, pip-audit, pip-tools
+├── requirements-dev.txt     # Собран из requirements-dev.in с хешами, в версиях бота
 ├── tests/                   # pytest: игра, диспетчер, вывод, Gemini-слой на заглушках, память, CLI, !ascii
 ├── pyproject.toml           # Только настройки инструментов: ruff, pytest
 ├── Makefile                 # Повседневные команды: venv, lint, test, check, audit, lock, up, logs, backup

@@ -20,7 +20,7 @@ from src.core.database import (
     count_bot_uses_this_stream, record_bot_use, save_bot_interaction,
 )
 from src.core.utils import TWITCH_MSG_MAX
-from src.gemini.client import generate
+from src.gemini.client import SAFETY_CHECK, generate, make_gen_config
 from src.gemini.picture.fetch import BAD_URL, PictureError, fetch
 from src.gemini.picture.render import preview, render
 
@@ -75,6 +75,11 @@ async def handle_ascii(ctx: CommandContext) -> None:
     _busy.add(ctx.user)
     try:
         await _serve(ctx)
+    except Exception:
+        # Anything past the expected refusals (a Pillow or database error): the viewer
+        # paid a quota slot and must hear something rather than nothing
+        logger.exception('!ascii: ошибка для %s', ctx.user)
+        await ctx.message.respond(Content.text('ascii_failed', user=ctx.user))
     finally:
         _busy.discard(ctx.user)
 
@@ -119,15 +124,21 @@ async def _serve(ctx: CommandContext) -> None:
     # visual line is already taken by the bot's nick
     if not await ctx.bot.send_chat_message(art):
         # Not sent – the viewer saw no picture, nothing to charge the limit for
+        logger.warning('!ascii: картинка для %s не ушла в чат', ctx.user)
+        await ctx.message.respond(Content.text('ascii_failed', user=ctx.user))
         return
     # Recorded after sending: a refusal for any reason costs no limit.
-    # A cache repeat counts – the viewer still filled the chat with a picture
-    await record_bot_use(ctx.user, USE_KIND)
-    if description:
-        # Not said in chat, but remembered: otherwise the bot does not know what it
-        # showed at all and cannot talk about it later
-        logger.info('!ascii: %s принёс %s – %s', ctx.user, url, description)
-        await save_bot_interaction(ctx.session_id, ctx.user, f'{TAG} {url}', description)
+    # A cache repeat counts – the viewer still filled the chat with a picture.
+    # The picture is already in chat, so an error here is logged, not answered
+    try:
+        await record_bot_use(ctx.user, USE_KIND)
+        if description:
+            # Not said in chat, but remembered: otherwise the bot does not know what it
+            # showed at all and cannot talk about it later
+            logger.info('!ascii: %s принёс %s – %s', ctx.user, url, description)
+            await save_bot_interaction(ctx.session_id, ctx.user, f'{TAG} {url}', description)
+    except Exception:
+        logger.exception('!ascii: картинка для %s показана, но не записана', ctx.user)
 
 
 def _allowed(verdict: str) -> str | None:
@@ -220,11 +231,12 @@ def _remember(url: str, art: str, verdict: str | None) -> None:
 async def _look(data: bytes, ctx: CommandContext) -> str | None:
     """Show the picture to Gemini. Returns its answer as is, or None.
 
-    The only place in the project where Gemini's safety filters are on: elsewhere they
-    are off so the persona works, while this call checks rather than talks, and the
-    classifier is a second layer beside the prompt – it returns nothing for pornography,
-    and an empty answer means the picture is not shown. The persona is left out too,
-    since the description goes to memory and the log, where flat neutral text is better.
+    The only place in the project where Gemini's safety filters are on (SAFETY_CHECK:
+    sexual and dangerous content): elsewhere they are off so the persona works, while
+    this call checks rather than talks, and the classifier is a second layer beside the
+    prompt – it returns nothing for pornography, and an empty answer means the picture is
+    not shown. The persona is left out too, since the description goes to memory and the
+    log, where flat neutral text is better.
     """
     small = await asyncio.to_thread(preview, data)
     if small is None:
@@ -238,4 +250,5 @@ async def _look(data: bytes, ctx: CommandContext) -> str | None:
     except Exception:
         logger.exception('!ascii: не собрался запрос к Gemini')
         return None
-    return await generate(contents, types.GenerateContentConfig(temperature=CHECK_TEMPERATURE))
+    config = make_gen_config(persona=False, temperature=CHECK_TEMPERATURE, safety=SAFETY_CHECK)
+    return await generate(contents, config)

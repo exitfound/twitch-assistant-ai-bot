@@ -107,12 +107,10 @@ def _interval_range(prefix: str, default_min: int, default_max: int) -> tuple[in
 
 
 def validate_config() -> None:
-    missing = []
-    for var in ('TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET', 'TWITCH_BOT_ID', 'TWITCH_CHANNEL', 'GEMINI_API_KEY'):
-        if not os.getenv(var):
-            missing.append(var)
+    required = ('TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET', 'TWITCH_BOT_ID', 'TWITCH_CHANNEL', 'GEMINI_API_KEY')
+    missing = [var for var in required if not os.getenv(var)]
     if missing:
-        raise EnvironmentError(f'Missing required env vars: {", ".join(missing)}')
+        raise OSError(f'Missing required env vars: {", ".join(missing)}')
 
 
 class Logging:
@@ -237,9 +235,17 @@ class Stream:
     RESUME_MINUTES: int = _env_int('STREAM_RESUME_MINUTES', 15, 0, 240)
 
 
+def _roll_range() -> tuple[int, int]:
+    low = _env_int('ROLL_MIN', 1, 1, 1000)
+    high = _env_int('ROLL_MAX', 100, 2, 1000)
+    if low > high:
+        logger.warning('ROLL_MIN=%s больше ROLL_MAX=%s, значения переставлены', low, high)
+        low, high = high, low
+    return low, high
+
+
 class Roll:
-    MIN: int = _env_int('ROLL_MIN', 1, 1, 1000)
-    MAX: int = _env_int('ROLL_MAX', 100, 2, 1000)
+    MIN, MAX = _roll_range()
     # Free !roll throws per session – by viewer status. Beyond that only the
     # channel-points reward. The broadcaster rolls without limit, a non-follower not at all
     FREE_PER_SESSION: int = _env_int('ROLL_FREE_PER_SESSION', 3, 1, 1000)
@@ -261,6 +267,12 @@ def _curse_range() -> tuple[int, int]:
     return ceiling, floor
 
 
+def _curse_step() -> int:
+    # At least 1: with 0 the ceiling never reaches the floor, and a curse would last the
+    # whole stream instead of lifting after the hold
+    return _env_int('REWARD_CURSE_STEP', 5, 1, 1000)
+
+
 class Rewards:
     # Channel-points rewards. They work only when the channel token is present –
     # without it the flag enables nothing, and the bot logs an authorization link
@@ -274,7 +286,7 @@ class Rewards:
     # on them – their own or someone's reroll – lowers the ceiling by CURSE_STEP, not below CURSE_FLOOR.
     # On the floor the ceiling holds for CURSE_HOLD_MINUTES, then the curse lifts
     CURSE_CEILING, CURSE_FLOOR = _curse_range()
-    CURSE_STEP: int = _env_int('REWARD_CURSE_STEP', 5, 0, 1000)
+    CURSE_STEP: int = _curse_step()
     CURSE_HOLD_MINUTES: int = _env_int('REWARD_CURSE_HOLD_MINUTES', 15, 1, 1440)
     # After a successful reroll the target is immune to new rerolls for this many minutes:
     # Twitch's limit counts each attacker separately, and a crowd finishes off one target.

@@ -23,6 +23,10 @@ logger = logging.getLogger(__name__)
 
 FORMATS = ('lines', 'telegram', 'text')
 
+# Rows per transaction: the running bot shares the file, and one transaction for a whole
+# import holds the write lock past SQLite's 5 s wait, losing the bot's chat inserts
+IMPORT_BATCH = 2000
+
 # --format text: a piece is up to this many sentences, and stops growing
 # once it reaches PIECE_CHARS – a long sentence still stays whole
 PIECE_SENTENCES = 3
@@ -43,8 +47,11 @@ def parse_lore_file(path: str, fmt: str = 'lines') -> tuple[list[str], str]:
     """Entries of a lore file and its default source name."""
     if fmt == 'telegram':
         return _parse_telegram(path)
-    with open(path, encoding='utf-8') as f:
-        raw = f.read()
+    try:
+        with open(path, encoding='utf-8') as f:
+            raw = f.read()
+    except UnicodeDecodeError as e:
+        raise LoreError(f'{path}: не UTF-8 ({e.reason}) – пересохрани файл в UTF-8') from e
     source = Path(path).name
     if fmt == 'text':
         return _parse_text(raw), source
@@ -73,14 +80,21 @@ def _parse_telegram(path: str) -> tuple[list[str], str]:
             data = json.load(f)
     except (OSError, ValueError) as e:
         raise LoreError(f'{path}: не JSON экспорта Telegram ({e})') from e
+    if not isinstance(data, dict):
+        raise LoreError(f'{path}: это не экспорт чата Telegram Desktop')
     chats = data.get('chats', {}).get('list') if isinstance(data.get('chats'), dict) else None
     if chats is None:
         if 'messages' not in data:
             raise LoreError(f'{path}: нет messages – это не экспорт чата Telegram Desktop')
         chats = [data]
+    if not isinstance(chats, list) or not all(isinstance(c, dict) for c in chats):
+        raise LoreError(f'{path}: неожиданное устройство экспорта – чаты не объекты')
     entries = []
     for chat in chats:
-        for message in chat.get('messages', []):
+        messages = chat.get('messages', [])
+        if not isinstance(messages, list) or not all(isinstance(m, dict) for m in messages):
+            raise LoreError(f'{path}: неожиданное устройство экспорта – сообщения не объекты')
+        for message in messages:
             if message.get('type') != 'message':
                 continue
             # A long message is one entry anyway: splitting a chat line loses who said it
@@ -171,18 +185,17 @@ async def import_entries(entries: list[str], source: str | None = None) -> tuple
     """
     db = await get_db()
     added = 0
-    skipped = 0
-    for entry in entries:
-        cursor = await db.execute(
-            'INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, ?)', (entry, source)
+    for start in range(0, len(entries), IMPORT_BATCH):
+        batch = entries[start:start + IMPORT_BATCH]
+        cursor = await db.executemany(
+            'INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, ?)',
+            [(entry, source) for entry in batch],
         )
-        if cursor.rowcount:
-            added += 1
-        else:
-            skipped += 1
-    await db.commit()
+        # rowcount of executemany sums the rows actually inserted; ignored duplicates add 0
+        added += cursor.rowcount
+        await db.commit()
     invalidate_knowledge_cache()
-    return added, skipped
+    return added, len(entries) - added
 
 
 async def lore_sources() -> list[tuple[str | None, int]]:

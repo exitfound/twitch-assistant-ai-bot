@@ -97,6 +97,9 @@ class RewardService:
         self._bot = bot
         self._channel_id: str | None = None
         self._actions: dict[str, str] = {}      # Twitch reward id → action
+        # Whether the rewards should be open, i.e. the stream is live. Written by set_open()
+        # even before start() finishes, so a stream starting mid-start is not lost
+        self._open = False
         self.active = False
 
     async def start(self, channel_id: str, *, open_: bool) -> None:
@@ -107,20 +110,30 @@ class RewardService:
         if self.active:
             return
         self._channel_id = channel_id
+        self._open = open_
         # Anything redeemed before the subscription will never arrive as an event
-        started = datetime.datetime.now(datetime.timezone.utc)
+        started = datetime.datetime.now(datetime.UTC)
         await self._sync()
         await self._bot.subscribe_websocket(
             eventsub.ChannelPointsRedeemAddSubscription(broadcaster_user_id=channel_id),
             as_bot=False, token_for=channel_id,
         )
         self.active = True
-        await self._set_paused(not open_)
-        logger.info(
-            'Награды за баллы канала подключены (%s): %s',
-            'эфир идёт' if open_ else 'на паузе до начала эфира', ', '.join(s.title for s in _specs()),
-        )
-        await self._settle_stale(started)
+        # The subscription is live from here: a failure below is logged, not raised, or
+        # the service would stay half-started with no retry on reconnect
+        try:
+            await self._set_paused(not self._open)
+            logger.info(
+                'Награды за баллы канала подключены (%s): %s',
+                'эфир идёт' if self._open else 'на паузе до начала эфира',
+                ', '.join(s.title for s in _specs()),
+            )
+        except Exception:
+            logger.exception('Награды подключены, но паузу выставить не удалось')
+        try:
+            await self._settle_stale(started)
+        except Exception:
+            logger.exception('Не удалось разобрать зависшие выкупы')
 
     async def stop(self) -> None:
         """Pause the rewards: while the bot is away, there is nothing to spend points on."""
@@ -134,7 +147,11 @@ class RewardService:
             logger.exception('Не удалось поставить награды на паузу')
 
     async def set_open(self, open_: bool) -> None:
-        """The stream started or ended: unpause the rewards or pause them."""
+        """The stream started or ended: unpause the rewards or pause them.
+
+        Remembered even while the service is not active: start() applies the latest state.
+        """
+        self._open = open_
         if not self.active:
             return
         try:

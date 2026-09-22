@@ -157,9 +157,14 @@ async def probe_context(ids: list[int], limit: int, samples: int):
         await close_db()
 
 
-async def clear_memory():
+async def clear_memory(dry_run: bool):
     await init_db()
     try:
+        if dry_run:
+            # --dry-run only counts, as with --clear-lore: a real wipe costs a paid --build-memory
+            counts = await memory.counts()
+            print('Dry run: было бы удалено ' + ', '.join(f'{t} {n}' for t, n in counts.items()))
+            return
         await memory.clear()
         print('Память очищена (хроники, события, профили)')
     finally:
@@ -186,7 +191,46 @@ async def vacuum():
         await close_db()
 
 
-def main():
+def _check_combination(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """One action per run, and each modifier only with an action that reads it.
+
+    Without an action bot.py starts the bot: a stray --dry-run would bring up a second
+    instance next to the running one, answering chat twice. With the wrong action it is
+    ignored: --vacuum --dry-run compacts the file, --probe-context --dry-run still pays.
+    --build-memory with --clear-memory and --upload-lore with --clear-lore are one action each.
+    """
+    lore = '--upload-lore / --clear-lore'
+    actions = [name for name, given in (
+        ('--list-facts', args.list_facts),
+        ('--probe-context', args.probe_context is not None),
+        ('--build-memory', args.build_memory),
+        ('--clear-memory', args.clear_memory and not args.build_memory),
+        ('--backup', args.backup is not None),
+        ('--vacuum', args.vacuum),
+        ('--sync-emotes', args.sync_emotes is not None),
+        ('--lore-sources', args.lore_sources),
+        (lore, bool(args.upload_lore or args.clear_lore)),
+    ) if given]
+    if len(actions) > 1:
+        parser.error(f'по одной команде за запуск, а указаны: {", ".join(actions)}')
+    modifiers = [(name, readers) for name, given, readers in (
+        ('--dry-run', args.dry_run, {'--build-memory', '--clear-memory', '--sync-emotes', lore}),
+        ('--source', args.source is not None, {lore}),
+        ('--format', args.format != 'lines', {lore}),
+        ('--limit', args.limit != parser.get_default('limit'), {'--build-memory', '--probe-context'}),
+        ('--samples', args.samples != parser.get_default('samples'), {'--probe-context'}),
+        ('--replace-emotes', args.replace_emotes, {'--sync-emotes'}),
+    ) if given]
+    if modifiers and not actions:
+        names = ', '.join(name for name, _ in modifiers)
+        parser.error(f'{names} без команды: бот не запускается с этими флагами')
+    stray = [name for name, readers in modifiers if actions[0] not in readers]
+    if stray:
+        parser.error(f'{", ".join(stray)} не относится к {actions[0]}')
+
+
+def main(argv: list[str] | None = None) -> bool:
+    """Run a maintenance command. False – no command given, bot.py starts the bot."""
     parser = argparse.ArgumentParser(description='Twitch AI Bot')
     parser.add_argument(
         '--upload-lore', nargs='+', metavar='FILE',
@@ -259,7 +303,8 @@ def main():
         '--replace-emotes', action='store_true',
         help='С --sync-emotes: пересобрать список с нуля вместо слияния',
     )
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
+    _check_combination(parser, args)
 
     if args.list_facts:
         setup_logging('WARNING')
@@ -272,7 +317,7 @@ def main():
         asyncio.run(build_memory(args.dry_run, max(1, args.limit), args.clear_memory))
     elif args.clear_memory:
         setup_logging('WARNING')
-        asyncio.run(clear_memory())
+        asyncio.run(clear_memory(args.dry_run))
     elif args.backup is not None:
         setup_logging('WARNING')
         asyncio.run(backup(args.backup or None))

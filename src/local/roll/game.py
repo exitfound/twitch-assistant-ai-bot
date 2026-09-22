@@ -126,16 +126,20 @@ def _lowered(ceiling: int, floor_at: float | None) -> tuple[int, float | None]:
     return next_ceiling, floor_at
 
 
-def _minutes_left(floor_at: float | None) -> int | None:
+def _minutes_left(floor_at: float | None, until: float | None = None) -> int | None:
     """Minutes until a curse sitting on the floor lifts. None – nothing to wait for.
 
     None means either that the ceiling is still dropping (no floor_at yet) or that the
     hold has already run out. texts.curse_note() picks a different line by exactly that,
-    so «expired» must not come back as «one minute left».
+    so «expired» must not come back as «one minute left». The previous stream's loser
+    curse also has a hard deadline, until: the lift comes at whichever is earlier.
     """
     if floor_at is None:
         return None
-    seconds = Rewards.CURSE_HOLD_MINUTES * 60 - (time.time() - floor_at)
+    lifts_at = floor_at + Rewards.CURSE_HOLD_MINUTES * 60
+    if until is not None:
+        lifts_at = min(lifts_at, until)
+    seconds = lifts_at - time.time()
     return max(1, math.ceil(seconds / 60)) if seconds > 0 else None
 
 
@@ -165,7 +169,7 @@ async def _throw_for(
     await set_curse(session_id, user, next_ceiling, floor_at, until)
     return {
         'value': value, 'ceiling': ceiling, 'next_ceiling': next_ceiling,
-        'curse_minutes_left': _minutes_left(floor_at),
+        'curse_minutes_left': _minutes_left(floor_at, until),
     }
 
 
@@ -315,7 +319,7 @@ async def status(session_id: str, user: str, *, limit: int, unlimited: bool = Fa
         value=row.value if row else None,
         free_left=None if unlimited else max(0, limit - (row.free_throws if row else 0)),
         ceiling=curse[0] if curse else None,
-        curse_minutes_left=_minutes_left(curse[1]) if curse else None,
+        curse_minutes_left=_minutes_left(curse[1], row.curse_until) if curse else None,
         shield=await has_action(session_id, ACTION_SHIELD, user, OK),
         shield_minutes_left=left,
         **await _standings(session_id),

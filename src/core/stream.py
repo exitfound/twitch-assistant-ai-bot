@@ -15,7 +15,7 @@ the next stream counts as an outage.
 import asyncio
 import logging
 import time
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 from src.core.config import Stream
 from src.core.database import (
@@ -46,6 +46,9 @@ class StreamTracker:
         self._end_lookup = end_lookup
         self._stream_id: str | None = None
         self._session: str | None = None
+        # online() awaits the database several times before it records the stream: an
+        # offline() from the event, the watch loop or a redelivery must wait its turn
+        self._lock = asyncio.Lock()
 
     @property
     def live(self) -> bool:
@@ -66,6 +69,10 @@ class StreamTracker:
         closed by mistake. A new id shortly after the previous stream ended is an
         outage, same session. A previous stream whose end the bot did not see is closed.
         """
+        async with self._lock:
+            return await self._online(stream_id, started_at)
+
+    async def _online(self, stream_id: str, started_at: float) -> bool:
         known = await get_stream(stream_id)
         if known is not None:
             if known.ended_at is not None:
@@ -89,6 +96,10 @@ class StreamTracker:
 
     async def offline(self) -> None:
         """Stream ended: the session is by date again."""
+        async with self._lock:
+            await self._offline()
+
+    async def _offline(self) -> None:
         if self._stream_id is not None:
             await end_stream(self._stream_id, time.time())
             logger.info('Эфир %s закончился, сессия %s закрыта', self._stream_id, self._session)
@@ -96,11 +107,12 @@ class StreamTracker:
 
     async def settle_missed_end(self) -> None:
         """No stream at startup, but the last one in the DB is open: the bot missed its end."""
-        last = await get_last_stream()
-        if last is None or last.ended_at is not None:
-            return
-        ended = await self._estimate_end(last)
-        await end_stream(last.stream_id, ended)
+        async with self._lock:
+            last = await get_last_stream()
+            if last is None or last.ended_at is not None:
+                return
+            ended = await self._estimate_end(last)
+            await end_stream(last.stream_id, ended)
         logger.info('Эфир %s закончился, пока бота не было: конец записан на %s',
                     last.stream_id, time.strftime('%Y-%m-%d %H:%M', time.localtime(ended)))
 

@@ -81,9 +81,11 @@ async def handle_summary(ctx: CommandContext) -> None:
 
     async def run() -> bool:
         if previous:
-            result, tag, empty = await summary.previous(ctx.session_id, ctx.user), '[summary] прошлый', 'summary_no_previous'
+            result = await summary.previous(ctx.session_id, ctx.user)
+            tag, empty = '[summary] прошлый', 'summary_no_previous'
         else:
-            result, tag, empty = await summary.now(ctx.session_id, ctx.user), '[summary]', 'summary_empty'
+            result = await summary.now(ctx.session_id, ctx.user)
+            tag, empty = '[summary]', 'summary_empty'
         if result is None:
             await ctx.refuse()
             await ctx.message.respond(Content.text(empty, user=ctx.user))

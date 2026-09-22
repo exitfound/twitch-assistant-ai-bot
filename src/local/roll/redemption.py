@@ -10,6 +10,7 @@ from src.core.config import Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
 from src.local.roll import game
+from src.local.roll.storage import get_action_status
 from src.local.roll.texts import champion_note, curse_note, curse_values, reward_title
 
 logger = logging.getLogger(__name__)
@@ -51,6 +52,11 @@ async def handle_redemption(
     leave the status alone.
     """
     session_id = bot.session_id
+    if await get_action_status(redemption_id) is not None:
+        # Checked before the offline refund: EventSub may redeliver an applied redemption
+        # after the stream ended, and chat must not hear «points refunded» for it
+        logger.info('Повтор выкупа %s, пропускаю', redemption_id)
+        return None
     if not bot.stream_live:
         # Offline the rewards are paused, but a redemption may slip through as the stream ends
         await _say(bot, session_id, action, Content.text(
@@ -103,7 +109,11 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
 
 
 async def _say(bot, session_id: str, action: str, text: str) -> None:
-    # The reward outcome is already applied: a message that did not go out
-    # does not change anything about the points
-    if text and await bot.send_chat_message(text):
-        await save_bot_interaction(session_id, '_reward_', f'[reward:{action}]', text)
+    # The reward outcome is already applied: a message that did not go out or was not
+    # recorded does not change anything about the points, and must not keep the caller
+    # from setting the redemption's status
+    try:
+        if text and await bot.send_chat_message(text):
+            await save_bot_interaction(session_id, '_reward_', f'[reward:{action}]', text)
+    except Exception:
+        logger.exception('Итог награды %s не записан', action)

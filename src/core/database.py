@@ -16,6 +16,11 @@ logger = logging.getLogger(__name__)
 
 _db: aiosqlite.Connection | None = None
 _db_lock = asyncio.Lock()
+# Set by close_db(): a task finishing after shutdown must fail, not open a new connection
+# whose non-daemon aiosqlite thread keeps the process from exiting. init_db() clears it
+_closed = False
+# Seconds a query waits for another process's write lock before failing
+BUSY_TIMEOUT = 30
 # Ids of all knowledge rows for the random «language» sample, and when they were read
 _knowledge_ids: list[int] | None = None
 _knowledge_ids_at = 0.0
@@ -27,22 +32,30 @@ KNOWLEDGE_IDS_TTL = 600
 async def get_db() -> aiosqlite.Connection:
     global _db
     async with _db_lock:
+        if _closed:
+            raise RuntimeError('База уже закрыта: процесс завершается')
         if _db is None:
-            _db = await aiosqlite.connect(DB_PATH)
+            # A CLI command writing to the same file (--vacuum, a big --upload-lore) holds
+            # the lock longer than SQLite's default 5 s wait, and a chat insert would fail
+            _db = await aiosqlite.connect(DB_PATH, timeout=BUSY_TIMEOUT)
             await _db.execute('PRAGMA journal_mode=WAL')
             await _db.execute('PRAGMA synchronous=NORMAL')
     return _db
 
 
 async def close_db() -> None:
-    global _db
+    global _db, _closed
     async with _db_lock:
+        _closed = True
         if _db is not None:
             await _db.close()
             _db = None
 
 
 async def init_db() -> None:
+    global _closed
+    # The one explicit way to open the database again after close_db()
+    _closed = False
     db = await get_db()
     await db.execute('''
         CREATE TABLE IF NOT EXISTS chat_messages (
@@ -377,17 +390,11 @@ _FTS_TABLES = [
 async def _migrate_fts(db: aiosqlite.Connection) -> None:
     """Migrate FTS tables to content-linked (content=) if needed."""
     for fts_name, source, columns in _FTS_TABLES:
-        needs_migration = False
         async with db.execute(
             "SELECT sql FROM sqlite_master WHERE name = ?", (fts_name,)
         ) as cursor:
             row = await cursor.fetchone()
-            if row is None:
-                needs_migration = True
-            elif 'content=' not in row[0]:
-                needs_migration = True
-
-        if not needs_migration:
+        if row is not None and 'content=' in row[0]:
             continue
 
         cols = ', '.join(columns)
@@ -397,7 +404,11 @@ async def _migrate_fts(db: aiosqlite.Connection) -> None:
             f"{cols}, content={source}, content_rowid=id, tokenize='unicode61')"
         )
         await db.execute(f"INSERT INTO {fts_name}({fts_name}) VALUES('rebuild')")
-        logger.warning('Migrated %s to content-linked FTS (rebuilt from %s)', fts_name, source)
+        if row is None:
+            # A new database: the table is created, nothing was migrated
+            logger.info('Создан %s (поиск по %s)', fts_name, source)
+        else:
+            logger.warning('Migrated %s to content-linked FTS (rebuilt from %s)', fts_name, source)
 
 
 async def _create_fts_triggers(db: aiosqlite.Connection) -> None:

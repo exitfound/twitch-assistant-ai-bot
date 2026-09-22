@@ -1,6 +1,8 @@
+import asyncio
 import logging
 import random
 import re
+from collections.abc import Awaitable
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +191,7 @@ def safe_format(template: str, **values) -> str:
     """Fill a template from the file. A broken template does not crash the handler."""
     try:
         return template.format(**values)
-    except (KeyError, IndexError, ValueError):
+    except (KeyError, IndexError, ValueError, AttributeError):
         logger.warning('Не удалось подставить значения в шаблон: %r', template[:80])
         return template
 
@@ -217,3 +219,18 @@ def reply_to_bot(message, bot_id) -> str | None:
     if parent is None or str(getattr(parent, 'id', '')) != str(bot_id):
         return None
     return getattr(reply, 'parent_message_body', None) or None
+
+
+async def gather_cancelling(*aws: Awaitable) -> list:
+    """Like asyncio.gather(), but the first error cancels the rest and is raised as is.
+
+    gather() leaves the siblings running after an error: they keep spending Gemini calls,
+    or reopen the database after close_db(). A bare TaskGroup would raise an
+    ExceptionGroup, which the callers' `except Unavailable` does not catch.
+    """
+    try:
+        async with asyncio.TaskGroup() as group:
+            tasks = [group.create_task(aw) for aw in aws]
+    except ExceptionGroup as errors:
+        raise errors.exceptions[0] from None
+    return [task.result() for task in tasks]

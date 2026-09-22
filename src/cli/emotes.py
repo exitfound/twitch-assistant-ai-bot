@@ -8,6 +8,7 @@ The merge is non-destructive: existing lines are left alone, new ones are
 appended to the end of their group. A full rewrite happens only on an explicit flag.
 """
 import logging
+import os
 import re
 
 import httpx
@@ -167,7 +168,7 @@ def merge(groups: dict[str, list[str]], replace: bool = False,
 
     if replace:
         # Keep the note on the key, rebuild everything else from scratch
-        block = [line for line in block if line.strip().startswith('<!--')]
+        block = _notes(block)
 
     existing = {line.strip() for line in block
                 if line.strip() and not line.strip().startswith(('#', '<!--'))}
@@ -193,7 +194,27 @@ def merge(groups: dict[str, list[str]], replace: bool = False,
             block[position:position] = fresh
 
     if write and (added or replace):
-        CONTENT_PATH.write_text(
-            '\n'.join(lines[:start] + block + lines[end:]) + '\n', encoding='utf-8'
-        )
+        _write_atomic('\n'.join(lines[:start] + block + lines[end:]) + '\n')
     return added, skipped
+
+
+def _notes(block: list[str]) -> list[str]:
+    """The `<!-- … -->` lines of a block, a multi-line note whole.
+
+    Keeping only the opening line would leave the note unclosed, and the parser would
+    then skip every key up to the next `-->`.
+    """
+    kept: list[str] = []
+    inside = False
+    for line in block:
+        if inside or line.strip().startswith('<!--'):
+            kept.append(line)
+            inside = '-->' not in line
+    return kept
+
+
+def _write_atomic(text: str) -> None:
+    """Replace CONTENT.md in one step: the bot hot-reloads it and must never read half a file."""
+    tmp = CONTENT_PATH.with_name(CONTENT_PATH.name + '.tmp')
+    tmp.write_text(text, encoding='utf-8')
+    os.replace(tmp, CONTENT_PATH)

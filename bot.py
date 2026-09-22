@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import re
@@ -6,6 +7,7 @@ import signal
 import time
 from pathlib import Path
 
+import aiohttp
 import twitchio
 from twitchio import eventsub
 from twitchio.ext import commands
@@ -268,11 +270,14 @@ class Bot(commands.Bot):
         try:
             await self._subscribe_to_chat()
         except Exception as e:
-            logger.warning('Не удалось подписаться на чат: %s', e)
-            logger.warning(
-                'Токена нет. Открой в браузере и войди под аккаунтом бота:\n'
-                'http://localhost:4343/oauth?scopes=%s&force_verify=true', OAUTH_SCOPES,
-            )
+            logger.warning('Не удалось подписаться на чат: %r', e)
+            if _token_problem(e):
+                logger.warning(
+                    'Похоже, нет токена бота или у него не те права. Открой в браузере и войди '
+                    'под аккаунтом бота:\nhttp://localhost:4343/oauth?scopes=%s&force_verify=true\n'
+                    '(в контейнере ссылка не откроется – запусти make oauth на хосте)',
+                    OAUTH_SCOPES,
+                )
         self._start_background_tasks()
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
@@ -324,7 +329,8 @@ class Bot(commands.Bot):
             logger.warning(
                 'Награды за баллы канала выключены: нет токена канала. Открой в браузере '
                 'и войди под аккаунтом канала %s:\n'
-                'http://localhost:4343/oauth?scopes=%s&force_verify=true',
+                'http://localhost:4343/oauth?scopes=%s&force_verify=true\n'
+                '(в контейнере ссылка не откроется – запусти make oauth на хосте)',
                 Twitch.CHANNEL, REWARDS_SCOPE,
             )
             return
@@ -366,6 +372,9 @@ class Bot(commands.Bot):
     async def close(self, **options) -> None:
         # The chat watch must not resubscribe a bot that is shutting down
         self._shutting_down = True
+        # The loops go first: they send to chat and call Helix through the HTTP session
+        # that super().close() is about to close
+        await self.stop_background_tasks()
         # Pause rewards before the HTTP session closes: without the bot a redemption
         # would take the points, and nobody would be there to apply it
         await self._rewards.stop()
@@ -430,7 +439,8 @@ class Bot(commands.Bot):
         A loop waking up after close_db() calls get_db(), which opens a fresh connection
         and with it a new non-daemon aiosqlite thread, and the process never exits.
         """
-        tasks = self._background_tasks()
+        # close() runs more than once on shutdown: the later calls find nothing left
+        tasks = [t for t in self._background_tasks() if not t.done()]
         if not tasks:
             return
         for task in tasks:
@@ -501,7 +511,8 @@ class Bot(commands.Bot):
         except Exception as e:
             logger.warning(
                 'Не удалось подписаться на фоловы: %s\n'
-                'Переавторизация: http://localhost:4343/oauth?scopes=%s&force_verify=true',
+                'Переавторизация: http://localhost:4343/oauth?scopes=%s&force_verify=true\n'
+                '(в контейнере ссылка не откроется – запусти make oauth на хосте)',
                 e, OAUTH_SCOPES_FOLLOWS,
             )
 
@@ -529,6 +540,19 @@ def _duration_seconds(duration: str) -> int:
     return sum(int(value) * units[unit] for value, unit in re.findall(r'(\d+)([hms])', duration))
 
 
+def _token_problem(error: Exception) -> bool:
+    """Whether a failed chat subscription may be about the bot's token.
+
+    Only then is the OAuth link worth printing: a network error, a Twitch outage or a
+    duplicate subscription would send the owner to re-authorise for nothing. An error of
+    an unknown kind still gets the hint – a missing token is not an HTTP error.
+    """
+    if isinstance(error, twitchio.HTTPException):
+        return error.status in (401, 403)
+    # TimeoutError is an OSError
+    return not isinstance(error, (OSError, aiohttp.ClientError))
+
+
 async def run_bot() -> None:
     setup_logging('INFO')
     validate_config()
@@ -554,10 +578,8 @@ async def run_bot() -> None:
             )
             if shutdown_task in done:
                 bot_task.cancel()
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await bot_task
-                except asyncio.CancelledError:
-                    pass
             else:
                 # The bot stopped on its own. Its exception has to be taken out of the
                 # task, otherwise the process exits as if nothing happened and the
@@ -577,7 +599,5 @@ async def run_bot() -> None:
 if __name__ == '__main__':
     from src.cli.main import main as cli_main
     if not cli_main():
-        try:
+        with contextlib.suppress(KeyboardInterrupt):
             asyncio.run(run_bot())
-        except KeyboardInterrupt:
-            pass

@@ -19,6 +19,17 @@ SAFETY_OFF = [
     types.SafetySetting(category='HARM_CATEGORY_CIVIC_INTEGRITY', threshold='OFF'),
 ]
 
+# The picture check (!ascii) is the one request that wants Google's classifier on: it
+# vets a picture from a random viewer instead of voicing the persona. Harassment and hate
+# stay off there too – memes are made of them, and blocking would refuse ordinary pictures
+SAFETY_CHECK = [
+    types.SafetySetting(category='HARM_CATEGORY_HARASSMENT', threshold='OFF'),
+    types.SafetySetting(category='HARM_CATEGORY_HATE_SPEECH', threshold='OFF'),
+    types.SafetySetting(category='HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold='BLOCK_MEDIUM_AND_ABOVE'),
+    types.SafetySetting(category='HARM_CATEGORY_DANGEROUS_CONTENT', threshold='BLOCK_MEDIUM_AND_ABOVE'),
+    types.SafetySetting(category='HARM_CATEGORY_CIVIC_INTEGRITY', threshold='OFF'),
+]
+
 _client: genai.Client | None = None
 _semaphore = asyncio.Semaphore(Gemini.CONCURRENCY)
 
@@ -42,18 +53,22 @@ def get_client() -> genai.Client:
     return _client
 
 
-def make_gen_config(*, system: str | None = None,
-                    temperature: float | None = None) -> types.GenerateContentConfig:
-    """The request config: persona and chat temperature by default.
+def make_gen_config(*, system: str | None = None, temperature: float | None = None,
+                    persona: bool = True,
+                    safety: list[types.SafetySetting] | None = None) -> types.GenerateContentConfig:
+    """The request config: persona, chat temperature and safety filters off by default.
 
-    A command with its own instruction or temperature passes them in rather than
+    A command with its own instruction, temperature or filters passes them in rather than
     building a config of its own: a hand-built config easily omits thinking_config,
     and GEMINI_THINKING_BUDGET is then replaced by dynamic thinking, billed separately.
+    persona=False and no system – a request with no system instruction at all.
     """
+    if system is None and persona:
+        system = Content.prompt('system')
     config = types.GenerateContentConfig(
-        system_instruction=Content.prompt('system') if system is None else system,
+        system_instruction=system,
         temperature=Gemini.TEMPERATURE if temperature is None else temperature,
-        safety_settings=SAFETY_OFF,
+        safety_settings=SAFETY_OFF if safety is None else safety,
     )
     if Gemini.THINKING_BUDGET >= 0:
         config.thinking_config = types.ThinkingConfig(
@@ -91,12 +106,27 @@ BLOCK_OUTPUT = 'output'
 # Gemini answered, but with no text and no filter named (RECITATION, OTHER, …).
 # Unlike a timeout this repeats for the same prompt, so it must not be retried forever
 EMPTY = 'empty'
+# The API refused the request itself (400 INVALID_ARGUMENT or 413: bad argument, schema,
+# size). Also repeats for the same prompt, so it is a failure of the prompt, not an outage
+ERROR = 'error'
+
+
+def _prompt_error(e: Exception) -> bool:
+    """The request was refused for what it contains. A bad key, a retired model or an
+    unsupported region (403, 404, FAILED_PRECONDITION, API_KEY_INVALID) fail every prompt
+    alike and count as an outage."""
+    if not isinstance(e, errors.APIError) or e.code not in (400, 413):
+        return False
+    if e.status not in (None, 'INVALID_ARGUMENT'):
+        return False
+    return 'api key' not in f'{e.message} {e.details}'.lower().replace('_', ' ')
 
 
 async def generate_checked(contents: str | list,
                            config: types.GenerateContentConfig) -> tuple[str | None, str | None]:
     """Like generate(), plus why there is no text: BLOCK_INPUT, BLOCK_OUTPUT, EMPTY
-    (answered with nothing), or None – no answer at all (timeout, network, API error).
+    (answered with nothing), ERROR (the API rejected the request for its content), or
+    None – no answer at all (timeout, network, server errors past the retries, a bad key).
 
     Neither filter can be switched off. The input filter (BLOCK_INPUT) judges the
     whole prompt, so a caller with a big input can split it and try again. The
@@ -122,6 +152,8 @@ async def generate_checked(contents: str | list,
                         logger.warning('Gemini: таймаут %d с (попыток: %d)', Gemini.TIMEOUT, attempt + 1)
                     else:
                         logger.warning('Gemini: запрос не удался (попыток: %d): %s', attempt + 1, e)
+                    if _prompt_error(e):
+                        return None, ERROR
                     return None, None
                 delay = RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
                 logger.info('Gemini: %s, повтор через %.1f с', type(e).__name__, delay)

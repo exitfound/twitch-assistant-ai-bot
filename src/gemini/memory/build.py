@@ -20,8 +20,8 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.config import Gemini, Memory
 from src.core.content import Content
-from src.core.utils import clean_nick, fix_dashes, trim_to_sentence
-from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, SAFETY_OFF, generate_checked
+from src.core.utils import clean_nick, fix_dashes, gather_cancelling, trim_to_sentence
+from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR, SAFETY_OFF, generate_checked
 from src.gemini.memory import storage
 from src.gemini.memory.storage import Block, Profile
 from src.local.roll.storage import get_session_champion, get_session_loser
@@ -125,9 +125,9 @@ class Unavailable(Exception):
 
 
 async def _ask(prompt: str, schema: type[BaseModel], max_tokens: int) -> BaseModel | None:
-    """The parsed answer. None – no usable answer (unparseable, or empty or cut by
-    the output filter twice); _Blocked – the input filter refused; Unavailable –
-    no answer at all (timeout, network, API error).
+    """The parsed answer. None – no usable answer (unparseable, empty, cut by the output
+    filter or rejected by the API twice); _Blocked – the input filter refused;
+    Unavailable – no answer at all (timeout, network, server errors).
 
     Asked for once more when the answer is unparseable (the model occasionally loops
     on one phrase until max_tokens cuts the JSON off) or stopped by the output filter,
@@ -138,10 +138,10 @@ async def _ask(prompt: str, schema: type[BaseModel], max_tokens: int) -> BaseMod
             text, block = await generate_checked(prompt, _config(schema, max_tokens))
         if block == BLOCK_INPUT:
             raise _Blocked
-        if block in (BLOCK_OUTPUT, EMPTY):
-            # Answered, but with nothing: one more try, then it counts as a failure –
-            # a prompt that always comes back empty (RECITATION) must not hold up the
-            # conversation and cost a call on every check
+        if block in (BLOCK_OUTPUT, EMPTY, ERROR):
+            # Answered with nothing, or the API rejected the request: one more try, then it
+            # counts as a failure – a prompt that always comes back empty (RECITATION) or
+            # rejected (a 4xx) must not hold up the conversation and cost a call every check
             logger.warning('Память: Gemini ответил пусто (%s, попытка %d)', block, attempt + 1)
             continue
         if not text:
@@ -197,8 +197,8 @@ async def _chronicle_pieces(key: str, chat: list[tuple[str, str]],
     half = len(chat) // 2
     logger.info('Память: хроника %s заблокирована фильтром Gemini, делю (%d сообщений)', key, len(chat))
     halves = (chat[:half], chat[half:])
-    results = await asyncio.gather(*(_chronicle_pieces(key, h, game) for h in halves))
-    for h, result in zip(halves, results):
+    results = await gather_cancelling(*(_chronicle_pieces(key, h, game) for h in halves))
+    for h, result in zip(halves, results, strict=True):
         if result is None:
             # The chronicle goes on without this part and its people's events
             logger.warning('Память: хроника %s – кусок из %d сообщений не прошёл, пишу без него',
@@ -222,7 +222,8 @@ async def _merge(key: str, texts: list[str]) -> str:
     prompt = Content.prompt('memory_chronicle_merge', started=key, parts=parts)
     try:
         result = await _ask(prompt, _Merged, CHRONICLE_MAX_TOKENS)
-    except _Blocked:
+    except (_Blocked, Unavailable):
+        # The pieces are already paid for: an outage on the merge must not throw them away
         result = None
     if result is None or not result.summary.strip():
         logger.warning('Память: хроника %s не сведена, оставляю %d кусков', key, len(texts))

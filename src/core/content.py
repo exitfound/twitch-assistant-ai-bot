@@ -31,7 +31,9 @@ KEY_RE = re.compile(r'^###\s+(\S+)\s*$')
 # Keys the bot cannot work without – checked at startup.
 REQUIRED = {
     'prompts': (
-        'system', 'ask', 'ask_followup', 'summary', 'summary_request', 'summary_request_previous', 'summary_previous', 'summary_tail', 'who', 'versus',
+        'system', 'ask', 'ask_followup',
+        'summary', 'summary_request', 'summary_request_previous', 'summary_previous', 'summary_tail',
+        'who', 'versus',
         'picture',
         'proactive_user', 'proactive_general',
         'user_question', 'interaction_line',
@@ -58,7 +60,8 @@ REQUIRED = {
         'roll_perk_shield_on', 'roll_perk_curse_on',
         'reward_extra_title', 'reward_reroll_title', 'reward_reroll_prompt',
         'reward_curse_title', 'reward_curse_prompt', 'reward_shield_title',
-        'reward_extra_done', 'reward_extra_cursed', 'reward_reroll_done', 'reward_reroll_first', 'reward_curse_hit', 'reward_shield_done',
+        'reward_extra_done', 'reward_extra_cursed', 'reward_reroll_done', 'reward_reroll_first',
+        'reward_curse_hit', 'reward_shield_done',
         'reward_refund_free_left', 'reward_refund_bad_target', 'reward_refund_self',
         'reward_refund_not_rolled', 'reward_refund_shielded', 'reward_refund_shield_active',
         'reward_refund_already_cursed', 'reward_refund_protected', 'reward_refund_unknown_target',
@@ -125,6 +128,12 @@ def parse(raw: str) -> dict[str, dict[str, str]]:
     return data
 
 
+def _missing_keys(data: dict[str, dict[str, str]]) -> list[str]:
+    """REQUIRED keys the parsed file lacks altogether (an empty value still counts as present)."""
+    return [f'{section}.{key}' for section, keys in REQUIRED.items()
+            for key in keys if key not in data.get(section, {})]
+
+
 class _ContentFile:
     """CONTENT.md, re-read when its mtime changes."""
 
@@ -153,6 +162,14 @@ class _ContentFile:
             # An empty parse most likely means the headings were wiped; the previous version is better.
             self._mtime = mtime
             self._log_once('%s не содержит секций – остаюсь на прошлой версии', self._path)
+            return self._data
+        missing = _missing_keys(data)
+        if self._data and missing:
+            # Caught mid-write, or a key renamed by mistake: the running bot keeps the last
+            # complete version rather than sending empty texts. At startup there is no
+            # previous version, and validate_content() reports the gap instead
+            self._mtime = mtime
+            self._log_once('%s: нет ключей %s – остаюсь на прошлой версии', self._path, ', '.join(missing))
             return self._data
         self._data = data
         self._mtime = mtime

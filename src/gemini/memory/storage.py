@@ -10,6 +10,7 @@ rows that still hold commands.
 import bisect
 import json
 import random
+import re
 import time
 from datetime import datetime
 from typing import NamedTuple
@@ -196,10 +197,10 @@ async def ever_active_chatters(blocks: list[Block], min_messages: int) -> dict[s
             counts[username, i] = counts.get((username, i), 0) + 1
     total: dict[str, int] = {}
     last: dict[str, Block] = {}
-    for (username, i), n in counts.items():
+    for (username, _), n in counts.items():
         if n >= min_messages:
             total[username] = total.get(username, 0) + n
-    for (username, i), n in sorted(counts.items(), key=lambda item: item[0][1]):
+    for (username, i), _ in sorted(counts.items(), key=lambda item: item[0][1]):
         if username in total:
             last[username] = blocks[i]
     return {u: last[u] for u in sorted(total, key=total.get, reverse=True)}
@@ -381,11 +382,20 @@ async def get_profile(username: str) -> Profile | None:
         row = await cursor.fetchone()
     if row is None:
         return None
+    return Profile(row[0], row[1], _relations(row[2]), row[3], row[4])
+
+
+def _relations(raw: str | None) -> list[dict]:
+    """The stored relations, only well-formed {nick, note} entries: readers index them
+    directly, and one bad entry would break every answer that mentions the chatter."""
     try:
-        relations = json.loads(row[2])
+        items = json.loads(raw or '[]')
     except ValueError:
-        relations = []
-    return Profile(row[0], row[1], relations, row[3], row[4])
+        return []
+    if not isinstance(items, list):
+        return []
+    return [r for r in items
+            if isinstance(r, dict) and isinstance(r.get('nick'), str) and isinstance(r.get('note'), str)]
 
 
 async def save_profile(profile: Profile) -> None:
@@ -400,22 +410,45 @@ async def save_profile(profile: Profile) -> None:
     await db.commit()
 
 
+MEMORY_TABLES = ('chronicles', 'chatter_events', 'chatter_profiles', 'memory_state')
+
+
 async def clear_memory() -> None:
     db = await get_db()
-    for table in ('chronicles', 'chatter_events', 'chatter_profiles', 'memory_state'):
+    for table in MEMORY_TABLES:
         await db.execute(f'DELETE FROM {table}')
     await db.commit()
 
 
+async def memory_counts() -> dict[str, int]:
+    """Rows per memory table: what clear_memory() would delete."""
+    db = await get_db()
+    counts = {}
+    for table in MEMORY_TABLES:
+        async with db.execute(f'SELECT COUNT(*) FROM {table}') as cursor:
+            counts[table] = (await cursor.fetchone())[0]
+    return counts
+
+
 # --- facts (the !fact table, retired) ------------------------------------
+
+async def facts_naming(username: str) -> list[tuple[str, str]]:
+    """(author, fact) of the saved facts that name the chatter by @nick.
+
+    facts.username is the author, so a fact about someone is found by the mention. LIKE
+    narrows the rows, the regex ends the nick at a word boundary: @nick2 is not @nick.
+    """
+    mention = re.compile('@' + re.escape(username) + r'(?!\w)', re.IGNORECASE)
+    db = await get_db()
+    async with db.execute(
+        "SELECT username, fact FROM facts WHERE fact LIKE ? ESCAPE '\\' ORDER BY id", (_like(f'@{username}'),),
+    ) as cursor:
+        return [(author, fact) for author, fact in await cursor.fetchall() if mention.search(fact)]
+
 
 async def facts_about(username: str) -> list[str]:
     """Saved facts that name the chatter by @nick – input for their first profile."""
-    db = await get_db()
-    async with db.execute(
-        "SELECT fact FROM facts WHERE fact LIKE ? ESCAPE '\\' ORDER BY id", (_like(f'@{username}'),),
-    ) as cursor:
-        return [row[0] for row in await cursor.fetchall()]
+    return [fact for _, fact in await facts_naming(username)]
 
 
 async def move_unaddressed_facts() -> int:

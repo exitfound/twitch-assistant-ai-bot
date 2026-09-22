@@ -12,12 +12,11 @@ import json
 import random
 import re
 import time
-from datetime import datetime
 from enum import StrEnum
 from typing import NamedTuple
-from zoneinfo import ZoneInfo
 
 from src.core.database import get_db, invalidate_knowledge_cache
+from src.core.utils import local_time
 
 class ChronicleStatus(StrEnum):
     OK = 'ok'
@@ -49,7 +48,7 @@ class Block(NamedTuple):
     practice a stream – but told by the messages alone, not by the stream state:
     no Twitch event, bot restart or missed stream end can shift it.
     """
-    key: str          # Moscow time of its first message (KEY_TIMEZONE), 'YYYY-MM-DD HH:MM'
+    key: str          # time of its first message in BOT_TIMEZONE, 'YYYY-MM-DD HH:MM'
     first_id: int     # chat_messages ids, inclusive
     last_id: int
     count: int        # messages, commands not counted
@@ -59,15 +58,11 @@ class Block(NamedTuple):
         return self.first_id, self.last_id
 
 
-# The conversation key uses a fixed zone, not the process's: a container runs in UTC
-# while --build-memory runs by hand in local time, and keys differing between them break
-# the crash-rerun check in update_profile(). It is the zone the container is given.
-KEY_TIMEZONE = ZoneInfo('Europe/Moscow')
-
-
 def _key(ts: float) -> str:
-    # Same shape as a stream session: readable and sorts by time
-    return datetime.fromtimestamp(ts, KEY_TIMEZONE).strftime('%Y-%m-%d %H:%M')
+    # Same shape and zone as a stream session: readable, sorts by time, and alike in the
+    # container and in a --build-memory run by hand – the crash-rerun check in
+    # update_profile() compares these keys
+    return local_time(ts).strftime('%Y-%m-%d %H:%M')
 
 
 async def chat_blocks(silence_minutes: int, *, uncovered: bool) -> list[Block]:

@@ -21,6 +21,7 @@ from src.core.config import Stream
 from src.core.database import (
     StreamRow, end_stream, get_last_stream, get_stream, last_chat_time, reopen_stream, save_stream,
 )
+from src.core.utils import local_time
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +36,9 @@ EndLookup = Callable[[str, float], Awaitable[float | None]]
 
 
 def _session_name(started_at: float) -> str:
-    # Start date and time in local time: readable in !stat and sorts
+    # Start date and time in the bot's zone: readable in !stat and sorts
     # after date sessions of the same day
-    return time.strftime('%Y-%m-%d %H:%M', time.localtime(started_at))
+    return local_time(started_at).strftime('%Y-%m-%d %H:%M')
 
 
 class StreamTracker:
@@ -60,7 +61,7 @@ class StreamTracker:
 
     @property
     def session_id(self) -> str:
-        return self._session or time.strftime('%Y-%m-%d')
+        return self._session or local_time().strftime('%Y-%m-%d')
 
     async def online(self, stream_id: str, started_at: float) -> bool:
         """Stream is live. True – a new session started, False – the previous one continues.
@@ -114,7 +115,7 @@ class StreamTracker:
             ended = await self._estimate_end(last)
             await end_stream(last.stream_id, ended)
         logger.info('Эфир %s закончился, пока бота не было: конец записан на %s',
-                    last.stream_id, time.strftime('%Y-%m-%d %H:%M', time.localtime(ended)))
+                    last.stream_id, local_time(ended).strftime('%Y-%m-%d %H:%M'))
 
     async def _estimate_end(self, stream: StreamRow) -> float:
         """When a stream ended whose end the bot did not see.

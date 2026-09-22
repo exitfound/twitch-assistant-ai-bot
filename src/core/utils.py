@@ -2,9 +2,18 @@ import asyncio
 import logging
 import random
 import re
+import time
 from collections.abc import Awaitable
+from datetime import datetime
+
+from src.core.config import Clock
 
 logger = logging.getLogger(__name__)
+
+
+def local_time(ts: float | None = None) -> datetime:
+    """A moment in the bot's zone (BOT_TIMEZONE), now by default – not the process's zone."""
+    return datetime.fromtimestamp(time.time() if ts is None else ts, Clock.ZONE)
 
 MENTION_RE = re.compile(r'@\S+')
 

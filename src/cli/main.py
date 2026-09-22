@@ -1,6 +1,5 @@
 import argparse
 import asyncio
-import time
 
 from src.cli.emotes import SOURCES, SyncError, fetch, merge
 from src.cli.knowledge import (
@@ -8,6 +7,7 @@ from src.cli.knowledge import (
 )
 from src.core.database import backup_db, close_db, get_db, init_db, vacuum_db
 from src.core.logging_setup import setup_logging
+from src.core.utils import local_time
 from src.cli import memory, probe
 
 
@@ -174,7 +174,7 @@ async def clear_memory(dry_run: bool):
 async def backup(destination: str | None):
     await init_db()
     try:
-        target = destination or f'chat_history.backup-{time.strftime("%Y%m%d-%H%M%S")}.db'
+        target = destination or f'chat_history.backup-{local_time().strftime("%Y%m%d-%H%M%S")}.db'
         path = await backup_db(target)
         print(f'Копия БД сохранена: {path}')
     finally:

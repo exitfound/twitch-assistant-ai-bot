@@ -1,7 +1,6 @@
 import asyncio
 import contextlib
 import logging
-import os
 import re
 import signal
 import time
@@ -13,7 +12,7 @@ from twitchio import eventsub
 from twitchio.ext import commands
 
 from src.core.component import ChatComponent
-from src.core.config import Emote, Help, Memory, Proactive, Rewards, Roll, Twitch, validate_config
+from src.core.config import Emote, Files, Help, Memory, Proactive, Rewards, Roll, Twitch, validate_config
 from src.core.content import Content, validate_content
 from src.core.database import close_db, init_db
 from src.core.logging_setup import setup_logging
@@ -40,7 +39,7 @@ CHAT_WATCH_SECONDS = 60
 
 # Liveness file for the container healthcheck. Empty – no heartbeat, which is how
 # a run outside a container behaves
-HEARTBEAT_PATH = os.getenv('BOT_HEARTBEAT', '')
+HEARTBEAT_PATH = Files.HEARTBEAT or ''
 HEARTBEAT_SECONDS = 60
 
 # Where twitchio keeps the tokens: the name it uses by default, next to the working
@@ -100,7 +99,7 @@ class Bot(commands.Bot):
     # --- cooldowns ---------------------------------------------------------
 
     # Scopes are independent: waiting out a Gemini command does not block !help-bot.
-    # The scope is the command's class (KIND_LOCAL / KIND_GEMINI), passed explicitly.
+    # The scope is the command's class (Kind.LOCAL / Kind.GEMINI), passed explicitly.
     def cooldown_remaining(self, user: str, scope: str) -> float:
         expiry = self._cooldowns.get(f'{scope}:{user}')
         if expiry is None:

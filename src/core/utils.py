@@ -5,8 +5,12 @@ import re
 import time
 from collections.abc import Awaitable
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from src.core.config import Clock
+
+if TYPE_CHECKING:
+    import twitchio
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +72,7 @@ def safe_format(template: str, **values) -> str:
         return template
 
 
-def reply_to_bot(message, bot_id) -> str | None:
+def reply_to_bot(message: 'twitchio.ChatMessage', bot_id: str | int | None) -> str | None:
     """The bot's line this chat message replies to, or None if it is not a reply to the bot.
 
     twitchio's ChatMessageReply carries parent_user (a PartialUser), not

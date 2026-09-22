@@ -7,6 +7,7 @@ from src.core.activity import ChatWatch
 from src.core.config import Context, Proactive
 from src.core.content import Content
 from src.core.database import get_random_knowledge, get_recent_chat, save_bot_interaction
+from src.core.port import BotPort
 from src.core.utils import random_delay
 from src.gemini.client import generate, make_gen_config
 from src.gemini.context import ContextBuilder
@@ -18,7 +19,7 @@ from src.gemini.responder import apply_caps, maybe_add_emote, passes_moderation
 logger = logging.getLogger(__name__)
 
 
-async def proactive_loop(bot) -> None:
+async def proactive_loop(bot: BotPort) -> None:
     """A periodic remark to chat on the bot's own initiative."""
     watch = ChatWatch()
     try:
@@ -36,7 +37,7 @@ async def proactive_loop(bot) -> None:
         logger.info('Цикл проактивных сообщений остановлен')
 
 
-async def _send_proactive(bot, watch: ChatWatch) -> None:
+async def _send_proactive(bot: BotPort, watch: ChatWatch) -> None:
     session_id = bot.session_id
     # Only while live and only into a live conversation: with nobody writing since the
     # previous remark a new one is the bot talking to itself, and a message written

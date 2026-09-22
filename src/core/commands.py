@@ -7,7 +7,8 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import twitchio
-    from bot import Bot
+
+    from src.core.port import BotPort
 
 Handler = Callable[['CommandContext'], Awaitable[None]]
 
@@ -35,7 +36,7 @@ class CommandContext:
     prompt: str
     original_text: str
     session_id: str
-    bot: Bot
+    bot: BotPort
     kind: Kind = Kind.LOCAL
     args: str = ''
 

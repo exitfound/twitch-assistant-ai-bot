@@ -5,7 +5,10 @@ here: a command's role looks at the badges themselves (see _has_role() in
 component.py), because a tier folds subscriber and VIP together.
 """
 from enum import StrEnum
-from typing import TypeVar
+from typing import TYPE_CHECKING, TypeVar
+
+if TYPE_CHECKING:
+    import twitchio
 
 T = TypeVar('T')
 
@@ -18,7 +21,7 @@ class Tier(StrEnum):
     REGULAR = 'regular'
 
 
-def tier_of(chatter) -> Tier:
+def tier_of(chatter: 'twitchio.Chatter') -> Tier:
     """Broadcaster, moderator, subscriber, VIP, everyone else – in that order.
 
     Sub is checked before VIP, so someone who is both gets the gentler terms.

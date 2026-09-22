@@ -9,6 +9,7 @@ import logging
 from src.core.config import Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
+from src.core.port import BotPort
 from src.local.roll import game
 from src.local.roll.storage import get_action_status
 from src.local.roll.texts import champion_note, curse_note, curse_values, reward_title
@@ -43,7 +44,7 @@ _WITH_CURSE_NOTE = (game.Action.EXTRA, game.Action.REROLL)
 
 
 async def handle_redemption(
-    bot, action: str, redemption_id: str, user: str, user_input: str,
+    bot: BotPort, action: str, redemption_id: str, user: str, user_input: str,
 ) -> bool | None:
     """Apply the reward and report it in chat.
 
@@ -108,7 +109,7 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
     return text
 
 
-async def _say(bot, session_id: str, action: str, text: str) -> None:
+async def _say(bot: BotPort, session_id: str, action: str, text: str) -> None:
     # The reward outcome is already applied: a message that did not go out or was not
     # recorded does not change anything about the points, and must not keep the caller
     # from setting the redemption's status

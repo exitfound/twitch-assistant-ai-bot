@@ -21,6 +21,7 @@ from src.core.config import Stream
 from src.core.database import (
     StreamRow, end_stream, get_last_stream, get_stream, last_chat_time, reopen_stream, save_stream,
 )
+from src.core.port import StreamBot
 from src.core.utils import local_time
 
 logger = logging.getLogger(__name__)
@@ -135,7 +136,7 @@ class StreamTracker:
         return await last_chat_time(stream.session_id) or stream.started_at
 
 
-async def watch_stream(bot) -> None:
+async def watch_stream(bot: StreamBot) -> None:
     """Check against Twitch every CHECK_SECONDS: catches a missed stream start or end.
 
     bot must provide fetch_live_stream(), stream_went_online() and

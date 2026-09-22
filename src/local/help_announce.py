@@ -12,6 +12,7 @@ import time
 from src.core.config import Help
 from src.core.content import Content
 from src.core.activity import ChatWatch
+from src.core.port import BotPort
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,7 @@ def note_help_shown() -> None:
     _help_shown_at = time.monotonic()
 
 
-async def help_loop(bot) -> None:
+async def help_loop(bot: BotPort) -> None:
     """Periodic command reminder."""
     watch = ChatWatch()
     since = time.monotonic()
@@ -43,7 +44,7 @@ async def help_loop(bot) -> None:
         logger.info('Цикл напоминаний о командах остановлен')
 
 
-async def _announce(bot, watch: ChatWatch, since: float) -> float:
+async def _announce(bot: BotPort, watch: ChatWatch, since: float) -> float:
     """Remind if there is anyone to remind. Returns the new `since` mark."""
     # Offline there is nobody to remind: chat is empty and the game commands are closed
     if not bot.stream_live:

@@ -20,6 +20,7 @@ from src.core.database import (
     save_chat_message,
 )
 from src.core.followers import FollowerCache
+from src.core.port import BotPort
 from src.core.utils import SOSUR_RE, SOSUR_VARIANTS, reply_to_bot  # noqa: F401  (SOSUR_VARIANTS – the public place to edit the list)
 from src.core.viewer import Tier, by_tier, tier_of
 from src.gemini.commands import (
@@ -71,7 +72,7 @@ ROLE_DENIED_TEXTS = {
 }
 
 
-def _has_role(role: Role | None, chatter) -> bool:
+def _has_role(role: Role | None, chatter: twitchio.Chatter) -> bool:
     """Whether the badges are enough for the command.
 
     Badges are checked directly, not through tier_of(): that one folds
@@ -132,7 +133,7 @@ def route(text: str, registry: CommandRegistry, bot_name: str,
 
 class ChatComponent(commands.Component):
 
-    def __init__(self, bot):
+    def __init__(self, bot: BotPort) -> None:
         self.bot = bot
         self._followers = FollowerCache()
         self._registry = CommandRegistry()
@@ -207,7 +208,8 @@ class ChatComponent(commands.Component):
             return
         await entry.handler(ctx)
 
-    async def _gate(self, message, user: str, entry: CommandEntry | None, kind: Kind) -> bool:
+    async def _gate(self, message: twitchio.ChatMessage, user: str, entry: CommandEntry | None,
+                    kind: Kind) -> bool:
         """Whether to serve the viewer: follow, cooldown, role, quota. False – already answered.
 
         On success the cooldown is taken, in the scope of the command's class.
@@ -247,7 +249,8 @@ class ChatComponent(commands.Component):
             return False
         return True
 
-    async def _allowed_without_follow(self, message, user: str, entry) -> bool:
+    async def _allowed_without_follow(self, message: twitchio.ChatMessage, user: str,
+                                      entry: CommandEntry | None) -> bool:
         """Whether to let a non-following viewer in. False – they have already been refused."""
         if not Follow.REQUIRED:
             return True
@@ -262,7 +265,7 @@ class ChatComponent(commands.Component):
             await message.respond(Content.text('follow_required', user=user, command=HELP_TRIGGER))
         return False
 
-    async def _deny(self, message, user: str, key: str, **values) -> None:
+    async def _deny(self, message: twitchio.ChatMessage, user: str, key: str, **values) -> None:
         """Refuse, but at most once per DENY_REPEAT_SECONDS per viewer.
 
         Refusals by role and by quota do not change from one repeat to the next,
@@ -274,7 +277,7 @@ class ChatComponent(commands.Component):
         self.bot.set_cooldown(user, DENY_REPEAT_SECONDS, DENY_SCOPE)
         await message.respond(Content.text(key, user=user, **values))
 
-    async def _within_channel_quota(self, message, user: str, tier: Tier) -> bool:
+    async def _within_channel_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:
         """Whether the channel as a whole is within its window. False – already refused.
 
         A ceiling over everyone, on top of the per-viewer quota, which bounds one person
@@ -294,7 +297,7 @@ class ChatComponent(commands.Component):
         await self._deny(message, user, 'quota_channel', window=Quota.WINDOW_MINUTES)
         return False
 
-    async def _within_quota(self, message, user: str, tier: Tier) -> bool:
+    async def _within_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:
         """Whether the viewer is within the hourly quota. False – they have already been refused."""
         limit = _quota_per_hour(tier)
         if not limit:

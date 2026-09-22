@@ -7,7 +7,9 @@ import pytest
 import twitchio
 
 import bot as bot_module
+from fakes import FakeBot
 from src.core import database
+from src.core.port import BotPort, StreamBot
 
 
 @pytest.mark.parametrize(('error', 'hint'), [
@@ -54,3 +56,16 @@ async def test_background_tasks_stop_once_and_quietly_after(caplog):
     await bot.stop_background_tasks()
     assert loop.cancelled()
     assert [r.getMessage() for r in caplog.records].count('Фоновые задачи остановлены: 1') == 1
+
+
+def _members(protocol) -> set[str]:
+    return {n for n in dir(protocol) if not n.startswith('_')} | set(protocol.__annotations__)
+
+
+def test_the_bot_and_the_fake_satisfy_the_port():
+    """Features see the bot only through BotPort: a member renamed on one side and not
+    the other would fail at run time, in chat, not here."""
+    fake = FakeBot()
+    assert [m for m in _members(BotPort) if not hasattr(fake, m)] == []
+    # stream is set in __init__, the class alone does not carry it
+    assert [m for m in _members(StreamBot) - {'stream'} if not hasattr(bot_module.Bot, m)] == []

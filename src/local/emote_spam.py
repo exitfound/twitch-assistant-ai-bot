@@ -6,12 +6,13 @@ import random
 from src.core.activity import ChatWatch
 from src.core.config import Emote
 from src.core.content import Content
+from src.core.port import BotPort
 from src.core.utils import random_delay
 
 logger = logging.getLogger(__name__)
 
 
-async def emote_spam_loop(bot) -> None:
+async def emote_spam_loop(bot: BotPort) -> None:
     """Periodic batch of emotes in chat."""
     watch = ChatWatch()
     try:

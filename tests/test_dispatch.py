@@ -7,7 +7,7 @@ import pytest
 
 from fakes import FakeBot, make_message
 from src.core.commands import CommandContext, CommandEntry, Kind
-from src.core.component import ChatComponent
+from src.core.component import ChatComponent, route
 from src.core.config import Follow, Quota
 from src.core.database import count_bot_uses, record_bot_use
 from src.gemini.commands import handle_who
@@ -102,6 +102,14 @@ class TestRoute:
         assert entry.handler is handle_who
         assert addressed is True
         assert entry.extract_args(prompt) == 'nick'
+
+
+def test_route_is_a_function_of_the_text(component):
+    """No bot and no message needed: the same text routes the same way for any nick."""
+    registry = component._registry
+    assert route('@other привет', registry, 'other', False)[1:] == ('привет', True)
+    assert route('@other привет', registry, 'sosuryan_bot', False) == (None, None, False)
+    assert route('а почему', registry, 'sosuryan_bot', True) == (None, 'а почему', True)
 
 
 def test_original_args_restore_the_case():

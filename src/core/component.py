@@ -11,7 +11,7 @@ import twitchio
 from twitchio.ext import commands
 
 from src.core.commands import (
-    CommandContext, CommandRegistry, Kind, Role,
+    CommandContext, CommandEntry, CommandRegistry, Kind, Role,
 )
 from src.core.config import Cooldown, Follow, Picture, Quota
 from src.core.content import Content
@@ -95,6 +95,41 @@ def _cooldown_seconds(tier: Tier) -> int:
 
 
 
+def route(text: str, registry: CommandRegistry, bot_name: str,
+          is_reply: bool) -> tuple[CommandEntry | None, str | None, bool]:
+    """Determine the command, the request text and whether the bot was addressed.
+
+    Returns (entry, prompt, addressed), or (None, None, False) when the message is
+    not for the bot. Addressing is a call word, an @mention or a reply, and it is
+    required only for free text and for a command it precedes: a bare `!who ник`
+    works without it. Args are taken as written, so `!who securityexpert` keeps the
+    nick instead of losing the trigger inside it.
+    """
+    text = text.strip()
+    lowered = text.lower()
+
+    entry = registry.resolve(lowered)
+    if entry is not None:
+        return entry, lowered, False
+
+    # The whole nick only: @botname_fan is somebody else
+    mention = re.compile(re.escape(f'@{bot_name}') + r'(?!\w)', re.IGNORECASE)
+    is_mention = bool(mention.search(text))
+    is_sosur = bool(SOSUR_RE.search(text))
+    if not (is_mention or is_sosur or is_reply):
+        return None, None, False
+
+    prompt = mention.sub('', lowered)
+    if not is_mention:
+        # Addressed by word: that one word goes, the rest is the question – a nick
+        # like securityexpert in it must reach the model
+        prompt = SOSUR_RE.sub('', prompt, count=1)
+    prompt = prompt.strip()
+    if not prompt:
+        prompt = lowered
+    return registry.resolve(prompt), prompt, True
+
+
 class ChatComponent(commands.Component):
 
     def __init__(self, bot):
@@ -146,45 +181,10 @@ class ChatComponent(commands.Component):
             return
 
         user = message.chatter.name
-        chatter = message.chatter
         # Free text addressed to the bot goes to Gemini just like !ask, so it
         # shares the counter with Gemini commands, not with local ones.
         kind = entry.kind if entry is not None else Kind.GEMINI
-        tier = tier_of(chatter)
-        seconds = _cooldown_seconds(tier)
-
-        # Without a follow the bot does not answer: the exception is help, which
-        # is how a viewer learns what following is for
-        if tier == Tier.REGULAR and not await self._allowed_without_follow(message, user, entry):
-            return
-
-        if seconds:
-            remaining = self.bot.cooldown_remaining(user, kind)
-            if remaining > 0:
-                key = 'cooldown_gemini' if kind == Kind.GEMINI else 'cooldown_local'
-                await message.respond(
-                    Content.text(key, user=user, seconds=int(remaining) + 1)
-                )
-                return
-
-        if entry is not None and not _has_role(entry.role, chatter):
-            await self._deny(message, user, ROLE_DENIED_TEXTS[entry.role],
-                             command=entry.trigger)
-            return
-
-        # The cooldown is taken right after its check, with no await in between: twitchio
-        # runs every event in its own task, and two quick messages would both pass it
-        if seconds:
-            self.bot.set_cooldown(user, seconds, kind)
-
-        # Quota on top of the cooldown: only Gemini requests count – they cost
-        # money. Local commands are held by the cooldown alone. A refusal gives the
-        # cooldown back: nothing was served
-        if kind == Kind.GEMINI and not (
-            await self._within_channel_quota(message, user, tier)
-            and await self._within_quota(message, user, tier)
-        ):
-            self.bot.clear_cooldown(user, kind)
+        if not await self._gate(message, user, entry, kind):
             return
 
         ctx = CommandContext(
@@ -206,6 +206,46 @@ class ChatComponent(commands.Component):
             await handle_default(ctx)
             return
         await entry.handler(ctx)
+
+    async def _gate(self, message, user: str, entry: CommandEntry | None, kind: Kind) -> bool:
+        """Whether to serve the viewer: follow, cooldown, role, quota. False – already answered.
+
+        On success the cooldown is taken, in the scope of the command's class.
+        """
+        tier = tier_of(message.chatter)
+        seconds = _cooldown_seconds(tier)
+
+        # Without a follow the bot does not answer: the exception is help, which
+        # is how a viewer learns what following is for
+        if tier == Tier.REGULAR and not await self._allowed_without_follow(message, user, entry):
+            return False
+
+        if seconds:
+            remaining = self.bot.cooldown_remaining(user, kind)
+            if remaining > 0:
+                key = 'cooldown_gemini' if kind == Kind.GEMINI else 'cooldown_local'
+                await message.respond(Content.text(key, user=user, seconds=int(remaining) + 1))
+                return False
+
+        if entry is not None and not _has_role(entry.role, message.chatter):
+            await self._deny(message, user, ROLE_DENIED_TEXTS[entry.role], command=entry.trigger)
+            return False
+
+        # The cooldown is taken right after its check, with no await in between: twitchio
+        # runs every event in its own task, and two quick messages would both pass it
+        if seconds:
+            self.bot.set_cooldown(user, seconds, kind)
+
+        # Quota on top of the cooldown: only Gemini requests count – they cost
+        # money. Local commands are held by the cooldown alone. A refusal gives the
+        # cooldown back: nothing was served
+        if kind == Kind.GEMINI and not (
+            await self._within_channel_quota(message, user, tier)
+            and await self._within_quota(message, user, tier)
+        ):
+            self.bot.clear_cooldown(user, kind)
+            return False
+        return True
 
     async def _allowed_without_follow(self, message, user: str, entry) -> bool:
         """Whether to let a non-following viewer in. False – they have already been refused."""
@@ -269,39 +309,9 @@ class ChatComponent(commands.Component):
                          limit=limit, minutes=minutes, window=Quota.WINDOW_MINUTES)
         return False
 
-    def _route(self, message: twitchio.ChatMessage):
-        """Determine the command, the request text and whether the bot was addressed.
-
-        Returns (entry, prompt, addressed), or (None, None, False) when the message is
-        not for the bot. Addressing is a call word, an @mention or a reply, and it is
-        required only for free text and for a command it precedes: a bare `!who ник`
-        works without it. Args are taken as written, so `!who securityexpert` keeps the
-        nick instead of losing the trigger inside it.
-        """
-        text = message.text.strip()
-        lowered = text.lower()
-
-        entry = self._registry.resolve(lowered)
-        if entry is not None:
-            return entry, lowered, False
-
-        # The whole nick only: @botname_fan is somebody else
-        mention = re.compile(re.escape(f'@{self.bot.bot_name}') + r'(?!\w)', re.IGNORECASE)
-        is_mention = bool(mention.search(text))
-        is_sosur = bool(SOSUR_RE.search(text))
+    def _route(self, message: twitchio.ChatMessage) -> tuple[CommandEntry | None, str | None, bool]:
         is_reply = reply_to_bot(message, self.bot.bot_id) is not None
-        if not (is_mention or is_sosur or is_reply):
-            return None, None, False
-
-        prompt = mention.sub('', lowered)
-        if not is_mention:
-            # Addressed by word: that one word goes, the rest is the question – a nick
-            # like securityexpert in it must reach the model
-            prompt = SOSUR_RE.sub('', prompt, count=1)
-        prompt = prompt.strip()
-        if not prompt:
-            prompt = lowered
-        return self._registry.resolve(prompt), prompt, True
+        return route(message.text, self._registry, self.bot.bot_name, is_reply)
 
     @commands.Component.listener()
     async def event_follow(self, payload: twitchio.ChannelFollow) -> None:

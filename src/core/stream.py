@@ -14,13 +14,18 @@ the next stream counts as an outage.
 """
 import asyncio
 import logging
+import re
 import time
 from collections.abc import Awaitable, Callable
+
+from twitchio.ext import commands
 
 from src.core.config import Stream
 from src.core.database import (
     StreamRow, end_stream, get_last_stream, get_stream, last_chat_time, reopen_stream, save_stream,
 )
+from src.core.port import StreamBot
+from src.core.utils import local_time
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +35,18 @@ logger = logging.getLogger(__name__)
 CHECK_SECONDS = 120
 CONFIRMATIONS = 3
 
+# A stream's recording is recognised by its start time: a VOD starts when the stream does
+VOD_MATCH_SECONDS = 300
+
+
 # (stream_id, started_at) → time.time() of the stream end, or None if there is no way to tell
 EndLookup = Callable[[str, float], Awaitable[float | None]]
 
 
 def _session_name(started_at: float) -> str:
-    # Start date and time in local time: readable in !stat and sorts
+    # Start date and time in the bot's zone: readable in !stat and sorts
     # after date sessions of the same day
-    return time.strftime('%Y-%m-%d %H:%M', time.localtime(started_at))
+    return local_time(started_at).strftime('%Y-%m-%d %H:%M')
 
 
 class StreamTracker:
@@ -60,7 +69,7 @@ class StreamTracker:
 
     @property
     def session_id(self) -> str:
-        return self._session or time.strftime('%Y-%m-%d')
+        return self._session or local_time().strftime('%Y-%m-%d')
 
     async def online(self, stream_id: str, started_at: float) -> bool:
         """Stream is live. True – a new session started, False – the previous one continues.
@@ -114,7 +123,7 @@ class StreamTracker:
             ended = await self._estimate_end(last)
             await end_stream(last.stream_id, ended)
         logger.info('Эфир %s закончился, пока бота не было: конец записан на %s',
-                    last.stream_id, time.strftime('%Y-%m-%d %H:%M', time.localtime(ended)))
+                    last.stream_id, local_time(ended).strftime('%Y-%m-%d %H:%M'))
 
     async def _estimate_end(self, stream: StreamRow) -> float:
         """When a stream ended whose end the bot did not see.
@@ -134,7 +143,7 @@ class StreamTracker:
         return await last_chat_time(stream.session_id) or stream.started_at
 
 
-async def watch_stream(bot) -> None:
+async def watch_stream(bot: StreamBot) -> None:
     """Check against Twitch every CHECK_SECONDS: catches a missed stream start or end.
 
     bot must provide fetch_live_stream(), stream_went_online() and
@@ -173,3 +182,32 @@ async def watch_stream(bot) -> None:
         raise
     finally:
         logger.info('Сверка эфира остановлена')
+
+
+# --- Twitch's side ------------------------------------------------------------
+
+async def fetch_live_stream(client: commands.Bot, channel_id: str) -> tuple[str, float] | None:
+    """The channel's live stream according to Twitch: (id, start) or None. Does not swallow errors."""
+    streams = await client.fetch_streams(user_ids=[channel_id], type='live')
+    if not streams:
+        return None
+    return streams[0].id, streams[0].started_at.timestamp()
+
+
+async def end_from_vod(client: commands.Bot, channel_id: str, started_at: float) -> float | None:
+    """The stream's end from its Twitch recording: recording start plus duration.
+
+    twitchio does not expose a video's stream id, so the recording is matched by start
+    time. No recording (VODs off) – None, the tracker estimates the end from chat.
+    """
+    videos = await client.fetch_videos(user_id=channel_id, type='archive', first=5)
+    for video in videos:
+        if abs(video.created_at.timestamp() - started_at) <= VOD_MATCH_SECONDS:
+            return video.created_at.timestamp() + duration_seconds(video.duration)
+    return None
+
+
+def duration_seconds(duration: str) -> int:
+    """A Twitch video duration like «3h8m33s» in seconds."""
+    units = {'h': 3600, 'm': 60, 's': 1}
+    return sum(int(value) * units[unit] for value, unit in re.findall(r'(\d+)([hms])', duration))

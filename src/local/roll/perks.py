@@ -9,6 +9,7 @@ import logging
 from src.core.config import Rewards, Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
+from src.core.port import BotPort
 from src.local.roll import game
 from src.local.roll.storage import get_pending_perk_users
 
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 _pending: dict[str, set[str]] = {}
 
 
-async def on_stream_start(bot, session_id: str) -> None:
+async def on_stream_start(bot: BotPort, session_id: str) -> None:
     """The stream is live: grant the perks from the previous one and announce them in chat.
 
     Safe to call again – after a restart or an outage, what was already granted is
@@ -47,7 +48,7 @@ async def on_stream_start(bot, session_id: str) -> None:
         logger.exception('Бонусы по итогам прошлого эфира не выданы')
 
 
-async def on_chat(bot, session_id: str, user: str) -> None:
+async def on_chat(bot: BotPort, session_id: str, user: str) -> None:
     """A chat message: if a perk awaits the player, start the countdown and say so."""
     if not Roll.PERKS_ENABLED or not bot.stream_live:
         return
@@ -59,7 +60,7 @@ async def on_chat(bot, session_id: str, user: str) -> None:
             return
         pending.discard(user)
         for perk in await game.appear(session_id, user):
-            key = 'roll_perk_shield_on' if perk == game.PERK_SHIELD else 'roll_perk_curse_on'
+            key = 'roll_perk_shield_on' if perk == game.Perk.SHIELD else 'roll_perk_curse_on'
             await _say(bot, session_id, f'[perk:{perk}]', Content.text(
                 key, user=user, minutes=Roll.PERK_MINUTES,
                 ceiling=Rewards.CURSE_CEILING, step=Rewards.CURSE_STEP,
@@ -68,6 +69,6 @@ async def on_chat(bot, session_id: str, user: str) -> None:
         logger.exception('Бонус игрока %s не запущен', user)
 
 
-async def _say(bot, session_id: str, tag: str, text: str) -> None:
+async def _say(bot: BotPort, session_id: str, tag: str, text: str) -> None:
     if text and await bot.send_chat_message(text):
         await save_bot_interaction(session_id, '_roll_', tag, text)

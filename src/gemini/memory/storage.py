@@ -3,7 +3,7 @@
 The memory works on conversations (Block), not on bot sessions: chat split by
 silence, keyed by the Moscow time of its first message.
 
-The schema lives in init_db() (src/core/database.py) with all the others. Chat rows
+The schema lives in init_db() (src/core/db/schema.py) with all the others. Chat rows
 are read with the same «not a command» filter as everywhere else, which covers the
 rows that still hold commands.
 """
@@ -12,16 +12,18 @@ import json
 import random
 import re
 import time
-from datetime import datetime
+from enum import StrEnum
 from typing import NamedTuple
-from zoneinfo import ZoneInfo
 
-from src.core.database import get_db, invalidate_knowledge_cache
+from src.core.database import get_db, invalidate_knowledge_cache, transaction
+from src.core.utils import local_time
 
-STATUS_OK = 'ok'
-STATUS_FAILED = 'failed'
-# Too few messages for a chronicle: the row only marks them as seen
-STATUS_SKIPPED = 'skipped'
+
+class ChronicleStatus(StrEnum):
+    OK = 'ok'
+    FAILED = 'failed'
+    # Too few messages for a chronicle: the row only marks them as seen
+    SKIPPED = 'skipped'
 
 _NOT_COMMAND = "message NOT LIKE '!%'"
 
@@ -47,7 +49,7 @@ class Block(NamedTuple):
     practice a stream – but told by the messages alone, not by the stream state:
     no Twitch event, bot restart or missed stream end can shift it.
     """
-    key: str          # Moscow time of its first message (KEY_TIMEZONE), 'YYYY-MM-DD HH:MM'
+    key: str          # time of its first message in BOT_TIMEZONE, 'YYYY-MM-DD HH:MM'
     first_id: int     # chat_messages ids, inclusive
     last_id: int
     count: int        # messages, commands not counted
@@ -57,15 +59,11 @@ class Block(NamedTuple):
         return self.first_id, self.last_id
 
 
-# The conversation key uses a fixed zone, not the process's: a container runs in UTC
-# while --build-memory runs by hand in local time, and keys differing between them break
-# the crash-rerun check in update_profile(). It is the zone the container is given.
-KEY_TIMEZONE = ZoneInfo('Europe/Moscow')
-
-
 def _key(ts: float) -> str:
-    # Same shape as a stream session: readable and sorts by time
-    return datetime.fromtimestamp(ts, KEY_TIMEZONE).strftime('%Y-%m-%d %H:%M')
+    # Same shape and zone as a stream session: readable, sorts by time, and alike in the
+    # container and in a --build-memory run by hand – the crash-rerun check in
+    # update_profile() compares these keys
+    return local_time(ts).strftime('%Y-%m-%d %H:%M')
 
 
 async def chat_blocks(silence_minutes: int, *, uncovered: bool) -> list[Block]:
@@ -119,11 +117,10 @@ async def memory_built() -> bool:
 
 
 async def mark_built() -> None:
-    db = await get_db()
-    await db.execute(
-        "INSERT OR REPLACE INTO memory_state (key, value) VALUES ('built', datetime('now'))"
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            "INSERT OR REPLACE INTO memory_state (key, value) VALUES ('built', datetime('now'))"
+        )
 
 
 async def failed_blocks() -> list[Block]:
@@ -132,7 +129,7 @@ async def failed_blocks() -> list[Block]:
     async with db.execute(
         'SELECT conversation, first_id, last_id, message_count FROM chronicles'
         ' WHERE status = ? ORDER BY first_id',
-        (STATUS_FAILED,),
+        (ChronicleStatus.FAILED,),
     ) as cursor:
         return [Block(*row) for row in await cursor.fetchall()]
 
@@ -266,18 +263,17 @@ async def save_chronicle(block: Block, text: str, status: str,
 
     The row covers the conversation's messages: the memory will not take them again.
     """
-    db = await get_db()
-    await db.execute('DELETE FROM chatter_events WHERE conversation = ?', (block.key,))
-    await db.executemany(
-        'INSERT INTO chatter_events (conversation, username, event) VALUES (?, ?, ?)',
-        [(block.key, nick, event) for nick, event in events],
-    )
-    await db.execute(
-        'INSERT OR REPLACE INTO chronicles'
-        ' (conversation, text, status, message_count, first_id, last_id) VALUES (?, ?, ?, ?, ?, ?)',
-        (block.key, text, status, block.count, block.first_id, block.last_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute('DELETE FROM chatter_events WHERE conversation = ?', (block.key,))
+        await db.executemany(
+            'INSERT INTO chatter_events (conversation, username, event) VALUES (?, ?, ?)',
+            [(block.key, nick, event) for nick, event in events],
+        )
+        await db.execute(
+            'INSERT OR REPLACE INTO chronicles'
+            ' (conversation, text, status, message_count, first_id, last_id) VALUES (?, ?, ?, ?, ?, ?)',
+            (block.key, text, status, block.count, block.first_id, block.last_id),
+        )
 
 
 async def user_events(username: str, limit: int, before: str | None = None) -> list[tuple[str, str]]:
@@ -399,25 +395,23 @@ def _relations(raw: str | None) -> list[dict]:
 
 
 async def save_profile(profile: Profile) -> None:
-    db = await get_db()
-    await db.execute(
-        'INSERT OR REPLACE INTO chatter_profiles'
-        ' (username, portrait, relations, last_conversation, sessions_seen, updated_at)'
-        ' VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
-        (profile.username, profile.portrait, json.dumps(profile.relations, ensure_ascii=False),
-         profile.last_conversation, profile.sessions_seen),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'INSERT OR REPLACE INTO chatter_profiles'
+            ' (username, portrait, relations, last_conversation, sessions_seen, updated_at)'
+            ' VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)',
+            (profile.username, profile.portrait, json.dumps(profile.relations, ensure_ascii=False),
+             profile.last_conversation, profile.sessions_seen),
+        )
 
 
 MEMORY_TABLES = ('chronicles', 'chatter_events', 'chatter_profiles', 'memory_state')
 
 
 async def clear_memory() -> None:
-    db = await get_db()
-    for table in MEMORY_TABLES:
-        await db.execute(f'DELETE FROM {table}')
-    await db.commit()
+    async with transaction() as db:
+        for table in MEMORY_TABLES:
+            await db.execute(f'DELETE FROM {table}')
 
 
 async def memory_counts() -> dict[str, int]:
@@ -457,16 +451,15 @@ async def move_unaddressed_facts() -> int:
     Facts that name a chatter by @nick belong in that chatter's profile instead, so
     only the rest is copied. The facts table itself is left in place.
     """
-    db = await get_db()
-    async with db.execute("SELECT fact FROM facts WHERE fact NOT LIKE '%@%' ORDER BY id") as cursor:
-        facts = [row[0] for row in await cursor.fetchall()]
-    added = 0
-    for fact in facts:
-        cursor = await db.execute(
-            "INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, 'facts')", (fact,),
-        )
-        added += cursor.rowcount
-    await db.commit()
+    async with transaction() as db:
+        async with db.execute("SELECT fact FROM facts WHERE fact NOT LIKE '%@%' ORDER BY id") as cursor:
+            facts = [row[0] for row in await cursor.fetchall()]
+        added = 0
+        for fact in facts:
+            cursor = await db.execute(
+                "INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, 'facts')", (fact,),
+            )
+            added += cursor.rowcount
     if added:
         invalidate_knowledge_cache()
     return added

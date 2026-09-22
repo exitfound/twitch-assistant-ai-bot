@@ -12,14 +12,9 @@ from src.core.utils import gather_cancelling
 from src.gemini import client
 from src.gemini.memory import build, storage
 
-# Gemini 2.5 Flash, paid tier, $ per million tokens – only for the cost estimate
-PRICE_INPUT = 0.30
-PRICE_OUTPUT = 2.50
-
-
 def _cost() -> str:
     u = client.usage
-    dollars = (u['prompt'] * PRICE_INPUT + u['output'] * PRICE_OUTPUT) / 1_000_000
+    dollars = client.cost_estimate(u['prompt'], u['output'])
     return f'токенов: вход {u["prompt"]:,}, выход {u["output"]:,} – примерно ${dollars:.2f}'.replace(',', ' ')
 
 
@@ -43,12 +38,7 @@ async def _chronicles(blocks: list[storage.Block], save: bool) -> dict[str, buil
             # Saved as failed: the next --build-memory retries it
             chronicle = None
         if save:
-            await storage.save_chronicle(
-                block,
-                chronicle.text if chronicle else '',
-                storage.STATUS_OK if chronicle else storage.STATUS_FAILED,
-                chronicle.events if chronicle else [],
-            )
+            await build.save_result(block, chronicle)
         print(f'  {block.key}: {"готово" if chronicle else "Gemini ничего не вернул"}')
         return chronicle
 
@@ -89,7 +79,7 @@ async def build_memory(dry_run: bool, limit: int) -> None:
         await _chronicles(_big(todo), save=True)
         for block in todo:
             if block not in _big(todo):
-                await storage.save_chronicle(block, '', storage.STATUS_SKIPPED, [])
+                await storage.save_chronicle(block, '', storage.ChronicleStatus.SKIPPED, [])
 
     missing = [u for u in chatters if await storage.get_profile(u) is None]
     print(f'\nПрофили: нужно {len(missing)}, уже есть {len(chatters) - len(missing)}')

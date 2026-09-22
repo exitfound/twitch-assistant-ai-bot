@@ -1,14 +1,31 @@
 import argparse
 import asyncio
-import time
+import functools
 
 from src.cli.emotes import SOURCES, SyncError, fetch, merge
 from src.cli.knowledge import (
     FORMATS, LoreError, clear_knowledge, count_knowledge, import_entries, lore_sources, parse_lore_file,
 )
-from src.core.database import backup_db, close_db, get_db, init_db, vacuum_db
+from src.core.database import backup_db, close_db, get_all_facts, init_db, vacuum_db
 from src.core.logging_setup import setup_logging
+from src.core.utils import local_time
 from src.cli import memory, probe
+
+
+def _with_db(command):
+    """Open the database for a command and close it after, whatever happens.
+
+    A command that leaves the aiosqlite connection open never exits: its thread is not a
+    daemon. init_db() also runs the migrations, as on every bot start.
+    """
+    @functools.wraps(command)
+    async def run(*args, **kwargs):
+        await init_db()
+        try:
+            return await command(*args, **kwargs)
+        finally:
+            await close_db()
+    return run
 
 
 async def upload_lore(files: list[str], clear: bool, dry_run: bool, fmt: str, source: str | None):
@@ -43,28 +60,26 @@ async def upload_lore(files: list[str], clear: bool, dry_run: bool, fmt: str, so
             print(f'  ... и ещё {len(unique) - 20}')
         return
 
-    await init_db()
-    try:
-        if clear:
-            deleted = await clear_knowledge(source)
-            print(f'Удалено из базы знаний: {deleted}' + (f' (источник «{source}»)' if source else ' (всё)'))
-        by_source: dict[str, list[str]] = {}
-        for entry, src in unique:
-            by_source.setdefault(src, []).append(entry)
-        for src, entries in by_source.items():
-            added, skipped = await import_entries(entries, src)
-            print(f'«{src}»: импортировано {added}, уже было в базе {skipped}')
-    finally:
-        await close_db()
+    await _import(unique, clear, source)
 
 
+@_with_db
+async def _import(unique: list[tuple[str, str]], clear: bool, source: str | None) -> None:
+    if clear:
+        deleted = await clear_knowledge(source)
+        print(f'Удалено из базы знаний: {deleted}' + (f' (источник «{source}»)' if source else ' (всё)'))
+    by_source: dict[str, list[str]] = {}
+    for entry, src in unique:
+        by_source.setdefault(src, []).append(entry)
+    for src, entries in by_source.items():
+        added, skipped = await import_entries(entries, src)
+        print(f'«{src}»: импортировано {added}, уже было в базе {skipped}')
+
+
+@_with_db
 async def list_lore_sources():
-    await init_db()
-    try:
-        for source, count in await lore_sources():
-            print(f'  {count:>7}  {source if source is not None else "(источник не записан)"}')
-    finally:
-        await close_db()
+    for source, count in await lore_sources():
+        print(f'  {count:>7}  {source if source is not None else "(источник не записан)"}')
 
 
 async def sync_emotes(sources: list[str], replace: bool, dry_run: bool):
@@ -102,93 +117,68 @@ async def sync_emotes(sources: list[str], replace: bool, dry_run: bool):
         print('Список пересобран заново – вручную добавленные эмоты удалены.')
 
 
+@_with_db
 async def list_facts():
-    await init_db()
-    try:
-        db = await get_db()
-        async with db.execute(
-            'SELECT username, fact, created_at FROM facts ORDER BY username, id'
-        ) as cursor:
-            rows = await cursor.fetchall()
-        if not rows:
-            print('Фактов нет.')
-            return
-        current_user = None
-        for username, fact, created_at in rows:
-            if username != current_user:
-                current_user = username
-                print(f'\n  @{username}:')
-            print(f'    - {fact}  ({created_at})')
-        print(f'\nВсего: {len(rows)} фактов')
-    finally:
-        await close_db()
+    rows = await get_all_facts()
+    if not rows:
+        print('Фактов нет.')
+        return
+    current_user = None
+    for username, fact, created_at in rows:
+        if username != current_user:
+            current_user = username
+            print(f'\n  @{username}:')
+        print(f'    - {fact}  ({created_at})')
+    print(f'\nВсего: {len(rows)} фактов')
 
 
+@_with_db
 async def clear_lore(source: str | None, dry_run: bool):
-    await init_db()
-    try:
-        if dry_run:
-            # --dry-run only counts, it deletes nothing
-            count = await count_knowledge(source)
-            print(f'Dry run: было бы удалено {count}' + (f' (источник «{source}»)' if source else ' (всё)'))
-            return
-        deleted = await clear_knowledge(source)
-        print(f'Удалено из базы знаний: {deleted}' + (f' (источник «{source}»)' if source else ' (всё)'))
-    finally:
-        await close_db()
+    if dry_run:
+        # --dry-run only counts, it deletes nothing
+        count = await count_knowledge(source)
+        print(f'Dry run: было бы удалено {count}' + (f' (источник «{source}»)' if source else ' (всё)'))
+        return
+    deleted = await clear_knowledge(source)
+    print(f'Удалено из базы знаний: {deleted}' + (f' (источник «{source}»)' if source else ' (всё)'))
 
 
+@_with_db
 async def build_memory(dry_run: bool, limit: int, clear: bool):
-    await init_db()
-    try:
-        if clear and not dry_run:
-            await memory.clear()
-            print('Память очищена (хроники, события, профили)')
-        await memory.build_memory(dry_run, limit)
-    finally:
-        await close_db()
-
-
-async def probe_context(ids: list[int], limit: int, samples: int):
-    await init_db()
-    try:
-        await probe.probe(ids, limit, samples)
-    finally:
-        await close_db()
-
-
-async def clear_memory(dry_run: bool):
-    await init_db()
-    try:
-        if dry_run:
-            # --dry-run only counts, as with --clear-lore: a real wipe costs a paid --build-memory
-            counts = await memory.counts()
-            print('Dry run: было бы удалено ' + ', '.join(f'{t} {n}' for t, n in counts.items()))
-            return
+    if clear and not dry_run:
         await memory.clear()
         print('Память очищена (хроники, события, профили)')
-    finally:
-        await close_db()
+    await memory.build_memory(dry_run, limit)
 
 
+@_with_db
+async def probe_context(ids: list[int], limit: int, samples: int):
+    await probe.probe(ids, limit, samples)
+
+
+@_with_db
+async def clear_memory(dry_run: bool):
+    if dry_run:
+        # --dry-run only counts, as with --clear-lore: a real wipe costs a paid --build-memory
+        counts = await memory.counts()
+        print('Dry run: было бы удалено ' + ', '.join(f'{t} {n}' for t, n in counts.items()))
+        return
+    await memory.clear()
+    print('Память очищена (хроники, события, профили)')
+
+
+@_with_db
 async def backup(destination: str | None):
-    await init_db()
-    try:
-        target = destination or f'chat_history.backup-{time.strftime("%Y%m%d-%H%M%S")}.db'
-        path = await backup_db(target)
-        print(f'Копия БД сохранена: {path}')
-    finally:
-        await close_db()
+    target = destination or f'chat_history.backup-{local_time().strftime("%Y%m%d-%H%M%S")}.db'
+    path = await backup_db(target)
+    print(f'Копия БД сохранена: {path}')
 
 
+@_with_db
 async def vacuum():
-    await init_db()
-    try:
-        print('VACUUM...')
-        await vacuum_db()
-        print('Готово.')
-    finally:
-        await close_db()
+    print('VACUUM...')
+    await vacuum_db()
+    print('Готово.')
 
 
 def _check_combination(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
@@ -306,37 +296,34 @@ def main(argv: list[str] | None = None) -> bool:
     args = parser.parse_args(argv)
     _check_combination(parser, args)
 
-    if args.list_facts:
-        setup_logging('WARNING')
-        asyncio.run(list_facts())
-    elif args.probe_context is not None:
-        setup_logging('WARNING')
-        asyncio.run(probe_context(args.probe_context, max(1, args.limit), max(1, args.samples)))
-    elif args.build_memory:
-        setup_logging('WARNING')
-        asyncio.run(build_memory(args.dry_run, max(1, args.limit), args.clear_memory))
-    elif args.clear_memory:
-        setup_logging('WARNING')
-        asyncio.run(clear_memory(args.dry_run))
-    elif args.backup is not None:
-        setup_logging('WARNING')
-        asyncio.run(backup(args.backup or None))
-    elif args.vacuum:
-        setup_logging('WARNING')
-        asyncio.run(vacuum())
-    elif args.sync_emotes is not None:
-        setup_logging('WARNING')
-        asyncio.run(sync_emotes(args.sync_emotes or ['channel'], args.replace_emotes, args.dry_run))
-    elif args.lore_sources:
-        setup_logging('WARNING')
-        asyncio.run(list_lore_sources())
-    elif args.upload_lore or args.clear_lore:
-        setup_logging('WARNING')
-        if args.clear_lore and not args.upload_lore:
-            asyncio.run(clear_lore(args.source, args.dry_run))
-        else:
-            asyncio.run(upload_lore(args.upload_lore, args.clear_lore, args.dry_run,
-                                    args.format, args.source))
-    else:
+    command = _command(args)
+    if command is None:
         return False
+    setup_logging('WARNING')
+    asyncio.run(command)
     return True
+
+
+def _command(args: argparse.Namespace):
+    """The coroutine of the chosen maintenance command, or None – no command, start the bot."""
+    if args.list_facts:
+        return list_facts()
+    if args.probe_context is not None:
+        return probe_context(args.probe_context, max(1, args.limit), max(1, args.samples))
+    if args.build_memory:
+        return build_memory(args.dry_run, max(1, args.limit), args.clear_memory)
+    if args.clear_memory:
+        return clear_memory(args.dry_run)
+    if args.backup is not None:
+        return backup(args.backup or None)
+    if args.vacuum:
+        return vacuum()
+    if args.sync_emotes is not None:
+        return sync_emotes(args.sync_emotes or ['channel'], args.replace_emotes, args.dry_run)
+    if args.lore_sources:
+        return list_lore_sources()
+    if args.clear_lore and not args.upload_lore:
+        return clear_lore(args.source, args.dry_run)
+    if args.upload_lore:
+        return upload_lore(args.upload_lore, args.clear_lore, args.dry_run, args.format, args.source)
+    return None

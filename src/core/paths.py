@@ -2,16 +2,14 @@
 
 Both default to the repository root, which suits a checkout but not a container, where
 the code is immutable and the data has to sit on a volume, so the environment can move
-them. config is imported first for its load_dotenv(), so .env is applied before the
-paths below are computed.
+them (BOT_DB_PATH, BOT_CONTENT_PATH, read in config).
 """
-import os
 from pathlib import Path
 
-from src.core import config  # noqa: F401 – imported for its load_dotenv() side effect
+from src.core.config import Files
 
 # Project root: src/core/paths.py → three levels up
 ROOT = Path(__file__).resolve().parents[2]
 
-DB_PATH = Path(os.getenv('BOT_DB_PATH') or ROOT / 'chat_history.db').expanduser()
-CONTENT_PATH = Path(os.getenv('BOT_CONTENT_PATH') or ROOT / 'CONTENT.md').expanduser()
+DB_PATH = Path(Files.DB or ROOT / 'chat_history.db').expanduser()
+CONTENT_PATH = Path(Files.CONTENT or ROOT / 'CONTENT.md').expanduser()

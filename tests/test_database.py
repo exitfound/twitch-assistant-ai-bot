@@ -1,10 +1,17 @@
-"""Schema, quotas and the chat queries in src/core/database.py, on a temporary database."""
+"""Schema, quotas and the chat queries in src/core/db/, on a temporary database."""
+import asyncio
+import contextlib
+
+import pytest
+
 from src.core import database
 from src.core.database import (
-    _sanitize_fts_query, count_bot_uses, count_channel_bot_uses, forget_bot_use,
+    count_bot_uses, count_channel_bot_uses, forget_bot_use,
     get_user_interactions, has_chatted, init_db, record_bot_use, save_bot_interaction,
-    save_chat_message, search_context,
+    save_chat_message, search_context, transaction,
 )
+from src.core.db import schema
+from src.core.db.knowledge import _sanitize_fts_query
 from src.local.roll.storage import save_roll
 
 
@@ -97,3 +104,94 @@ async def test_connection_waits_out_a_cli_writer(db):
     5 s the bot's chat inserts failed with «database is locked» and were lost."""
     async with db.execute('PRAGMA busy_timeout') as cursor:
         assert (await cursor.fetchone())[0] >= 30_000
+
+
+async def test_schema_version_is_recorded(db):
+    async with db.execute('PRAGMA user_version') as cursor:
+        assert (await cursor.fetchone())[0] == schema.SCHEMA_VERSION == len(schema.STEPS)
+
+
+async def test_a_failing_step_names_itself(db, monkeypatch, caplog):
+    """A migration that breaks on the live database must say which one it was."""
+    async def broken(db):
+        raise RuntimeError('disk I/O error')
+    monkeypatch.setattr(schema, 'STEPS', [*schema.STEPS[:2], ('rolls', broken)])
+    with pytest.raises(RuntimeError):
+        await init_db()
+    assert 'rolls' in caplog.text
+
+
+async def _messages(db) -> list[str]:
+    async with db.execute('SELECT message FROM chat_messages ORDER BY id') as cursor:
+        return [m for (m,) in await cursor.fetchall()]
+
+
+async def test_a_failed_transaction_leaves_nothing(db):
+    with pytest.raises(RuntimeError):
+        async with transaction() as tx:
+            await tx.execute("INSERT INTO chat_messages (session_id, username, message) VALUES ('s', 'a', 'x')")
+            raise RuntimeError('halfway')
+    assert await _messages(db) == []
+
+
+async def test_a_nested_write_joins_the_outer_transaction(db):
+    """save_chat_message() inside a transaction must not commit the outer half on its own."""
+    with pytest.raises(RuntimeError):
+        async with transaction():
+            await save_chat_message('s', 'a', 'inner')
+            raise RuntimeError('halfway')
+    assert await _messages(db) == []
+
+
+async def test_another_writer_does_not_commit_a_half_done_transaction(db):
+    """On one shared connection a commit() from anyone committed everything pending: a chat
+    message saved in the middle of a multi-step write made its first half permanent."""
+    halfway = asyncio.Event()
+
+    async def multi_step():
+        async with transaction() as tx:
+            await tx.execute("INSERT INTO chat_messages (session_id, username, message) VALUES ('s', 'a', 'half')")
+            halfway.set()
+            await asyncio.sleep(0.05)
+            raise RuntimeError('second step failed')
+
+    task = asyncio.create_task(multi_step())
+    await halfway.wait()
+    await save_chat_message('s', 'b', 'chat')
+    with pytest.raises(RuntimeError):
+        await task
+    assert await _messages(db) == ['chat']
+
+
+async def test_a_failed_commit_does_not_block_every_later_write(db, monkeypatch):
+    """A commit that raises (a full or broken volume) left the transaction open, and every
+    later BEGIN failed: the bot went deaf while the heartbeat kept it «healthy»."""
+    real_commit = db.commit
+    calls = []
+
+    async def failing_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise OSError('disk full')
+        await real_commit()
+    monkeypatch.setattr(db, 'commit', failing_once)
+    with pytest.raises(OSError):
+        await save_chat_message('s', 'a', 'lost')
+    await save_chat_message('s', 'b', 'next')
+    assert await _messages(db) == ['next']
+
+
+async def test_a_cancelled_begin_does_not_block_every_later_write(db):
+    """aiosqlite still runs a queued BEGIN after its awaiting task is cancelled: nobody
+    rolled it back, and the next transaction could not begin."""
+    async def write():
+        async with transaction() as tx:
+            await tx.execute("INSERT INTO chat_messages (session_id, username, message) VALUES ('s', 'a', 'x')")
+
+    task = asyncio.create_task(write())
+    await asyncio.sleep(0)
+    task.cancel()
+    with contextlib.suppress(asyncio.CancelledError):
+        await task
+    await save_chat_message('s', 'b', 'next')
+    assert await _messages(db) == ['next']

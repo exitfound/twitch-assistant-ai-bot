@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import dataclasses
 from collections.abc import Awaitable, Callable
+from enum import StrEnum
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import twitchio
-    from bot import Bot
+
+    from src.core.port import BotPort
 
 Handler = Callable[['CommandContext'], Awaitable[None]]
 
@@ -16,12 +18,14 @@ ARG_SEPARATORS = ' :,'
 # Command classes. Local ones answer from SQLite and CONTENT.md at no cost, a Gemini
 # call costs money, waiting and a semaphore slot. The class is also the cooldown scope,
 # while the status ladder is shared – see _cooldown_seconds() in src/core/component.py.
-KIND_LOCAL = 'local'
-KIND_GEMINI = 'gemini'
+class Kind(StrEnum):
+    LOCAL = 'local'
+    GEMINI = 'gemini'
 
-ROLE_VIP_MOD_BROADCASTER = 'vip_mod_broadcaster'
-# Same ladder, but a subscriber passes too: !ascii is open from the sub badge up
-ROLE_SUB_VIP_MOD_BROADCASTER = 'sub_vip_mod_broadcaster'
+
+class Role(StrEnum):
+    # From the subscriber badge up: VIP, moderator and broadcaster pass too (!ascii)
+    SUB_VIP_MOD_BROADCASTER = 'sub_vip_mod_broadcaster'
 
 
 @dataclasses.dataclass
@@ -31,8 +35,8 @@ class CommandContext:
     prompt: str
     original_text: str
     session_id: str
-    bot: Bot
-    kind: str = KIND_LOCAL
+    bot: BotPort
+    kind: Kind = Kind.LOCAL
     args: str = ''
 
     @property
@@ -67,7 +71,7 @@ class CommandContext:
         it back itself.
         """
         self.clear_cooldown()
-        if self.kind == KIND_GEMINI:
+        if self.kind == Kind.GEMINI:
             from src.core.database import forget_bot_use
             await forget_bot_use(self.user, self.kind)
 
@@ -77,8 +81,8 @@ class CommandEntry:
     trigger: str
     handler: Handler
     prefix: bool
-    role: str | None            # None = everyone, ROLE_VIP_MOD_BROADCASTER = VIP/mod/broadcaster
-    kind: str                   # KIND_LOCAL | KIND_GEMINI
+    role: Role | None           # None = everyone, otherwise the badges it needs
+    kind: Kind                  # Kind.LOCAL | Kind.GEMINI
 
     def match(self, prompt: str) -> bool:
         if not self.prefix:
@@ -101,8 +105,8 @@ class CommandRegistry:
 
     def add(self, trigger: str, handler: Handler, *,
             prefix: bool = False,
-            role: str | None = None,
-            kind: str = KIND_LOCAL) -> None:
+            role: Role | None = None,
+            kind: Kind = Kind.LOCAL) -> None:
         self._entries.append(CommandEntry(
             trigger=trigger,
             handler=handler,

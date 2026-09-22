@@ -45,6 +45,15 @@ _OUTPUT_BLOCKS = {
 # Read by CLI commands to report what a run cost
 usage = {'prompt': 0, 'cached': 0, 'output': 0}
 
+# Gemini 2.5 Flash, paid tier, $ per million tokens – only for the CLI's estimates
+PRICE_INPUT = 0.30
+PRICE_OUTPUT = 2.50
+
+
+def cost_estimate(prompt_tokens: int, output_tokens: int = 0) -> float:
+    """Dollars for that many tokens, at the full input price (the cache discount is ignored)."""
+    return (prompt_tokens * PRICE_INPUT + output_tokens * PRICE_OUTPUT) / 1_000_000
+
 
 def get_client() -> genai.Client:
     global _client

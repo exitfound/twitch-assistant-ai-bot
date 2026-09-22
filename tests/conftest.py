@@ -23,6 +23,8 @@ import pytest
 
 from fakes import FakeBot
 from src.core import content, database
+from src.core.db import connection
+from src.core.db import knowledge as db_knowledge
 from src.core.config import Gemini
 from src.gemini import client, commands
 from src.gemini.memory import build
@@ -52,16 +54,17 @@ def _isolation(monkeypatch, tmp_path):
     gives every test its own loop, so the module-level ones are recreated. A forgotten
     patch of generate() must not turn into a bill: the Gemini client refuses to exist.
     """
-    monkeypatch.setattr(database, '_db', None)
-    monkeypatch.setattr(database, '_closed', False)
-    monkeypatch.setattr(database, '_db_lock', asyncio.Lock())
-    monkeypatch.setattr(database, '_knowledge_ids', None)
+    monkeypatch.setattr(connection, '_db', None)
+    monkeypatch.setattr(connection, '_closed', False)
+    monkeypatch.setattr(connection, '_db_lock', asyncio.Lock())
+    monkeypatch.setattr(connection, '_write_lock', asyncio.Lock())
+    monkeypatch.setattr(db_knowledge, '_knowledge_ids', None)
     monkeypatch.setattr(client, '_semaphore', asyncio.Semaphore(Gemini.CONCURRENCY))
     monkeypatch.setattr(game, '_lock', asyncio.Lock())
     monkeypatch.setattr(build, '_slots', asyncio.Semaphore(build.MEMORY_CONCURRENCY))
     monkeypatch.setattr(build, '_lock', asyncio.Lock())
-    monkeypatch.setattr(commands, '_busy', collections.defaultdict(set))
-    monkeypatch.setattr(picture_command, '_busy', set())
+    for limit in [*commands.LIMITS.values(), picture_command.LIMIT]:
+        monkeypatch.setattr(limit, 'busy', set())
     monkeypatch.setattr(picture_command, '_cache', collections.OrderedDict())
     monkeypatch.setattr(perks, '_pending', {})
     monkeypatch.setattr(help_announce, '_help_shown_at', 0.0)
@@ -80,7 +83,7 @@ def _isolation(monkeypatch, tmp_path):
 @pytest.fixture
 async def db(monkeypatch, tmp_path):
     """An empty database with the full schema, closed after the test."""
-    monkeypatch.setattr(database, 'DB_PATH', tmp_path / 'test.db')
+    monkeypatch.setattr(connection, 'DB_PATH', tmp_path / 'test.db')
     await database.init_db()
     yield await database.get_db()
     await database.close_db()

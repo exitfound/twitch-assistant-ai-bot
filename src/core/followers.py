@@ -7,11 +7,26 @@ read in the viewer's favour: a silent Twitch must not lock the chat out of the b
 """
 import logging
 import time
+from typing import Protocol
+
+import twitchio
 
 from src.core.config import Follow
 
 logger = logging.getLogger(__name__)
 
+
+
+class _Helix(Protocol):
+    """The part of the bot a follower check needs: the channel and a Helix user."""
+
+    @property
+    def channel_id(self) -> str | None: ...
+
+    @property
+    def bot_id(self) -> str | None: ...
+
+    def create_partialuser(self, user_id: str | int) -> twitchio.PartialUser: ...
 
 class FollowerCache:
 
@@ -23,7 +38,7 @@ class FollowerCache:
         """Forget the answer: called when a new-follow event arrives."""
         self._cache.pop(str(user_id), None)
 
-    async def is_follower(self, bot, user_id: str) -> bool:
+    async def is_follower(self, bot: _Helix, user_id: str) -> bool:
         user_id = str(user_id)
         cached = self._cache.get(user_id)
         now = time.time()
@@ -39,7 +54,7 @@ class FollowerCache:
             self._cache = {k: v for k, v in self._cache.items() if v[1] > now}
         return result
 
-    async def _fetch(self, bot, user_id: str) -> bool:
+    async def _fetch(self, bot: _Helix, user_id: str) -> bool:
         broadcaster = bot.create_partialuser(bot.channel_id)
         followers = await broadcaster.fetch_followers(user=user_id, token_for=str(bot.bot_id))
         # followers.followers is an async iterator with neither __bool__ nor __len__,

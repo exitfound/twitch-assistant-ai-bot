@@ -5,7 +5,8 @@ class ContextBuilder:
         [Label]
         content
 
-    Sections without a label (add_raw) are plain text. Empty data is skipped.
+    Sections without a label (add_raw, add_pairs with None) are plain text. Empty data is
+    skipped.
 
     The class is responsible for structure only: all Russian wording, including
     the label names, comes from CONTENT.md – prompts.system refers to them
@@ -15,14 +16,10 @@ class ContextBuilder:
     def __init__(self) -> None:
         self._sections: list[tuple[str | None, str]] = []
 
-    def add_facts(self, label: str, facts: list[tuple[str, str]]) -> 'ContextBuilder':
-        if facts:
-            self._sections.append((label, '\n'.join(f'{u}: {f}' for u, f in facts)))
-        return self
-
-    def add_chat(self, label: str, messages: list[tuple[str, str]]) -> 'ContextBuilder':
-        if messages:
-            self._sections.append((label, '\n'.join(f'{u}: {m}' for u, m in messages)))
+    def add_pairs(self, label: str | None, pairs: list[tuple[str, str]]) -> 'ContextBuilder':
+        """One «author: text» line per pair – chat messages or facts. No label – no heading."""
+        if pairs:
+            self._sections.append((label, '\n'.join(f'{u}: {t}' for u, t in pairs)))
         return self
 
     def add_lines(self, label: str, lines: list[str]) -> 'ContextBuilder':

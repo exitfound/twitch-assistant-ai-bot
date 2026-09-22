@@ -1,5 +1,6 @@
 # Tool configuration only: the bot is not an installable package.
-# Dependencies live in requirements.txt (direct, pinned) and requirements.lock (full, hashed)
+# Dependencies follow pip-tools: requirements.in (direct, pinned) compiles into requirements.txt
+# (full, hashed), requirements-dev.in into requirements-dev.txt
 
 [project]
 name = "twitch-assistant-ai-bot"

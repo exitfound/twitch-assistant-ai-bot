@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from src.core.utils import (
-    EM_DASH, EN_DASH, NICK_MAX, clean_nick, cleanup_response, defuse, find_banned, fix_dashes,
-    gather_cancelling, reply_to_bot, safe_format, split_into_chunks, strip_links, strip_markdown, strip_pings,
-    trim_to_sentence,
+from src.core.utils import NICK_MAX, clean_nick, defuse, gather_cancelling, reply_to_bot, safe_format
+from src.gemini.output import (
+    EM_DASH, EN_DASH, cleanup_response, find_banned, fix_dashes, split_into_chunks, strip_links, strip_markdown,
+    strip_pings, trim_to_sentence,
 )
 
 

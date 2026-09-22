@@ -5,6 +5,8 @@ lives in CONTENT.md and is read through src/core/content.py.
 """
 import logging
 import os
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -106,11 +108,35 @@ def _interval_range(prefix: str, default_min: int, default_max: int) -> tuple[in
     return low, high
 
 
+def _env_zone(name: str, default: str) -> ZoneInfo:
+    """A time zone by its IANA name. A wrong name stops the start: falling back to UTC
+    would silently move every session id and memory key by hours."""
+    raw = _env_raw(name) or default
+    try:
+        return ZoneInfo(raw)
+    except (ZoneInfoNotFoundError, ValueError) as e:
+        raise ValueError(f'{name}={raw!r}: неизвестный часовой пояс') from e
+
+
 def validate_config() -> None:
     required = ('TWITCH_CLIENT_ID', 'TWITCH_CLIENT_SECRET', 'TWITCH_BOT_ID', 'TWITCH_CHANNEL', 'GEMINI_API_KEY')
     missing = [var for var in required if not os.getenv(var)]
     if missing:
         raise OSError(f'Missing required env vars: {", ".join(missing)}')
+
+
+class Files:
+    # Empty – the repository root (see src/core/paths.py); a container moves them to a volume
+    DB: str | None = _env_raw('BOT_DB_PATH')
+    CONTENT: str | None = _env_raw('BOT_CONTENT_PATH')
+    # Liveness file for the container healthcheck. Empty – no heartbeat
+    HEARTBEAT: str | None = _env_raw('BOT_HEARTBEAT')
+
+
+class Clock:
+    # One zone for session ids and memory keys, whatever zone the process runs in:
+    # the container, the host CLI and make oauth must name sessions alike
+    ZONE: ZoneInfo = _env_zone('BOT_TIMEZONE', 'Europe/Moscow')
 
 
 class Logging:

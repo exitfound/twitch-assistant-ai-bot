@@ -11,54 +11,55 @@ text and the fate of the points from it.
 """
 import asyncio
 import dataclasses
-import math
-import random
-import re
 import time
+from enum import StrEnum
 
 from src.core.config import Rewards, Roll
-from src.core.database import get_previous_stream_session, get_session_start, has_chatted
+from src.core.database import get_previous_stream_session, get_session_start, has_chatted, transaction
+from src.local.roll import rules
 from src.local.roll.storage import (
     RollRow, activate_perks, add_perk, consume_perk, get_action_status, get_expired_curses,
     get_last_roll_session_before, get_perk, get_roll, get_session_champion, get_session_loser,
     has_action, save_action, save_roll, seconds_since_action, set_curse,
 )
 
-# Actions bought with channel points
-ACTION_EXTRA = 'extra'      # a throw for yourself beyond the free ones
-ACTION_REROLL = 'reroll'    # a throw for someone else, the shield protects from it
-ACTION_CURSE = 'curse'      # a capped throw for another, then the cap drops; pierces the shield
-ACTION_SHIELD = 'shield'    # protection from rerolls until the session ends
-ACTIONS = (ACTION_EXTRA, ACTION_REROLL, ACTION_CURSE, ACTION_SHIELD)
+class Action(StrEnum):
+    """Actions bought with channel points."""
+    EXTRA = 'extra'      # a throw for yourself beyond the free ones
+    REROLL = 'reroll'    # a throw for someone else, the shield protects from it
+    CURSE = 'curse'      # a capped throw for another, then the cap drops; pierces the shield
+    SHIELD = 'shield'    # protection from rerolls until the session ends
 
-# Perks from the previous stream: not bought, granted at the start of the new one
-PERK_SHIELD = 'shield'      # to the китежанин (champion) – a shield from rerolls
-PERK_CURSE = 'curse'        # to the залупа (loser) – a curse with a hard deadline
 
-# Outcomes. OK – the change is applied, everything else is a refusal with a reason
-OK = 'ok'
-NO_FREE_LEFT = 'no_free_left'           # !roll: free throws are used up
-FREE_LEFT = 'free_left'                 # extra roll bought while free throws are still left
-BAD_TARGET = 'bad_target'               # the reward input is not a nick
-SELF_TARGET = 'self_target'             # rerolling or cursing yourself
-NOT_ROLLED = 'not_rolled'               # the target has not rolled today
-SHIELDED = 'shielded'                   # the target has a shield
-ALREADY_SHIELDED = 'already_shielded'   # shield bought a second time
-ALREADY_CURSED = 'already_cursed'       # the target is already cursed
-PROTECTED = 'protected'                 # the target was rerolled recently, protection still holds
-UNKNOWN_TARGET = 'unknown_target'       # reroll for a nick seen neither in the game nor in chat
-PERK_SHIELDED = 'perk_shielded'         # the target has the previous stream's champion shield
-DUPLICATE = 'duplicate'                 # Twitch sent the same redemption again
+class Perk(StrEnum):
+    """Perks from the previous stream: not bought, granted at the start of the new one."""
+    SHIELD = 'shield'    # to the китежанин (champion) – a shield from rerolls
+    CURSE = 'curse'      # to the залупа (loser) – a curse with a hard deadline
 
-# Twitch login: Latin letters, digits and underscore, up to 25 characters
-_NICK_RE = re.compile(r'[a-z0-9_]{1,25}')
+
+class Status(StrEnum):
+    """Outcomes. OK – the change is applied, everything else is a refusal with a reason."""
+    OK = 'ok'
+    NO_FREE_LEFT = 'no_free_left'           # !roll: free throws are used up
+    FREE_LEFT = 'free_left'                 # extra roll bought while free throws are still left
+    BAD_TARGET = 'bad_target'               # the reward input is not a nick
+    SELF_TARGET = 'self_target'             # rerolling or cursing yourself
+    NOT_ROLLED = 'not_rolled'               # the target has not rolled today
+    SHIELDED = 'shielded'                   # the target has a shield
+    ALREADY_SHIELDED = 'already_shielded'   # shield bought a second time
+    ALREADY_CURSED = 'already_cursed'       # the target is already cursed
+    PROTECTED = 'protected'                 # the target was rerolled recently, protection still holds
+    UNKNOWN_TARGET = 'unknown_target'       # reroll for a nick seen neither in the game nor in chat
+    PERK_SHIELDED = 'perk_shielded'         # the target has the previous stream's champion shield
+    DUPLICATE = 'duplicate'                 # Twitch sent the same redemption again
+
 
 _lock = asyncio.Lock()
 
 
 @dataclasses.dataclass(frozen=True)
 class Outcome:
-    status: str
+    status: Status
     target: str | None = None               # whose roll is affected
     old_value: int | None = None            # roll before the operation
     value: int | None = None                # roll after the operation
@@ -73,85 +74,43 @@ class Outcome:
 
     @property
     def ok(self) -> bool:
-        return self.status == OK
+        return self.status == Status.OK
 
 
-def _throw(ceiling: int | None = None) -> int:
-    top = Roll.MAX if ceiling is None else max(Roll.MIN, min(ceiling, Roll.MAX))
-    return random.randint(Roll.MIN, top)
+@dataclasses.dataclass(frozen=True)
+class Throw:
+    """A throw on a player's row and what the curse did to it, if there was one."""
+    value: int
+    ceiling: int | None = None
+    next_ceiling: int | None = None
+    curse_minutes_left: int | None = None
 
 
-def parse_nick(raw: str) -> str | None:
-    """Nick from the reward input: the first word without @ and trailing punctuation.
-
-    Viewers write «@Nick», «nick,» or «ник и ещё что-то». Everything after the
-    first word is dropped; anything that does not look like a login – None.
-    """
-    words = raw.strip().split()
-    if not words:
-        return None
-    nick = words[0].lstrip('@').rstrip(',.:;!?').lower()
-    return nick if _NICK_RE.fullmatch(nick) else None
+@dataclasses.dataclass(frozen=True)
+class Standings:
+    """The session's two titles: the loser (залупа) and the champion (китежанин)."""
+    loser: tuple[str, int] | None
+    champion: tuple[str, int] | None
 
 
-# --- curse -------------------------------------------------------------------
-
-def _curse_of(row: RollRow | None) -> tuple[int, float | None] | None:
-    """The active curse: (ceiling of the next throw, when it reached the floor).
-
-    The curse does not need lifting separately: once the ceiling has sat on the
-    floor longer than CURSE_HOLD_MINUTES, the row simply stops counting as cursed.
-    A new session is a new row with no curse in it. The curse of the previous
-    stream's loser also has a hard deadline, curse_until.
-    """
-    if row is None or row.curse_ceiling is None:
-        return None
-    if row.curse_until is not None and time.time() >= row.curse_until:
-        return None
-    floor_at = row.curse_floor_at
-    if floor_at is not None and time.time() - floor_at >= Rewards.CURSE_HOLD_MINUTES * 60:
-        return None
-    return row.curse_ceiling, floor_at
-
-
-def _lowered(ceiling: int, floor_at: float | None) -> tuple[int, float | None]:
-    """The ceiling after a cursed player's throw: one step lower, but not below the floor.
-
-    The countdown to the lift starts the moment the ceiling first reaches the
-    floor, and does not move after that.
-    """
-    next_ceiling = max(Rewards.CURSE_FLOOR, ceiling - Rewards.CURSE_STEP)
-    if floor_at is None and next_ceiling == Rewards.CURSE_FLOOR:
-        floor_at = time.time()
-    return next_ceiling, floor_at
-
-
-def _minutes_left(floor_at: float | None, until: float | None = None) -> int | None:
-    """Minutes until a curse sitting on the floor lifts. None – nothing to wait for.
-
-    None means either that the ceiling is still dropping (no floor_at yet) or that the
-    hold has already run out. texts.curse_note() picks a different line by exactly that,
-    so «expired» must not come back as «one minute left». The previous stream's loser
-    curse also has a hard deadline, until: the lift comes at whichever is earlier.
-    """
-    if floor_at is None:
-        return None
-    lifts_at = floor_at + Rewards.CURSE_HOLD_MINUTES * 60
-    if until is not None:
-        lifts_at = min(lifts_at, until)
-    seconds = lifts_at - time.time()
-    return max(1, math.ceil(seconds / 60)) if seconds > 0 else None
+def _thrown(target: str, old_value: int | None, throw: Throw, standings: Standings, **extra) -> Outcome:
+    """A successful throw as an outcome."""
+    return Outcome(
+        Status.OK, target=target, old_value=old_value, value=throw.value, ceiling=throw.ceiling,
+        next_ceiling=throw.next_ceiling, curse_minutes_left=throw.curse_minutes_left,
+        loser=standings.loser, champion=standings.champion, **extra,
+    )
 
 
 async def _throw_for(
     session_id: str, user: str, row: RollRow | None, *, free_throw: bool, limit: int | None = None,
-) -> dict:
+) -> Throw:
     """A throw on a player's row – their own or someone else's reroll.
 
     A cursed player's throw is capped by the ceiling, and the ceiling drops a step:
     any throw on the victim, whoever made it, brings the curse closer to the floor.
     """
-    curse = _curse_of(row)
+    curse = rules.curse_of(row, time.time())
     until = row.curse_until if curse is not None else None
     if curse is None:
         # The previous stream's loser curse is laid on the first throw on them
@@ -159,32 +118,22 @@ async def _throw_for(
         if until is not None:
             curse = (Rewards.CURSE_CEILING, None)
     if curse is None:
-        value = _throw()
+        value = rules.throw()
         await save_roll(session_id, user, value, free_throw=free_throw, limit=limit)
-        return {'value': value}
+        return Throw(value)
     ceiling, floor_at = curse
-    value = _throw(ceiling)
+    value = rules.throw(ceiling)
     await save_roll(session_id, user, value, free_throw=free_throw, limit=limit)
-    next_ceiling, floor_at = _lowered(ceiling, floor_at)
+    now = time.time()
+    next_ceiling, floor_at = rules.lowered(ceiling, floor_at, now)
     await set_curse(session_id, user, next_ceiling, floor_at, until)
-    return {
-        'value': value, 'ceiling': ceiling, 'next_ceiling': next_ceiling,
-        'curse_minutes_left': _minutes_left(floor_at, until),
-    }
+    return Throw(value, ceiling, next_ceiling, rules.minutes_left(floor_at, until, now))
 
 
-async def _standings(session_id: str) -> dict:
-    """The session loser (залупа) and champion (китежанин) after a throw.
-
-    The champion is not shown if it is the same person as the loser: that happens
-    when only one player rolled or everyone threw the same number – there is
-    nobody to praise them against.
-    """
+async def _standings(session_id: str) -> Standings:
+    """The session loser and champion after a throw (see rules.visible_champion)."""
     loser = await get_session_loser(session_id)
-    champion = await get_session_champion(session_id)
-    if champion is not None and loser is not None and champion[0] == loser[0]:
-        champion = None
-    return {'loser': loser, 'champion': champion}
+    return Standings(loser, rules.visible_champion(loser, await get_session_champion(session_id)))
 
 
 # --- perks from the previous stream ------------------------------------------------
@@ -201,11 +150,10 @@ async def _perk_shield_left(session_id: str, user: str) -> int | None:
     A reroll on a player is also their appearance: the shield turns on and protects at once.
     """
     await _activate_perks(session_id, user)
-    perk = await get_perk(session_id, user, PERK_SHIELD)
+    perk = await get_perk(session_id, user, Perk.SHIELD)
     if perk is None or perk.active_until is None:
         return None
-    seconds = perk.active_until - time.time()
-    return max(1, math.ceil(seconds / 60)) if seconds > 0 else None
+    return rules.whole_minutes(perk.active_until - time.time())
 
 
 async def _take_perk_curse(session_id: str, user: str) -> float | None:
@@ -215,10 +163,10 @@ async def _take_perk_curse(session_id: str, user: str) -> float | None:
     if it was lifted early. A player who did not show up in time loses it.
     """
     await _activate_perks(session_id, user)
-    perk = await get_perk(session_id, user, PERK_CURSE)
+    perk = await get_perk(session_id, user, Perk.CURSE)
     if perk is None or perk.consumed or perk.active_until is None or perk.active_until <= time.time():
         return None
-    await consume_perk(session_id, user, PERK_CURSE)
+    await consume_perk(session_id, user, Perk.CURSE)
     return perk.active_until
 
 
@@ -242,16 +190,14 @@ async def grant_perks(session_id: str) -> tuple[str | None, str | None] | None:
     None – nothing to grant or everything is already granted. Safe to repeat after
     a restart or a stream outage: nothing is granted a second time.
     """
-    async with _lock:
+    async with _lock, transaction():
         previous = await _previous_session(session_id)
         if previous is None:
             return None
         loser = await get_session_loser(previous)
-        champion = await get_session_champion(previous)
-        if champion is not None and loser is not None and champion[0] == loser[0]:
-            champion = None
-        shielded = champion is not None and await add_perk(session_id, champion[0], PERK_SHIELD, previous)
-        cursed = loser is not None and await add_perk(session_id, loser[0], PERK_CURSE, previous)
+        champion = rules.visible_champion(loser, await get_session_champion(previous))
+        shielded = champion is not None and await add_perk(session_id, champion[0], Perk.SHIELD, previous)
+        cursed = loser is not None and await add_perk(session_id, loser[0], Perk.CURSE, previous)
     if not (shielded or cursed):
         return None
     return (champion[0] if shielded else None, loser[0] if cursed else None)
@@ -259,7 +205,7 @@ async def grant_perks(session_id: str) -> tuple[str | None, str | None] | None:
 
 async def appear(session_id: str, user: str) -> list[str]:
     """A player showed up in the stream chat: start their perk countdown. Returns which started."""
-    async with _lock:
+    async with _lock, transaction():
         return await _activate_perks(session_id, user)
 
 
@@ -275,18 +221,15 @@ async def free_throw(
     unlimited (broadcaster) still counts the throw, so the paid extra roll behaves the
     same for them, and free_left is None since there is no remainder to mention.
     """
-    async with _lock:
+    async with _lock, transaction():
         row = await get_roll(session_id, user)
         used = row.free_throws if row else 0
         if not unlimited and used >= limit:
-            return Outcome(NO_FREE_LEFT, target=user, free_left=0)
+            return Outcome(Status.NO_FREE_LEFT, target=user, free_left=0)
         throw = await _throw_for(session_id, user, row, free_throw=True, limit=limit)
         standings = await _standings(session_id)
-    return Outcome(
-        OK, target=user, old_value=row.value if row else None,
-        free_left=None if unlimited else max(0, limit - used - 1),
-        **standings, **throw,
-    )
+    return _thrown(user, row.value if row else None, throw, standings,
+                   free_left=None if unlimited else max(0, limit - used - 1))
 
 
 @dataclasses.dataclass(frozen=True)
@@ -309,20 +252,22 @@ async def status(session_id: str, user: str, *, limit: int, unlimited: bool = Fa
     asking about your state must not start the countdown.
     """
     row = await get_roll(session_id, user)
-    curse = _curse_of(row)
-    perk = await get_perk(session_id, user, PERK_SHIELD)
+    now = time.time()
+    curse = rules.curse_of(row, now)
+    perk = await get_perk(session_id, user, Perk.SHIELD)
     left = None
     if perk is not None and not perk.consumed and perk.active_until is not None:
-        seconds = perk.active_until - time.time()
-        left = max(1, math.ceil(seconds / 60)) if seconds > 0 else None
+        left = rules.whole_minutes(perk.active_until - now)
+    standings = await _standings(session_id)
     return Standing(
         value=row.value if row else None,
         free_left=None if unlimited else max(0, limit - (row.free_throws if row else 0)),
         ceiling=curse[0] if curse else None,
-        curse_minutes_left=_minutes_left(curse[1], row.curse_until) if curse else None,
-        shield=await has_action(session_id, ACTION_SHIELD, user, OK),
+        curse_minutes_left=rules.minutes_left(curse[1], row.curse_until, now) if curse else None,
+        shield=await has_action(session_id, Action.SHIELD, user, Status.OK),
         shield_minutes_left=left,
-        **await _standings(session_id),
+        loser=standings.loser,
+        champion=standings.champion,
     )
 
 
@@ -330,12 +275,12 @@ async def lift_expired_curses(session_id: str) -> list[str]:
     """Lift expired curses: the ceiling sat on the floor longer than CURSE_HOLD_MINUTES
     or the hard deadline of the previous stream's loser curse passed.
 
-    The mechanics do not need the lift: _curse_of() already stops treating such a
+    The mechanics do not need the lift: rules.curse_of() already stops treating such a
     row as cursed. It is there so the bot says so in chat exactly once – a cleared
     row will not be selected again. Under the shared lock, so as not to erase a
     curse laid anew between the select and the write.
     """
-    async with _lock:
+    async with _lock, transaction():
         now = time.time()
         users = await get_expired_curses(session_id, now - Rewards.CURSE_HOLD_MINUTES * 60, now)
         for user in users:
@@ -352,16 +297,16 @@ async def redeem(
     and the second one must not throw. The check and the write run under the same
     lock as the throw itself, so a duplicate cannot slip in between them.
     """
-    async with _lock:
+    async with _lock, transaction():
         if await get_action_status(redemption_id) is not None:
-            return Outcome(DUPLICATE)
-        if action == ACTION_EXTRA:
+            return Outcome(Status.DUPLICATE)
+        if action == Action.EXTRA:
             outcome = await _extra(session_id, actor)
-        elif action == ACTION_SHIELD:
+        elif action == Action.SHIELD:
             outcome = await _shield(session_id, actor)
-        elif action == ACTION_REROLL:
+        elif action == Action.REROLL:
             outcome = await _reroll(session_id, actor, user_input)
-        elif action == ACTION_CURSE:
+        elif action == Action.CURSE:
             outcome = await _curse(session_id, actor, user_input)
         else:
             raise ValueError(f'Неизвестное действие: {action}')
@@ -380,19 +325,16 @@ async def _extra(session_id: str, actor: str) -> Outcome:
     limit = (row.free_limit if row and row.free_limit else None) or Roll.FREE_PER_SESSION
     if used < limit:
         # Points for a throw that is free anyway are almost certainly a misclick
-        return Outcome(FREE_LEFT, target=actor, free_left=limit - used)
+        return Outcome(Status.FREE_LEFT, target=actor, free_left=limit - used)
     throw = await _throw_for(session_id, actor, row, free_throw=False)
-    return Outcome(
-        OK, target=actor, old_value=row.value if row else None,
-        **await _standings(session_id), **throw,
-    )
+    return _thrown(actor, row.value if row else None, throw, await _standings(session_id))
 
 
 async def _shield(session_id: str, actor: str) -> Outcome:
     # The shield itself is a successful journal row, it has no state of its own
-    if await has_action(session_id, ACTION_SHIELD, actor, OK):
-        return Outcome(ALREADY_SHIELDED, target=actor)
-    return Outcome(OK, target=actor)
+    if await has_action(session_id, Action.SHIELD, actor, Status.OK):
+        return Outcome(Status.ALREADY_SHIELDED, target=actor)
+    return Outcome(Status.OK, target=actor)
 
 
 async def _target(
@@ -406,17 +348,17 @@ async def _target(
     otherwise a typo in the reward input would create a roll for a nonexistent
     player, who could become the «залупа стрима».
     """
-    target = parse_nick(user_input)
+    target = rules.parse_nick(user_input)
     if target is None:
-        return Outcome(BAD_TARGET)
+        return Outcome(Status.BAD_TARGET)
     if target == actor:
-        return Outcome(SELF_TARGET, target=target)
+        return Outcome(Status.SELF_TARGET, target=target)
     row = await get_roll(session_id, target)
     if row is None:
         if require_roll:
-            return Outcome(NOT_ROLLED, target=target)
+            return Outcome(Status.NOT_ROLLED, target=target)
         if not await has_chatted(target):
-            return Outcome(UNKNOWN_TARGET, target=target)
+            return Outcome(Status.UNKNOWN_TARGET, target=target)
     return target, row
 
 
@@ -431,10 +373,10 @@ async def _protection_left(session_id: str, target: str) -> int | None:
     window = Rewards.REROLL_PROTECT_MINUTES * 60
     if not window:
         return None
-    elapsed = await seconds_since_action(session_id, ACTION_REROLL, target, OK)
-    if elapsed is None or elapsed >= window:
+    elapsed = await seconds_since_action(session_id, Action.REROLL, target, Status.OK)
+    if elapsed is None:
         return None
-    return max(1, math.ceil((window - elapsed) / 60))
+    return rules.whole_minutes(window - elapsed)
 
 
 async def _reroll(session_id: str, actor: str, user_input: str) -> Outcome:
@@ -442,21 +384,18 @@ async def _reroll(session_id: str, actor: str, user_input: str) -> Outcome:
     if isinstance(found, Outcome):
         return found
     target, row = found
-    if await has_action(session_id, ACTION_SHIELD, target, OK):
-        return Outcome(SHIELDED, target=target)
+    if await has_action(session_id, Action.SHIELD, target, Status.OK):
+        return Outcome(Status.SHIELDED, target=target)
     perk_left = await _perk_shield_left(session_id, target)
     if perk_left is not None:
-        return Outcome(PERK_SHIELDED, target=target, protect_minutes_left=perk_left)
+        return Outcome(Status.PERK_SHIELDED, target=target, protect_minutes_left=perk_left)
     protect_left = await _protection_left(session_id, target)
     if protect_left is not None:
-        return Outcome(PROTECTED, target=target, protect_minutes_left=protect_left)
+        return Outcome(Status.PROTECTED, target=target, protect_minutes_left=protect_left)
     # On a cursed target the reroll is capped by their ceiling and lowers it the same
     # way the victim's own throw does. The victim's free throws are not spent
     throw = await _throw_for(session_id, target, row, free_throw=False)
-    return Outcome(
-        OK, target=target, old_value=row.value if row else None,
-        **await _standings(session_id), **throw,
-    )
+    return _thrown(target, row.value if row else None, throw, await _standings(session_id))
 
 
 async def _curse(session_id: str, actor: str, user_input: str) -> Outcome:
@@ -466,16 +405,14 @@ async def _curse(session_id: str, actor: str, user_input: str) -> Outcome:
     target, row = found
     # The shield is deliberately not checked: the curse pierces it, that is what sets
     # it apart from the cheap reroll
-    if _curse_of(row) is not None:
+    now = time.time()
+    if rules.curse_of(row, now) is not None:
         # A new curse would reset the ceiling to the top – a gift to the victim
-        return Outcome(ALREADY_CURSED, target=target)
+        return Outcome(Status.ALREADY_CURSED, target=target)
     ceiling = Rewards.CURSE_CEILING
-    value = _throw(ceiling)
+    value = rules.throw(ceiling)
     await save_roll(session_id, target, value, free_throw=False)
-    next_ceiling, floor_at = _lowered(ceiling, None)
+    next_ceiling, floor_at = rules.lowered(ceiling, None, now)
     await set_curse(session_id, target, next_ceiling, floor_at)
-    return Outcome(
-        OK, target=target, old_value=row.value, value=value,
-        ceiling=ceiling, next_ceiling=next_ceiling, curse_minutes_left=_minutes_left(floor_at),
-        **await _standings(session_id),
-    )
+    throw = Throw(value, ceiling, next_ceiling, rules.minutes_left(floor_at, None, now))
+    return _thrown(target, row.value, throw, await _standings(session_id))

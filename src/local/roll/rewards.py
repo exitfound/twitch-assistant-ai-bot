@@ -65,10 +65,10 @@ class RewardSpec:
 
 def _specs() -> list[RewardSpec]:
     return [
-        RewardSpec(game.ACTION_EXTRA, Rewards.COST_EXTRA, False, 0),
-        RewardSpec(game.ACTION_REROLL, Rewards.COST_REROLL, True, Rewards.ATTACK_MAX_PER_USER),
-        RewardSpec(game.ACTION_CURSE, Rewards.COST_CURSE, True, Rewards.ATTACK_MAX_PER_USER),
-        RewardSpec(game.ACTION_SHIELD, Rewards.COST_SHIELD, False, 0),
+        RewardSpec(game.Action.EXTRA, Rewards.COST_EXTRA, False, 0),
+        RewardSpec(game.Action.REROLL, Rewards.COST_REROLL, True, Rewards.ATTACK_MAX_PER_USER),
+        RewardSpec(game.Action.CURSE, Rewards.COST_CURSE, True, Rewards.ATTACK_MAX_PER_USER),
+        RewardSpec(game.Action.SHIELD, Rewards.COST_SHIELD, False, 0),
     ]
 
 
@@ -238,7 +238,7 @@ class RewardService:
             for redemption in pending:
                 if redemption.redeemed_at >= started:
                     continue        # redeemed after the subscription, will arrive as an event
-                applied = await get_action_status(redemption.id) == game.OK
+                applied = await get_action_status(redemption.id) == game.Status.OK
                 await self._set_status(reward.id, redemption.id, FULFILLED if applied else CANCELED)
                 settled += 1
         if settled:

@@ -49,9 +49,11 @@ async def _questions(ids: list[int], limit: int) -> list[_Question]:
                f' WHERE id IN ({marks}) ORDER BY id')
         params: tuple = tuple(ids)
     else:
-        # Commands are answered by their own handlers, not by this context
+        # Commands are answered by their own handlers, not by this context: a `!` at the
+        # start or after a space («сосурян !who ник»). One inside a sentence is a question
         sql = ("SELECT id, session_id, username, message FROM chat_messages"
-               " WHERE addressed = 1 AND message NOT LIKE '%!%' AND length(message) >= 20"
+               " WHERE addressed = 1 AND message NOT LIKE '!%' AND message NOT LIKE '% !%'"
+               " AND length(message) >= 20"
                ' ORDER BY id DESC LIMIT ?')
         params = (limit,)
     async with db.execute(sql, params) as cursor:
@@ -66,8 +68,8 @@ async def _now(q: _Question, config) -> tuple[str | None, str]:
         search_context(q.prompt, Context.SEARCH_RESULTS),
         get_random_knowledge(Context.KNOWLEDGE_RANDOM),
     )
-    builder = (ContextBuilder().add_facts(Content.label('facts'), facts)
-               .add_chat(Content.label('chat'), chat)
+    builder = (ContextBuilder().add_pairs(Content.label('facts'), facts)
+               .add_pairs(Content.label('chat'), chat)
                .add_lines(Content.label('channel'), found)
                .add_lines(Content.label('language'), language)
                .add_raw(Content.prompt('user_question', user=q.user, prompt=q.prompt)))
@@ -119,8 +121,8 @@ async def probe(ids: list[int], limit: int, samples: int) -> None:
 
     print(f'\n{"=" * 70}\nВ среднем на ответ:')
     for variant, (tokens, seconds, n) in totals.items():
-        dollars = tokens / n * 0.30 / 1_000_000
+        dollars = client.cost_estimate(tokens // n)
         print(f'  {variant:8} {tokens // n:>7,} ток. входа  {seconds / n:4.1f} с  ~${dollars:.4f}'.replace(',', ' '))
     u = client.usage
-    total = (u['prompt'] * 0.30 + u['output'] * 2.50) / 1_000_000
+    total = client.cost_estimate(u['prompt'], u['output'])
     print(f'Весь прогон: ~${total:.2f}')

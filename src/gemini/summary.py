@@ -3,7 +3,7 @@
 During a stream the whole stream is retold rather than a fixed window, because the
 longest ones run past 800 messages and a window loses the start. Gemini's input filter
 judges a request by combinations of messages and blocks a fraction of long chats whole,
-so a blocked request is asked again with less (answer_context.walk()): the whole stream
+so a blocked request is asked again with less (ladder.walk()): the whole stream
 → the last CONTEXT_SUMMARY_MESSAGES → the last FALLBACK_MESSAGES.
 
 Offline, and on «!summary прошлый», the previous stream is retold from its chronicle in
@@ -11,7 +11,7 @@ the memory – a few hundred characters, almost free. The chronicle appears only
 MEMORY_SILENCE_MINUTES of silence, so until then that stream's chat is retold instead,
 with the same ladder.
 
-Limited per viewer and stream like !who and !versus (_per_stream() in commands.py), the
+Limited per viewer and stream like !who and !versus (LIMITS in commands.py), the
 current and the previous stream sharing one count.
 """
 
@@ -20,8 +20,10 @@ from google.genai import types
 from src.core.config import Context, Memory
 from src.core.content import Content
 from src.core.database import get_last_chat_session, get_recent_chat
-from src.gemini.answer_context import is_stream_session, walk
+from src.gemini.answer_context import is_stream_session
 from src.gemini.client import make_gen_config
+from src.gemini.context import ContextBuilder
+from src.gemini.ladder import unique_rungs, walk
 from src.gemini.memory import storage
 
 TEMPERATURE = 1.2
@@ -55,18 +57,18 @@ async def _chat(session_id: str, request: str, user: str) -> tuple[str | None, s
     chat = await get_recent_chat(session_id, Context.STREAM_MAX_MESSAGES)
     if not chat:
         return None
-    rungs, seen = [], set()
+    rungs = []
     for name, n in (('весь стрим', len(chat)),
                     (f'последние {Context.SUMMARY_MESSAGES}', Context.SUMMARY_MESSAGES),
                     (f'последние {FALLBACK_MESSAGES}', FALLBACK_MESSAGES)):
         part = chat[-n:]
-        if len(part) in seen:
-            continue
-        seen.add(len(part))
-        head = Content.prompt(request, session_id=session_id, count=len(part))
-        chat_text = '\n'.join(f'{u}: {m}' for u, m in part)
-        rungs.append((name, f"{head}\n\n{chat_text}\n\n{Content.prompt('summary_tail')}"))
-    return await walk(rungs, config(), user)
+        prompt = (ContextBuilder()
+                  .add_raw(Content.prompt(request, session_id=session_id, count=len(part)))
+                  .add_pairs(None, part)
+                  .add_raw(Content.prompt('summary_tail'))
+                  .build())
+        rungs.append((name, prompt))
+    return await walk(unique_rungs(rungs), config(), user)
 
 
 async def now(session_id: str, user: str) -> tuple[str | None, str] | None:

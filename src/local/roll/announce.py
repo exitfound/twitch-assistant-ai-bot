@@ -9,6 +9,7 @@ import logging
 from src.core.config import Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
+from src.core.port import BotPort
 from src.local.roll import game
 
 logger = logging.getLogger(__name__)
@@ -18,7 +19,7 @@ logger = logging.getLogger(__name__)
 CURSE_LIFT_CHECK_SECONDS = 60
 
 
-async def curse_lift_loop(bot) -> None:
+async def curse_lift_loop(bot: BotPort) -> None:
     """Tells chat when a player's curse has lifted.
 
     A curse lifts once the ceiling has sat on the floor for REWARD_CURSE_HOLD_MINUTES.
@@ -38,7 +39,7 @@ async def curse_lift_loop(bot) -> None:
         logger.info('Цикл снятия проклятий остановлен')
 
 
-async def _announce_curse_lifts(bot) -> None:
+async def _announce_curse_lifts(bot: BotPort) -> None:
     session_id = bot.session_id
     for user in await game.lift_expired_curses(session_id):
         text = Content.text('roll_curse_lifted', user=user, max=Roll.MAX)

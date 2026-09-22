@@ -1,12 +1,12 @@
 """The game's SQLite queries: rolls, rewards, roll_actions, roll_perks.
 
 The tables themselves and their migrations are created by init_db() in
-src/core/database.py: the schema lives in one place, which makes it easier to keep
+src/core/db/schema.py: the schema lives in one place, which makes it easier to keep
 startup on the live database idempotent.
 """
 from typing import NamedTuple
 
-from src.core.database import get_db
+from src.core.database import get_db, transaction
 
 
 async def save_roll(
@@ -21,16 +21,15 @@ async def save_roll(
     when the person rolls from chat: a reward redemption event carries no badges,
     so the limit is stored in the row.
     """
-    db = await get_db()
-    await db.execute(
-        'INSERT INTO rolls (session_id, username, roll_value, free_throws, free_limit)'
-        ' VALUES (?, ?, ?, ?, ?)'
-        ' ON CONFLICT(session_id, username) DO UPDATE SET roll_value = excluded.roll_value,'
-        ' rolled_at = CURRENT_TIMESTAMP, free_throws = free_throws + excluded.free_throws,'
-        ' free_limit = COALESCE(excluded.free_limit, free_limit)',
-        (session_id, username, value, int(free_throw), limit),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO rolls (session_id, username, roll_value, free_throws, free_limit)'
+            ' VALUES (?, ?, ?, ?, ?)'
+            ' ON CONFLICT(session_id, username) DO UPDATE SET roll_value = excluded.roll_value,'
+            ' rolled_at = CURRENT_TIMESTAMP, free_throws = free_throws + excluded.free_throws,'
+            ' free_limit = COALESCE(excluded.free_limit, free_limit)',
+            (session_id, username, value, int(free_throw), limit),
+        )
 
 
 class RollRow(NamedTuple):
@@ -58,13 +57,12 @@ async def set_curse(
     session_id: str, username: str, ceiling: int | None, floor_at: float | None,
     until: float | None = None,
 ) -> None:
-    db = await get_db()
-    await db.execute(
-        'UPDATE rolls SET curse_ceiling = ?, curse_floor_at = ?, curse_until = ?'
-        ' WHERE session_id = ? AND username = ?',
-        (ceiling, floor_at, until, session_id, username),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'UPDATE rolls SET curse_ceiling = ?, curse_floor_at = ?, curse_until = ?'
+            ' WHERE session_id = ? AND username = ?',
+            (ceiling, floor_at, until, session_id, username),
+        )
 
 
 async def get_expired_curses(session_id: str, floor_before: float, now: float) -> list[str]:
@@ -92,13 +90,12 @@ async def get_reward_ids() -> dict[str, str]:
 
 
 async def save_reward_id(action: str, reward_id: str) -> None:
-    db = await get_db()
-    await db.execute(
-        'INSERT INTO rewards (action, reward_id) VALUES (?, ?)'
-        ' ON CONFLICT(action) DO UPDATE SET reward_id = excluded.reward_id',
-        (action, reward_id),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO rewards (action, reward_id) VALUES (?, ?)'
+            ' ON CONFLICT(action) DO UPDATE SET reward_id = excluded.reward_id',
+            (action, reward_id),
+        )
 
 
 async def get_action_status(redemption_id: str) -> str | None:
@@ -141,13 +138,12 @@ async def save_action(
     redemption_id: str, session_id: str, action: str, actor: str, user_input: str,
     target: str | None, old_value: int | None, new_value: int | None, status: str,
 ) -> None:
-    db = await get_db()
-    await db.execute(
-        'INSERT INTO roll_actions (redemption_id, session_id, action, actor, user_input,'
-        ' target, old_value, new_value, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        (redemption_id, session_id, action, actor, user_input, target, old_value, new_value, status),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO roll_actions (redemption_id, session_id, action, actor, user_input,'
+            ' target, old_value, new_value, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            (redemption_id, session_id, action, actor, user_input, target, old_value, new_value, status),
+        )
 
 
 async def get_session_loser(session_id: str) -> tuple[str, int] | None:
@@ -209,12 +205,11 @@ class PerkRow(NamedTuple):
 
 async def add_perk(session_id: str, username: str, perk: str, from_session: str) -> bool:
     """Grant a perk. False – this perk was already granted in this session."""
-    db = await get_db()
-    cursor = await db.execute(
-        'INSERT OR IGNORE INTO roll_perks (session_id, username, perk, from_session) VALUES (?, ?, ?, ?)',
-        (session_id, username, perk, from_session),
-    )
-    await db.commit()
+    async with transaction() as db:
+        cursor = await db.execute(
+            'INSERT OR IGNORE INTO roll_perks (session_id, username, perk, from_session) VALUES (?, ?, ?, ?)',
+            (session_id, username, perk, from_session),
+        )
     return cursor.rowcount == 1
 
 
@@ -230,29 +225,27 @@ async def get_perk(session_id: str, username: str, perk: str) -> PerkRow | None:
 
 async def activate_perks(session_id: str, username: str, now: float, until: float) -> list[str]:
     """Start the countdown of the player's not yet started perks. Returns which were started."""
-    db = await get_db()
-    async with db.execute(
-        'SELECT perk FROM roll_perks WHERE session_id = ? AND username = ? AND active_from IS NULL',
-        (session_id, username),
-    ) as cursor:
-        perks = [perk for (perk,) in await cursor.fetchall()]
-    if perks:
-        await db.execute(
-            'UPDATE roll_perks SET active_from = ?, active_until = ?'
-            ' WHERE session_id = ? AND username = ? AND active_from IS NULL',
-            (now, until, session_id, username),
-        )
-        await db.commit()
+    async with transaction() as db:
+        async with db.execute(
+            'SELECT perk FROM roll_perks WHERE session_id = ? AND username = ? AND active_from IS NULL',
+            (session_id, username),
+        ) as cursor:
+            perks = [perk for (perk,) in await cursor.fetchall()]
+        if perks:
+            await db.execute(
+                'UPDATE roll_perks SET active_from = ?, active_until = ?'
+                ' WHERE session_id = ? AND username = ? AND active_from IS NULL',
+                (now, until, session_id, username),
+            )
     return perks
 
 
 async def consume_perk(session_id: str, username: str, perk: str) -> None:
-    db = await get_db()
-    await db.execute(
-        'UPDATE roll_perks SET consumed = 1 WHERE session_id = ? AND username = ? AND perk = ?',
-        (session_id, username, perk),
-    )
-    await db.commit()
+    async with transaction() as db:
+        await db.execute(
+            'UPDATE roll_perks SET consumed = 1 WHERE session_id = ? AND username = ? AND perk = ?',
+            (session_id, username, perk),
+        )
 
 
 async def get_pending_perk_users(session_id: str) -> set[str]:

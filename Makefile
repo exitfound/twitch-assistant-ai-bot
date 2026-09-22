@@ -3,12 +3,13 @@ PY := ./venv/bin/python3
 
 .PHONY: venv lint fix test check audit lock up restart logs backup oauth
 
-venv:  ## Fresh venv on the Python the image uses: the pinned set as the image has it, then the dev tools
+LOCK := $(PY) -m piptools compile --generate-hashes --strip-extras --no-emit-index-url
+
+venv:  ## Fresh venv on the Python the image uses: the bot's set as the image has it, plus the dev tools
 	rm -rf venv
 	python3.11 -m venv venv
 	$(PY) -m pip install --upgrade pip
-	$(PY) -m pip install --require-hashes -r requirements.lock
-	$(PY) -m pip install -r requirements-dev.txt
+	$(PY) -m pip install --require-hashes -r requirements.txt -r requirements-dev.txt
 
 lint:
 	$(PY) -m ruff check .
@@ -22,10 +23,11 @@ test:
 check: lint test
 
 audit:  ## Known vulnerabilities in the pinned set
-	$(PY) -m pip_audit -r requirements.lock
+	$(PY) -m pip_audit -r requirements.txt -r requirements-dev.txt
 
-lock:  ## Re-resolve requirements.lock after a change in requirements.txt
-	$(PY) -m piptools compile --generate-hashes --strip-extras --no-emit-index-url -o requirements.lock requirements.txt
+lock:  ## Recompile requirements*.txt after a change in requirements*.in
+	$(LOCK) -o requirements.txt requirements.in
+	$(LOCK) --allow-unsafe -o requirements-dev.txt requirements-dev.in
 
 up:
 	docker compose up -d --build

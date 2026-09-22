@@ -1,6 +1,7 @@
 """The «залупа стрима» (session loser) game: !roll, channel-points rewards, curse-lift
 announcement.
 
+    rules.py       the rules as pure functions: a throw, a curse, minutes left, a nick
     game.py        mechanics – the only place that changes rolls
     storage.py     queries on rolls, rewards, roll_actions and roll_perks
     perks.py       perks from the previous stream: announce, start the countdown

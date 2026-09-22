@@ -20,10 +20,11 @@ from pydantic import BaseModel, ValidationError
 
 from src.core.config import Gemini, Memory
 from src.core.content import Content
-from src.core.utils import clean_nick, fix_dashes, gather_cancelling, trim_to_sentence
+from src.core.utils import clean_nick, gather_cancelling
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR, SAFETY_OFF, generate_checked
 from src.gemini.memory import storage
 from src.gemini.memory.storage import Block, Profile
+from src.gemini.output import fix_dashes, trim_to_sentence
 from src.local.roll.storage import get_session_champion, get_session_loser
 
 logger = logging.getLogger(__name__)
@@ -368,6 +369,16 @@ async def first_profile(username: str, last: Block, *, save: bool = True,
 
 # --- a conversation ------------------------------------------------------------
 
+async def save_result(block: Block, chronicle: Chronicle | None) -> None:
+    """Mark a conversation done: its chronicle, or a failed row – --build-memory retries those."""
+    await storage.save_chronicle(
+        block,
+        chronicle.text if chronicle else '',
+        storage.ChronicleStatus.OK if chronicle else storage.ChronicleStatus.FAILED,
+        chronicle.events if chronicle else [],
+    )
+
+
 async def process_block(block: Block) -> bool:
     """Chronicle and profile updates for one finished conversation. False – Gemini is down.
 
@@ -378,7 +389,7 @@ async def process_block(block: Block) -> bool:
     conversation never holds up the ones after it.
     """
     if block.count < Memory.CONVERSATION_MIN_MESSAGES:
-        await storage.save_chronicle(block, '', storage.STATUS_SKIPPED, [])
+        await storage.save_chronicle(block, '', storage.ChronicleStatus.SKIPPED, [])
         logger.info('Память: разговор %s – %d сообщений, мало для хроники', block.key, block.count)
         return True
     try:
@@ -393,12 +404,7 @@ async def process_block(block: Block) -> bool:
     except Unavailable:
         logger.warning('Память: Gemini не отвечает, разговор %s повторю в следующий раз', block.key)
         return False
-    await storage.save_chronicle(
-        block,
-        chronicle.text if chronicle else '',
-        storage.STATUS_OK if chronicle else storage.STATUS_FAILED,
-        chronicle.events if chronicle else [],
-    )
+    await save_result(block, chronicle)
     logger.info('Память: разговор %s (%d сообщений) – хроника %s, профилей обновлено %d из %d',
                 block.key, block.count, 'есть' if chronicle else 'нет', updated, len(chatters))
     return True

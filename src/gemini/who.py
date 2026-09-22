@@ -15,9 +15,9 @@ model retells it the same way every time. !versus takes half the sample per
 person, so two people fit one request.
 
 A blocked request is asked again with less, as free-text answers do
-(answer_context.walk()): the whole sample → a smaller one → the old context.
+(ladder.walk()): the whole sample → a smaller one → the old context.
 
-The per-stream limits live with the handlers (_per_stream() in commands.py).
+The per-stream limits live with the handlers (LIMITS in commands.py, see limits.py).
 """
 import asyncio
 import random
@@ -28,8 +28,8 @@ from src.core.content import Content
 from src.core.database import (
     get_tagged_answers, get_user_interactions, get_user_messages,
 )
-from src.gemini.answer_context import unique_rungs
 from src.gemini.context import ContextBuilder
+from src.gemini.ladder import Rung, unique_rungs
 from src.gemini.memory import storage
 
 # Shorter messages («ахах», «+», «го») say nothing about a person
@@ -77,7 +77,7 @@ class Material:
     def add_sample(self, b: ContextBuilder, share: float) -> ContextBuilder:
         """The random sample; share < 1 cuts events and messages for a smaller rung."""
         t = self.nick
-        return (b.add_facts(Content.label('user_facts', target=t), self.facts)
+        return (b.add_pairs(Content.label('user_facts', target=t), self.facts)
                 .add_lines(Content.label('user_events', target=t), self.events[:round(len(self.events) * share)])
                 .add_lines(Content.label('user_sample', target=t), self.sample[:round(len(self.sample) * share)])
                 .add_lines(Content.label('user_relations', target=t), self.relations)
@@ -87,7 +87,7 @@ class Material:
     def add_old(self, b: ContextBuilder) -> ContextBuilder:
         """The context the commands had before the sample: the last messages."""
         t = self.nick
-        return (b.add_facts(Content.label('user_facts', target=t), self.facts)
+        return (b.add_pairs(Content.label('user_facts', target=t), self.facts)
                 .add_lines(Content.label('user_messages', target=t), self.messages)
                 .add_lines(Content.label('user_interactions', target=t), self.dialogue))
 
@@ -111,7 +111,7 @@ async def material(nick: str, part: float, messages_n: int) -> Material:
                     interaction_lines(nick, interactions))
 
 
-async def who_rungs(user: str, target: str) -> list[tuple[str, str]] | None:
+async def who_rungs(user: str, target: str) -> list[Rung] | None:
     """(rung name, prompt), richest first; None when nothing is known about the target."""
     m, said = await asyncio.gather(
         material(target, 1, Context.WHO_MESSAGES),
@@ -141,7 +141,7 @@ async def versus_material(nick1: str, nick2: str) -> tuple[Material, Material]:
     )
 
 
-async def versus_rungs(user: str, m1: Material, m2: Material) -> list[tuple[str, str]]:
+async def versus_rungs(user: str, m1: Material, m2: Material) -> list[Rung]:
     said = await get_tagged_answers(
         [versus_tag(m1.nick, m2.nick), versus_tag(m2.nick, m1.nick)], PAST_ANSWERS,
     )

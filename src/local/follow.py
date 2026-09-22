@@ -6,12 +6,13 @@ import twitchio
 
 from src.core.content import Content
 from src.core.database import save_bot_interaction
+from src.core.port import BotPort
 from src.core.utils import safe_format
 
 logger = logging.getLogger(__name__)
 
 
-async def handle_follow(bot, payload: twitchio.ChannelFollow) -> None:
+async def handle_follow(bot: BotPort, payload: twitchio.ChannelFollow) -> None:
     try:
         messages = Content.items('follow')
         if not messages:

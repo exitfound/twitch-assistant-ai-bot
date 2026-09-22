@@ -17,7 +17,7 @@ import logging
 import re
 from pathlib import Path
 
-from src.core.database import get_db, invalidate_knowledge_cache
+from src.core.database import get_db, invalidate_knowledge_cache, transaction
 
 logger = logging.getLogger(__name__)
 
@@ -167,12 +167,11 @@ async def count_knowledge(source: str | None = None) -> int:
 async def clear_knowledge(source: str | None = None) -> int:
     """Delete the whole knowledge table, or only one source. Returns rows deleted.
     FTS is synced by a trigger."""
-    db = await get_db()
-    if source is None:
-        cursor = await db.execute('DELETE FROM knowledge')
-    else:
-        cursor = await db.execute('DELETE FROM knowledge WHERE source = ?', (source,))
-    await db.commit()
+    async with transaction() as db:
+        if source is None:
+            cursor = await db.execute('DELETE FROM knowledge')
+        else:
+            cursor = await db.execute('DELETE FROM knowledge WHERE source = ?', (source,))
     invalidate_knowledge_cache()
     return cursor.rowcount
 
@@ -183,17 +182,16 @@ async def import_entries(entries: list[str], source: str | None = None) -> tuple
     content is unique across sources: a line that is already there keeps its
     original source and counts as skipped.
     """
-    db = await get_db()
     added = 0
     for start in range(0, len(entries), IMPORT_BATCH):
         batch = entries[start:start + IMPORT_BATCH]
-        cursor = await db.executemany(
-            'INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, ?)',
-            [(entry, source) for entry in batch],
-        )
+        async with transaction() as db:
+            cursor = await db.executemany(
+                'INSERT OR IGNORE INTO knowledge (content, source) VALUES (?, ?)',
+                [(entry, source) for entry in batch],
+            )
         # rowcount of executemany sums the rows actually inserted; ignored duplicates add 0
         added += cursor.rowcount
-        await db.commit()
     invalidate_knowledge_cache()
     return added, len(entries) - added
 

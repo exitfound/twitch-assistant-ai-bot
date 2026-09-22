@@ -34,8 +34,8 @@ from src.core.database import (
     search_context,
 )
 from src.core.utils import clean_nick
-from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, generate_checked
 from src.gemini.context import ContextBuilder
+from src.gemini.ladder import Rung, unique_rungs, walk
 from src.gemini.memory import storage
 
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ async def _people(user: str, prompt: str) -> list[str]:
     return lines
 
 
-async def ladder(q: Question) -> list[tuple[str, str]]:
+async def ladder(q: Question) -> list[Rung]:
     """(rung name, prompt), richest first; each next one is what to send when the
     previous was blocked. Identical rungs (a short stream, no previous one) are dropped."""
     stream = q.stream if q.stream is not None else is_stream_session(q.session_id)
@@ -102,12 +102,12 @@ async def ladder(q: Question) -> list[tuple[str, str]]:
     question = Content.prompt('user_question', user=q.user, prompt=q.prompt)
 
     def build(chat: list, prev: list, *, memory: bool = True, extras: bool = True) -> str:
-        b = ContextBuilder().add_facts(Content.label('facts'), facts)
+        b = ContextBuilder().add_pairs(Content.label('facts'), facts)
         if memory:
             b.add_lines(Content.label('people'), people)
             b.add_lines(Content.label('chronicle'), [chronicle] if chronicle else [])
-        b.add_chat(Content.label('prev_stream'), prev)
-        b.add_chat(Content.label('chat'), chat)
+        b.add_pairs(Content.label('prev_stream'), prev)
+        b.add_pairs(Content.label('chat'), chat)
         if extras:
             b.add_lines(Content.label('channel'), found)
             b.add_lines(Content.label('language'), language)
@@ -126,16 +126,6 @@ async def ladder(q: Question) -> list[tuple[str, str]]:
     return unique_rungs(rungs)
 
 
-def unique_rungs(rungs: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Rungs without repeats: with little data several come out the same prompt."""
-    unique, seen = [], set()
-    for name, prompt in rungs:
-        if prompt not in seen:
-            seen.add(prompt)
-            unique.append((name, prompt))
-    return unique
-
-
 async def _nothing() -> list:
     return []
 
@@ -143,41 +133,3 @@ async def _nothing() -> list:
 async def answer(q: Question, config: types.GenerateContentConfig) -> tuple[str | None, str]:
     """The answer and the rung that gave it."""
     return await walk(await ladder(q), config, q.user)
-
-
-async def walk(rungs: list[tuple[str, str]], config: types.GenerateContentConfig,
-               user: str) -> tuple[str | None, str]:
-    """The answer and the rung that gave it. Walks down the rungs while Gemini's
-    input filter blocks the request; the random output filter gets one retry of the
-    same rung; an answer with nothing in it or a request the API refused for its content
-    jumps to the last rung. No answer at all (timeout, network, a bad key) ends the walk:
-    it says nothing about the prompt, and
-    another rung would only double the wait. !who, !versus and !summary walk their own
-    rungs."""
-    for i, (name, prompt) in enumerate(rungs):
-        text, block = await generate_checked(prompt, config)
-        if not text and block == BLOCK_OUTPUT:
-            # The output filter is random – the same prompt usually passes on the
-            # next try, so it keeps its rung
-            logger.info('Ответ %s остановлен выходным фильтром на ступени «%s» – повторяю', user, name)
-            text, block = await generate_checked(prompt, config)
-        if text:
-            if i:
-                logger.info('Ответ %s получен на ступени «%s»', user, name)
-            return text, name
-        if block is None:
-            logger.warning('Gemini не ответил для %s на ступени «%s»', user, name)
-            return None, name
-        if i == len(rungs) - 1:
-            break
-        if block == BLOCK_INPUT:
-            logger.info('Запрос %s заблокирован фильтром Gemini на ступени «%s» – беру меньше',
-                        user, name)
-            continue
-        # Answered with nothing (EMPTY, an output block twice) or rejected by the API
-        # (ERROR, which may be the size): go straight to the narrowest rung
-        logger.warning('Пустой ответ для %s, повтор на последней ступени', user)
-        name, prompt = rungs[-1]
-        text, _ = await generate_checked(prompt, config)
-        return text, name
-    return None, rungs[-1][0]

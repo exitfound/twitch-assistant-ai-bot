@@ -1,3 +1,23 @@
+Chat = list[tuple[str, str]]
+
+
+def chat_chars(pairs: Chat) -> int:
+    """Characters the pairs take in a prompt: «author: text» plus the line break."""
+    return sum(len(u) + len(t) + 3 for u, t in pairs)
+
+
+def tail_within(pairs: Chat, budget: int) -> Chat:
+    """The latest pairs that fit in budget characters, oldest first."""
+    start = len(pairs)
+    while start:
+        size = chat_chars(pairs[start - 1:start])
+        if size > budget:
+            break
+        budget -= size
+        start -= 1
+    return pairs[start:]
+
+
 class ContextBuilder:
     """Assembles a Gemini prompt from named sections.
 

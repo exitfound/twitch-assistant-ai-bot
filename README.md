@@ -656,6 +656,7 @@ docker compose run --rm bot /app/bot.py --lore-sources
 | `REWARD_ATTACK_MAX_PER_USER` | `3` | Сколько раз зритель может перебросить и проклясть за эфир (у каждой награды свой лимит). `0` – без лимита |
 | `CONTEXT_CHAT_MESSAGES` | `50` | Последних сообщений чата в контексте вне стрима и на запасной ступени |
 | `CONTEXT_STREAM_MAX_MESSAGES` | `2000` | Во время стрима бот видит весь текущий и весь прошлый стрим; это предохранитель на бесконечный стрим |
+| `CONTEXT_STREAM_MAX_CHARS` | `60000` | Бюджет чата в одном запросе, символов. Свободный ответ делит его между двумя стримами (сначала срезается начало прошлого), `!summary` – на свой стрим |
 | `CONTEXT_SEARCH_RESULTS` | `10` | FTS результатов из knowledge + chat history |
 | `CONTEXT_SEARCH_KNOWLEDGE_SHARE` | `50` | Какая доля результатов поиска отводится лору, % |
 | `CONTEXT_KNOWLEDGE_RANDOM` | `10` | Случайных записей из knowledge |

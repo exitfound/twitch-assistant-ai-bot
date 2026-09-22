@@ -330,8 +330,12 @@ class Context:
     CHAT_MESSAGES: int = _env_int('CONTEXT_CHAT_MESSAGES', 50, 1, 1000)
     # A free-text answer during a stream gets the whole current stream and the whole
     # previous one; this only caps a runaway stream. The longest stream on record
-    # holds 861 messages
+    # holds 1521 messages
     STREAM_MAX_MESSAGES: int = _env_int('CONTEXT_STREAM_MAX_MESSAGES', 2000, 100, 20_000)
+    # What the bill depends on: chat characters in one request. Both streams of a free-text
+    # answer share it, the previous one cut first; !summary keeps its one stream to it.
+    # The longest stream on record is 61 thousand characters, a usual one 15–25
+    STREAM_MAX_CHARS: int = _env_int('CONTEXT_STREAM_MAX_CHARS', 60_000, 5_000, 1_000_000)
     SEARCH_RESULTS: int = _env_int('CONTEXT_SEARCH_RESULTS', 10, 0, 100)
     SEARCH_KNOWLEDGE_SHARE: float = _env_percent('CONTEXT_SEARCH_KNOWLEDGE_SHARE', 50)
     KNOWLEDGE_RANDOM: int = _env_int('CONTEXT_KNOWLEDGE_RANDOM', 10, 0, 100)

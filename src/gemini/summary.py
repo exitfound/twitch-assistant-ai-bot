@@ -1,7 +1,8 @@
 """!summary: the stream so far, or the previous stream.
 
 During a stream the whole stream is retold rather than a fixed window, because the
-longest ones run past 800 messages and a window loses the start. Gemini's input filter
+longest ones run past 1500 messages and a window loses the start. Only a stream longer
+than CONTEXT_STREAM_MAX_CHARS loses its start. Gemini's input filter
 judges a request by combinations of messages and blocks a fraction of long chats whole,
 so a blocked request is asked again with less (ladder.walk()): the whole stream
 → the last CONTEXT_SUMMARY_MESSAGES → the last FALLBACK_MESSAGES.
@@ -22,7 +23,7 @@ from src.core.content import Content
 from src.core.database import get_last_chat_session, get_recent_chat
 from src.gemini.answer_context import is_stream_session
 from src.gemini.client import make_gen_config
-from src.gemini.context import ContextBuilder
+from src.gemini.context import ContextBuilder, tail_within
 from src.gemini.ladder import unique_rungs, walk
 from src.gemini.memory import storage
 
@@ -54,7 +55,8 @@ def config() -> types.GenerateContentConfig:
 
 async def _chat(session_id: str, request: str, user: str) -> tuple[str | None, str] | None:
     """(answer, rung) for a session's chat down the ladder; None when it has no chat."""
-    chat = await get_recent_chat(session_id, Context.STREAM_MAX_MESSAGES)
+    chat = tail_within(await get_recent_chat(session_id, Context.STREAM_MAX_MESSAGES),
+                       Context.STREAM_MAX_CHARS)
     if not chat:
         return None
     rungs = []

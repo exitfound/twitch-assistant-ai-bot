@@ -1,6 +1,7 @@
 """What the bot sees when someone talks to it in free text, and the fallback ladder.
 
 During a stream the bot gets the whole current stream and the whole previous one,
+together at most CONTEXT_STREAM_MAX_CHARS (the start of the previous one is cut first),
 plus its memory – the profiles of the asker and of the people named, and the previous
 stream's chronicle. Offline (the session is a date) the chat is the day's last
 CONTEXT_CHAT_MESSAGES.
@@ -34,7 +35,7 @@ from src.core.database import (
     search_context,
 )
 from src.core.utils import clean_nick
-from src.gemini.context import ContextBuilder
+from src.gemini.context import ContextBuilder, chat_chars, tail_within
 from src.gemini.ladder import Rung, unique_rungs, walk
 from src.gemini.memory import storage
 
@@ -98,6 +99,9 @@ async def ladder(q: Question) -> list[Rung]:
         # Offline the previous stream is simply the latest one
         storage.chronicle_before(q.session_id if stream else None),
     )
+    # Over the budget the start of the previous stream goes first, then of the current one
+    current = tail_within(current, Context.STREAM_MAX_CHARS)
+    previous = tail_within(previous, Context.STREAM_MAX_CHARS - chat_chars(current))
     recent = current[-Context.CHAT_MESSAGES:]
     question = Content.prompt('user_question', user=q.user, prompt=q.prompt)
 

@@ -195,3 +195,42 @@ async def test_a_cancelled_begin_does_not_block_every_later_write(db):
         await task
     await save_chat_message('s', 'b', 'next')
     assert await _messages(db) == ['next']
+
+
+async def _chat(session_id: str, count: int) -> None:
+    for i in range(count):
+        await database.save_chat_message(session_id, 'gop', f'сообщение {i}')
+
+
+async def test_previous_session_survives_new_chat(db):
+    await _chat('2026-09-18 20:00', 3)
+    await _chat('2026-09-19 20:00', 1)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-19 20:00', 5)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
+
+
+async def test_previous_session_of_a_silent_stream_is_looked_up_again(db):
+    await _chat('2026-09-18 20:00', 3)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) is None
+    await _chat('2026-09-19 20:00', 1)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
+
+
+async def test_last_session_follows_a_new_stream(db):
+    """Offline the day session stays the same while a stream in between gets its chat."""
+    await _chat('2026-09-18 20:00', 3)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-22', 5)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-21 20:00', 1)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-21 20:00', 1)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-21 20:00'
+
+
+async def test_total_stats(db):
+    await _chat('2026-09-18 20:00', 2)
+    await _chat('2026-09-19', 1)
+    await database.save_chat_message('2026-09-19', 'gop', 'сосурян привет', addressed=True)
+    assert await database.get_total_stats() == (4, 1, 1, 1)

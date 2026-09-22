@@ -110,7 +110,7 @@ A feature that grows its own tables, texts and background loops gets **its own s
 - `src/core/db/` – SQLite async (aiosqlite), one module per concern:
   - `connection.py` – the shared connection `get_db()` / `close_db()` / `reopen()`, `transaction()` for every write (the module state tests patch), `backup_db()`, `vacuum_db()`
   - `schema.py` – `init_db()`: schema and migrations for **all** tables, roll ones included, as named steps in `STEPS`; `user_version` = `SCHEMA_VERSION`
-  - `chat.py` – `chat_messages`: `save_chat_message()`, the chat windows, `has_chatted()`, `get_chat_after()` for the command reminder, the `!stat` numbers
+  - `chat.py` – `chat_messages`: `save_chat_message()`, the chat windows, the previous and the last session (`get_previous_chat_session()`, cached for good once found; `get_last_chat_session()`, cached until another session gets a message – each scans the whole chat, ~15 ms), `has_chatted()`, `get_chat_after()` for the command reminder, the `!stat` numbers
   - `interactions.py` – `bot_interactions`: `get_last_tagged_interaction()` for `!ask` follow-ups, tagged answers
   - `knowledge.py` – `knowledge` and `facts`: FTS5 search, the random «language» sample and its id cache, facts
   - `quota.py` – `bot_uses`: `count_bot_uses_since()` counts a journal per stream, not per sliding window; the hourly quota, the channel ceiling, the per-stream limits

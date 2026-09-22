@@ -23,6 +23,7 @@ import pytest
 
 from fakes import FakeBot
 from src.core import content, database
+from src.core.db import chat as db_chat
 from src.core.db import connection
 from src.core.db import knowledge as db_knowledge
 from src.core.config import Gemini
@@ -59,6 +60,8 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(connection, '_db_lock', asyncio.Lock())
     monkeypatch.setattr(connection, '_write_lock', asyncio.Lock())
     monkeypatch.setattr(db_knowledge, '_knowledge_ids', None)
+    monkeypatch.setattr(db_chat, '_previous_sessions', {})
+    monkeypatch.setattr(db_chat, '_last_sessions', {})
     monkeypatch.setattr(client, '_semaphore', asyncio.Semaphore(Gemini.CONCURRENCY))
     monkeypatch.setattr(game, '_lock', asyncio.Lock())
     monkeypatch.setattr(build, '_slots', asyncio.Semaphore(build.MEMORY_CONCURRENCY))

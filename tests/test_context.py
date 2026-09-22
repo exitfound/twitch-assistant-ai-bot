@@ -77,3 +77,20 @@ async def test_people_are_the_asker_and_the_logins_named(db):
 
 def test_russian_words_are_not_logins():
     assert answer_context._NICK.findall('привет как дела gop5ter @ne2oi iphoneы') == ['gop5ter', 'ne2oi']
+
+
+async def test_what_lasts_the_stream_comes_first(db, monkeypatch):
+    """The chronicle, the previous stream and the chat lead, so consecutive answers share
+    a prefix for Gemini's implicit cache; what depends on the question comes after."""
+    monkeypatch.setattr(Memory, 'CONVERSATION_MIN_MESSAGES', 1)
+    await _fill(PREV, 3, 'old')
+    await _fill(NOW, 3, 'now')
+    await _profile('gop')
+    db_ = await get_db()
+    await db_.execute("INSERT INTO facts (username, fact) VALUES ('gop', 'факт')")
+    await db_.commit()
+    rungs = dict(await answer_context.ladder(Question(session_id=NOW, user='gop', prompt='как дела')))
+    text = rungs['два стрима']
+    order = [text.index(f'[labels.{label}]') for label in ('prev_stream', 'chat', 'facts', 'people')]
+    assert order == sorted(order)
+    assert text.rstrip().endswith('prompts.user_question')

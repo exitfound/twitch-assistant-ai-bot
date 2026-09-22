@@ -110,12 +110,17 @@ async def ladder(q: Question) -> list[Rung]:
     question = Content.prompt('user_question', user=q.user, prompt=q.prompt)
 
     def build(chat: list, prev: list, *, memory: bool = True, extras: bool = True) -> str:
-        b = ContextBuilder().add_pairs(Content.label('facts'), facts)
+        # What stays the same for a whole stream goes first and the chat only grows at
+        # its end, so consecutive answers share a long prefix and Gemini's implicit
+        # cache serves it; what depends on the asker and the question comes last
+        b = ContextBuilder()
         if memory:
-            b.add_lines(Content.label('people'), people)
             b.add_lines(Content.label('chronicle'), [chronicle] if chronicle else [])
         b.add_pairs(Content.label('prev_stream'), prev)
         b.add_pairs(Content.label('chat'), chat)
+        b.add_pairs(Content.label('facts'), facts)
+        if memory:
+            b.add_lines(Content.label('people'), people)
         if extras:
             b.add_lines(Content.label('channel'), found)
             b.add_lines(Content.label('language'), language)

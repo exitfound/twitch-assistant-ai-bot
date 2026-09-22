@@ -297,19 +297,20 @@ Indexes created by `init_db()`: `idx_knowledge_content`, `idx_chat_messages_sess
 
 Session ID = **the stream** while the channel is live (`YYYY-MM-DD HH:MM` of its start, local time), otherwise the current date (`YYYY-MM-DD`), via `Bot.session_id` → `StreamTracker.session_id`. Chat, `!stat`, `!summary`, Gemini context and the game all use it. Old rows keep their date session ids; both formats sort chronologically as strings. A restart mid-stream resumes the same session through the `streams` table
 
-Context of a free-text answer (in order), built by `src/gemini/answer_context.py`:
-1. `[Сохранённые факты]` – asking user's own facts (always) + other users' facts matching prompt words
-2. `[Память о людях]` – profiles of the asker and of nicks named in the question (up to 4; a nick is a whole word of 4–25 Latin letters, digits and `_`, a Twitch login, fetched in one query by `storage.get_profiles()`); `[Хроника прошлого стрима]` – the previous stream's chronicle
-3. `[Прошлый стрим]` – the whole previous stream (last session before this one with `MEMORY_CONVERSATION_MIN_MESSAGES`+ messages); during a stream only
-4. `[Последние сообщения в чате]` – the whole current stream up to `CONTEXT_STREAM_MAX_MESSAGES` (2000, a safety cap; the longest stream had 1521); offline the day's last `CONTEXT_CHAT_MESSAGES`
+Context of a free-text answer (in order), built by `src/gemini/answer_context.py`. What lasts the whole stream goes first and the chat only grows at its end, so consecutive answers share a long prefix for Gemini's implicit cache; what depends on the asker and the question comes after. On eight consecutive addressings of one stream 54% of the input came from the cache against 22% with facts and profiles first, the answers' style unchanged:
+1. `[Хроника прошлого стрима]` – the previous stream's chronicle
+2. `[Прошлый стрим]` – the whole previous stream (last session before this one with `MEMORY_CONVERSATION_MIN_MESSAGES`+ messages); during a stream only
+3. `[Последние сообщения в чате]` – the whole current stream up to `CONTEXT_STREAM_MAX_MESSAGES` (2000, a safety cap; the longest stream had 1521); offline the day's last `CONTEXT_CHAT_MESSAGES`
+4. `[Сохранённые факты]` – asking user's own facts (always) + other users' facts matching prompt words
+5. `[Память о людях]` – profiles of the asker and of nicks named in the question (up to 4; a nick is a whole word of 4–25 Latin letters, digits and `_`, a Twitch login, fetched in one query by `storage.get_profiles()`)
+6. `[Контекст канала]` – FTS5 search across `knowledge` + `chat_messages` (all-time)
+7. `[Язык чата]` – random sample from `knowledge` (always present)
+8. `[Твоя реплика, на которую отвечают]` – on a reply to the bot (`reply_to_bot()`)
+9. `prompts.memory_hint` when there is memory, then `{user} спрашивает: {prompt}`
 
 Both streams together keep to `CONTEXT_STREAM_MAX_CHARS` (60000 characters, what the bill depends on): over it the start of the previous stream goes first, then the start of the current one (`tail_within()` in `src/gemini/context.py`). The longest stream is 61 thousand characters, a usual one 15–25
-5. `[Контекст канала]` – FTS5 search across `knowledge` + `chat_messages` (all-time)
-6. `[Язык чата]` – random sample from `knowledge` (always present)
-7. `[Твоя реплика, на которую отвечают]` – on a reply to the bot (`reply_to_bot()`)
-8. `prompts.memory_hint` when there is memory, then `{user} спрашивает: {prompt}`
 
-**The fallback ladder:** Gemini's input filter judges the whole request by combinations of messages, and with two streams every fifth answer comes back blocked in the probe. `answer()` walks down while the request is blocked (`BLOCK_INPUT`, ~0.3 s each): two streams → whole current stream → last `CONTEXT_CHAT_MESSAGES` (the plain chat window, still with memory) → the same without memory, search and «language». An answer stopped by the random output filter (`BLOCK_OUTPUT`) is asked once more on the same rung; an answer with nothing in it (`EMPTY`) jumps to the last rung, so the worst case is that narrowest context. No answer at all (timeout, network, API error) ends the walk at once: it says nothing about the prompt, and another rung would only make the viewer wait a second full timeout. Measured on 7 hard questions × 2: 0 empty answers of 14 (the narrow context gives 2), ~$0.0056 and ~1.3 s per answer against $0.0011 and 0.9 s
+**The fallback ladder:** Gemini's input filter judges the whole request by combinations of messages, and with two streams every fifth answer comes back blocked in the probe. `answer()` walks down while the request is blocked (`BLOCK_INPUT`, ~0.3 s each): two streams → whole current stream → last `CONTEXT_CHAT_MESSAGES` (the plain chat window, still with memory) → the same without memory, search and «language». An answer stopped by the random output filter (`BLOCK_OUTPUT`) is asked once more on the same rung; an answer with nothing in it (`EMPTY`) jumps to the last rung, so the worst case is that narrowest context. No answer at all (timeout, network, API error) ends the walk at once: it says nothing about the prompt, and another rung would only make the viewer wait a second full timeout. Measured on 7 hard questions × 2: 0 empty answers of 14 (the narrow context gives 2). On the 8 latest addressings: ~$0.0074 and ~1.3 s per answer against $0.0008 and 0.8 s for the plain chat window
 
 ## Key Notes
 

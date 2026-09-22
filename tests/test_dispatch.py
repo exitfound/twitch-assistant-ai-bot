@@ -97,6 +97,17 @@ class TestRoute:
     def test_a_longer_nick_is_not_the_bot(self, component):
         assert component._route(make_message('@sosuryan_bot_fan привет')) == (None, None, False)
 
+    def test_free_text_keeps_its_case(self, component):
+        """«РФ», «IT» and names lose their meaning in lowercase."""
+        entry, prompt, _ = component._route(make_message('Сосурян, что думаешь про IT в РФ, Nosok222?'))
+        assert entry is None
+        assert 'что думаешь про IT в РФ, Nosok222?' in prompt
+
+    def test_a_command_after_the_call_word_is_found_in_any_case(self, component):
+        entry, prompt, _ = component._route(make_message('Сосурян !WHO Nick'))
+        assert entry.handler is handle_who
+        assert entry.extract_args(prompt) == 'nick'
+
     def test_command_after_the_call_word(self, component):
         entry, prompt, addressed = component._route(make_message('сосурян !who nick'))
         assert entry.handler is handle_who

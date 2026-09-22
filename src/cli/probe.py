@@ -34,9 +34,9 @@ _LEADING_MENTION = re.compile(r'^\s*@\w+[,:]?\s*')
 class _Question:
     def __init__(self, row: tuple) -> None:
         self.id, self.session, self.user, self.text = row
-        # What the dispatcher hands the model: the trigger word or @mention stripped
-        # the dispatcher lowercases it too
-        text = self.text.lower()
+        # What the dispatcher hands the model: the trigger word or @mention stripped,
+        # the case kept
+        text = self.text
         self.prompt = SOSUR_RE.sub('', _LEADING_MENTION.sub('', text), count=1).strip(' ,:') or text
 
 

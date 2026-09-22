@@ -59,7 +59,7 @@ async def on_chat(bot, session_id: str, user: str) -> None:
             return
         pending.discard(user)
         for perk in await game.appear(session_id, user):
-            key = 'roll_perk_shield_on' if perk == game.PERK_SHIELD else 'roll_perk_curse_on'
+            key = 'roll_perk_shield_on' if perk == game.Perk.SHIELD else 'roll_perk_curse_on'
             await _say(bot, session_id, f'[perk:{perk}]', Content.text(
                 key, user=user, minutes=Roll.PERK_MINUTES,
                 ceiling=Rewards.CURSE_CEILING, step=Rewards.CURSE_STEP,

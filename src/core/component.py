@@ -11,8 +11,7 @@ import twitchio
 from twitchio.ext import commands
 
 from src.core.commands import (
-    KIND_GEMINI, ROLE_SUB_VIP_MOD_BROADCASTER, ROLE_VIP_MOD_BROADCASTER,
-    CommandContext, CommandRegistry,
+    CommandContext, CommandRegistry, Kind, Role,
 )
 from src.core.config import Cooldown, Follow, Picture, Quota
 from src.core.content import Content
@@ -67,12 +66,12 @@ def _quota_per_hour(tier: Tier) -> int:
 
 # Which refusal to show when the badge is not enough
 ROLE_DENIED_TEXTS = {
-    ROLE_VIP_MOD_BROADCASTER: 'role_denied',
-    ROLE_SUB_VIP_MOD_BROADCASTER: 'role_denied_sub',
+    Role.VIP_MOD_BROADCASTER: 'role_denied',
+    Role.SUB_VIP_MOD_BROADCASTER: 'role_denied_sub',
 }
 
 
-def _has_role(role: str | None, chatter) -> bool:
+def _has_role(role: Role | None, chatter) -> bool:
     """Whether the badges are enough for the command.
 
     Badges are checked directly, not through tier_of(): that one folds
@@ -83,7 +82,7 @@ def _has_role(role: str | None, chatter) -> bool:
         return True
     if chatter.broadcaster or chatter.moderator or chatter.vip:
         return True
-    return role == ROLE_SUB_VIP_MOD_BROADCASTER and (chatter.subscriber or chatter.founder)
+    return role == Role.SUB_VIP_MOD_BROADCASTER and (chatter.subscriber or chatter.founder)
 
 
 def _cooldown_seconds(tier: Tier) -> int:
@@ -111,15 +110,15 @@ class ChatComponent(commands.Component):
         # so «!rollstat» never reaches !roll
         add(ROLLSTAT_TRIGGER,  handle_rollstat)
         add(ROLL_TRIGGER,      handle_roll)
-        add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=KIND_GEMINI)
-        add(WHO_TRIGGER,       handle_who,       prefix=True, kind=KIND_GEMINI)
-        add(VERSUS_TRIGGER,    handle_versus,    prefix=True, kind=KIND_GEMINI)
-        add(ASK_TRIGGER,       handle_ask,       prefix=True, kind=KIND_GEMINI)
+        add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=Kind.GEMINI)
+        add(WHO_TRIGGER,       handle_who,       prefix=True, kind=Kind.GEMINI)
+        add(VERSUS_TRIGGER,    handle_versus,    prefix=True, kind=Kind.GEMINI)
+        add(ASK_TRIGGER,       handle_ask,       prefix=True, kind=Kind.GEMINI)
         if Picture.ENABLED:
             # A disabled feature must not linger as a command that silently
             # does nothing: it simply does not exist
-            add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=KIND_GEMINI,
-                role=ROLE_SUB_VIP_MOD_BROADCASTER)
+            add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI,
+                role=Role.SUB_VIP_MOD_BROADCASTER)
 
     @commands.Component.listener()
     async def event_message(self, message: twitchio.ChatMessage) -> None:
@@ -150,7 +149,7 @@ class ChatComponent(commands.Component):
         chatter = message.chatter
         # Free text addressed to the bot goes to Gemini just like !ask, so it
         # shares the counter with Gemini commands, not with local ones.
-        kind = entry.kind if entry is not None else KIND_GEMINI
+        kind = entry.kind if entry is not None else Kind.GEMINI
         tier = tier_of(chatter)
         seconds = _cooldown_seconds(tier)
 
@@ -162,7 +161,7 @@ class ChatComponent(commands.Component):
         if seconds:
             remaining = self.bot.cooldown_remaining(user, kind)
             if remaining > 0:
-                key = 'cooldown_gemini' if kind == KIND_GEMINI else 'cooldown_local'
+                key = 'cooldown_gemini' if kind == Kind.GEMINI else 'cooldown_local'
                 await message.respond(
                     Content.text(key, user=user, seconds=int(remaining) + 1)
                 )
@@ -181,7 +180,7 @@ class ChatComponent(commands.Component):
         # Quota on top of the cooldown: only Gemini requests count – they cost
         # money. Local commands are held by the cooldown alone. A refusal gives the
         # cooldown back: nothing was served
-        if kind == KIND_GEMINI and not (
+        if kind == Kind.GEMINI and not (
             await self._within_channel_quota(message, user, tier)
             and await self._within_quota(message, user, tier)
         ):
@@ -199,7 +198,7 @@ class ChatComponent(commands.Component):
             args=entry.extract_args(prompt) if entry else '',
         )
 
-        if kind == KIND_GEMINI:
+        if kind == Kind.GEMINI:
             # Recorded before generation: a failed request also cost a queue slot and money
             await record_bot_use(user, kind)
 
@@ -245,7 +244,7 @@ class ChatComponent(commands.Component):
         """
         if not Quota.CHANNEL_PER_HOUR or tier == Tier.BROADCASTER:
             return True
-        used = await count_channel_bot_uses(KIND_GEMINI, Quota.WINDOW_MINUTES)
+        used = await count_channel_bot_uses(Kind.GEMINI, Quota.WINDOW_MINUTES)
         if used < Quota.CHANNEL_PER_HOUR:
             return True
         logger.warning(
@@ -260,11 +259,11 @@ class ChatComponent(commands.Component):
         limit = _quota_per_hour(tier)
         if not limit:
             return True
-        used = await count_bot_uses(user, KIND_GEMINI, Quota.WINDOW_MINUTES)
+        used = await count_bot_uses(user, Kind.GEMINI, Quota.WINDOW_MINUTES)
         if used < limit:
             return True
         # A slot frees up when the earliest request drops out of the window
-        age = await oldest_bot_use_age(user, KIND_GEMINI, Quota.WINDOW_MINUTES) or 0
+        age = await oldest_bot_use_age(user, Kind.GEMINI, Quota.WINDOW_MINUTES) or 0
         minutes = max(1, math.ceil((Quota.WINDOW_MINUTES * 60 - age) / 60))
         await self._deny(message, user, 'quota_exceeded',
                          limit=limit, minutes=minutes, window=Quota.WINDOW_MINUTES)

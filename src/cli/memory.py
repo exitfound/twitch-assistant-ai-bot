@@ -46,7 +46,7 @@ async def _chronicles(blocks: list[storage.Block], save: bool) -> dict[str, buil
             await storage.save_chronicle(
                 block,
                 chronicle.text if chronicle else '',
-                storage.STATUS_OK if chronicle else storage.STATUS_FAILED,
+                storage.ChronicleStatus.OK if chronicle else storage.ChronicleStatus.FAILED,
                 chronicle.events if chronicle else [],
             )
         print(f'  {block.key}: {"готово" if chronicle else "Gemini ничего не вернул"}')
@@ -89,7 +89,7 @@ async def build_memory(dry_run: bool, limit: int) -> None:
         await _chronicles(_big(todo), save=True)
         for block in todo:
             if block not in _big(todo):
-                await storage.save_chronicle(block, '', storage.STATUS_SKIPPED, [])
+                await storage.save_chronicle(block, '', storage.ChronicleStatus.SKIPPED, [])
 
     missing = [u for u in chatters if await storage.get_profile(u) is None]
     print(f'\nПрофили: нужно {len(missing)}, уже есть {len(chatters) - len(missing)}')

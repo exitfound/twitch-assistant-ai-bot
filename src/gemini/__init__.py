@@ -7,5 +7,5 @@
     proactive.py  the bot's own remarks once per interval
     memory/       long-term memory: session chronicles and chatter profiles
 
-A new command that generates text goes here, registered with kind=KIND_GEMINI.
+A new command that generates text goes here, registered with kind=Kind.GEMINI.
 """

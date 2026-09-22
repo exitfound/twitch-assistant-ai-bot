@@ -44,14 +44,14 @@ async def test_covered_messages_are_not_taken_again(db):
         await _say('a', f'старый {minute}', 10 - minute / 60)
     await _say('b', 'новый', 5)
     first, second = await storage.chat_blocks(Memory.SILENCE_MINUTES, uncovered=False)
-    await storage.save_chronicle(first, 'хроника', storage.STATUS_OK, [('a', 'событие')])
+    await storage.save_chronicle(first, 'хроника', storage.ChronicleStatus.OK, [('a', 'событие')])
     assert await storage.chat_blocks(Memory.SILENCE_MINUTES, uncovered=True) == [second]
 
 
 async def test_short_conversation_is_skipped_without_gemini(db):
     block = Block('2026-09-22 20:00', 1, 10, Memory.CONVERSATION_MIN_MESSAGES - 1)
     assert await build.process_block(block)
-    assert await _chronicle_statuses() == {block.key: storage.STATUS_SKIPPED}
+    assert await _chronicle_statuses() == {block.key: storage.ChronicleStatus.SKIPPED}
 
 
 async def test_unavailable_gemini_leaves_the_conversation_for_later(db, monkeypatch):
@@ -69,7 +69,7 @@ async def test_no_chronicle_is_recorded_as_failed(db, monkeypatch):
     monkeypatch.setattr(build, 'write_chronicle', nothing)
     block = Block('2026-09-22 20:00', 1, 100, Memory.CONVERSATION_MIN_MESSAGES)
     assert await build.process_block(block)
-    assert await _chronicle_statuses() == {block.key: storage.STATUS_FAILED}
+    assert await _chronicle_statuses() == {block.key: storage.ChronicleStatus.FAILED}
 
 
 async def test_blocked_chronicle_is_split_in_halves(db, monkeypatch):

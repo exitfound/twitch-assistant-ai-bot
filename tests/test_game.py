@@ -43,7 +43,7 @@ async def test_free_throws_run_out(db):
     left = [(await game.free_throw(S, 'gop', limit=3)).free_left for _ in range(3)]
     assert left == [2, 1, 0]
     refused = await game.free_throw(S, 'gop', limit=3)
-    assert refused.status == game.NO_FREE_LEFT
+    assert refused.status == game.Status.NO_FREE_LEFT
     assert (await get_roll(S, 'gop')).free_throws == 3
 
 
@@ -56,23 +56,23 @@ async def test_broadcaster_is_unlimited_but_counted(db):
 
 async def test_extra_is_refunded_while_free_throws_remain(db):
     await game.free_throw(S, 'gop', limit=3)
-    outcome = await redeem(game.ACTION_EXTRA, 'gop')
-    assert outcome.status == game.FREE_LEFT
+    outcome = await redeem(game.Action.EXTRA, 'gop')
+    assert outcome.status == game.Status.FREE_LEFT
     assert outcome.free_left == 2
 
 
 async def test_extra_uses_the_limit_stored_by_the_chat_throw(db):
     """A redemption carries no badges: a subscriber's limit comes from their row."""
     await game.free_throw(S, 'sub', limit=Roll.FREE_SUB)
-    outcome = await redeem(game.ACTION_EXTRA, 'sub')
-    assert outcome.status == game.FREE_LEFT
+    outcome = await redeem(game.Action.EXTRA, 'sub')
+    assert outcome.status == game.Status.FREE_LEFT
     assert outcome.free_left == Roll.FREE_SUB - 1
 
 
 async def test_extra_after_free_throws_does_not_spend_them(db):
     for _ in range(3):
         await game.free_throw(S, 'gop', limit=3)
-    outcome = await redeem(game.ACTION_EXTRA, 'gop')
+    outcome = await redeem(game.Action.EXTRA, 'gop')
     assert outcome.ok
     assert (await get_roll(S, 'gop')).free_throws == 3
 
@@ -104,7 +104,7 @@ async def test_equal_rolls_go_to_whoever_threw_first(db):
 
 async def test_curse_ladder_reaches_the_floor_and_holds(db, top):
     await save_roll(S, 'victim', 90, free_throw=True)
-    cursed = await redeem(game.ACTION_CURSE, 'actor', '@Victim')
+    cursed = await redeem(game.Action.CURSE, 'actor', '@Victim')
     assert cursed.ok
     assert (cursed.ceiling, cursed.value, cursed.next_ceiling) == (
         Rewards.CURSE_CEILING, Rewards.CURSE_CEILING, Rewards.CURSE_CEILING - Rewards.CURSE_STEP,
@@ -147,27 +147,27 @@ async def test_lifted_curse_is_reported_once(db):
 
 
 @pytest.mark.parametrize(('user_input', 'status'), [
-    ('!!!', game.BAD_TARGET),
-    ('', game.BAD_TARGET),
-    ('@Actor,', game.SELF_TARGET),
-    ('nobody', game.NOT_ROLLED),
+    ('!!!', game.Status.BAD_TARGET),
+    ('', game.Status.BAD_TARGET),
+    ('@Actor,', game.Status.SELF_TARGET),
+    ('nobody', game.Status.NOT_ROLLED),
 ])
 async def test_curse_refusals(db, user_input, status):
-    assert (await redeem(game.ACTION_CURSE, 'actor', user_input)).status == status
+    assert (await redeem(game.Action.CURSE, 'actor', user_input)).status == status
 
 
 async def test_curse_is_not_laid_twice(db):
     await save_roll(S, 'victim', 50, free_throw=True)
-    assert (await redeem(game.ACTION_CURSE, 'a', 'victim')).ok
-    assert (await redeem(game.ACTION_CURSE, 'b', 'victim')).status == game.ALREADY_CURSED
+    assert (await redeem(game.Action.CURSE, 'a', 'victim')).ok
+    assert (await redeem(game.Action.CURSE, 'b', 'victim')).status == game.Status.ALREADY_CURSED
 
 
 async def test_curse_pierces_every_protection(db):
     await save_roll(S, 'victim', 50, free_throw=True)
-    assert (await redeem(game.ACTION_SHIELD, 'victim')).ok
-    await add_perk(S, 'victim', game.PERK_SHIELD, 'previous')
+    assert (await redeem(game.Action.SHIELD, 'victim')).ok
+    await add_perk(S, 'victim', game.Perk.SHIELD, 'previous')
     await game.appear(S, 'victim')
-    assert (await redeem(game.ACTION_CURSE, 'actor', 'victim')).ok
+    assert (await redeem(game.Action.CURSE, 'actor', 'victim')).ok
 
 
 # --- reroll ------------------------------------------------------------------
@@ -175,52 +175,52 @@ async def test_curse_pierces_every_protection(db):
 async def test_reroll_replaces_the_target_roll_without_spending_free_throws(db, fixed):
     await save_roll(S, 'victim', 90, free_throw=True)
     fixed.append(5)
-    outcome = await redeem(game.ACTION_REROLL, 'actor', '@victim')
-    assert (outcome.status, outcome.old_value, outcome.value) == (game.OK, 90, 5)
+    outcome = await redeem(game.Action.REROLL, 'actor', '@victim')
+    assert (outcome.status, outcome.old_value, outcome.value) == (game.Status.OK, 90, 5)
     assert (await get_roll(S, 'victim')).free_throws == 1
 
 
 async def test_reroll_on_a_cursed_target_lowers_the_ceiling(db, top):
     await save_roll(S, 'victim', 90, free_throw=True)
-    await redeem(game.ACTION_CURSE, 'a', 'victim')
-    outcome = await redeem(game.ACTION_REROLL, 'b', 'victim')
+    await redeem(game.Action.CURSE, 'a', 'victim')
+    outcome = await redeem(game.Action.REROLL, 'b', 'victim')
     assert outcome.value == outcome.ceiling == Rewards.CURSE_CEILING - Rewards.CURSE_STEP
 
 
 async def test_reroll_of_someone_who_never_played(db):
-    assert (await redeem(game.ACTION_REROLL, 'actor', 'ghost')).status == game.UNKNOWN_TARGET
+    assert (await redeem(game.Action.REROLL, 'actor', 'ghost')).status == game.Status.UNKNOWN_TARGET
     await save_chat_message(S, 'lurker', 'привет')
-    outcome = await redeem(game.ACTION_REROLL, 'actor', 'lurker')
+    outcome = await redeem(game.Action.REROLL, 'actor', 'lurker')
     assert outcome.ok and outcome.old_value is None
 
 
 async def test_bought_shield_blocks_rerolls(db):
     await save_roll(S, 'victim', 50, free_throw=True)
-    assert (await redeem(game.ACTION_SHIELD, 'victim')).ok
-    assert (await redeem(game.ACTION_SHIELD, 'victim')).status == game.ALREADY_SHIELDED
-    assert (await redeem(game.ACTION_REROLL, 'actor', 'victim')).status == game.SHIELDED
+    assert (await redeem(game.Action.SHIELD, 'victim')).ok
+    assert (await redeem(game.Action.SHIELD, 'victim')).status == game.Status.ALREADY_SHIELDED
+    assert (await redeem(game.Action.REROLL, 'actor', 'victim')).status == game.Status.SHIELDED
 
 
 async def test_perk_shield_blocks_rerolls_with_minutes(db):
     await save_roll(S, 'champ', 99, free_throw=True)
-    await add_perk(S, 'champ', game.PERK_SHIELD, 'previous')
-    outcome = await redeem(game.ACTION_REROLL, 'actor', 'champ')
-    assert outcome.status == game.PERK_SHIELDED
+    await add_perk(S, 'champ', game.Perk.SHIELD, 'previous')
+    outcome = await redeem(game.Action.REROLL, 'actor', 'champ')
+    assert outcome.status == game.Status.PERK_SHIELDED
     assert outcome.protect_minutes_left == Roll.PERK_MINUTES
 
 
 async def test_protection_after_a_reroll(db):
     await save_roll(S, 'victim', 50, free_throw=True)
-    assert (await redeem(game.ACTION_REROLL, 'a', 'victim')).ok
-    second = await redeem(game.ACTION_REROLL, 'b', 'victim')
-    assert second.status == game.PROTECTED
+    assert (await redeem(game.Action.REROLL, 'a', 'victim')).ok
+    second = await redeem(game.Action.REROLL, 'b', 'victim')
+    assert second.status == game.Status.PROTECTED
     assert second.protect_minutes_left == Rewards.REROLL_PROTECT_MINUTES
 
 
 async def test_refused_rerolls_do_not_extend_the_protection(db):
     await save_roll(S, 'victim', 50, free_throw=True)
-    assert (await redeem(game.ACTION_REROLL, 'a', 'victim')).ok
-    assert (await redeem(game.ACTION_REROLL, 'b', 'victim')).status == game.PROTECTED
+    assert (await redeem(game.Action.REROLL, 'a', 'victim')).ok
+    assert (await redeem(game.Action.REROLL, 'b', 'victim')).status == game.Status.PROTECTED
     db_ = await get_db()
     # The successful reroll moves out of the window; the refused one stays fresh
     await db_.execute(
@@ -228,7 +228,7 @@ async def test_refused_rerolls_do_not_extend_the_protection(db):
         (f'-{Rewards.REROLL_PROTECT_MINUTES + 1} minutes',),
     )
     await db_.commit()
-    assert (await redeem(game.ACTION_REROLL, 'c', 'victim')).ok
+    assert (await redeem(game.Action.REROLL, 'c', 'victim')).ok
 
 
 # --- journal -----------------------------------------------------------------
@@ -236,11 +236,11 @@ async def test_refused_rerolls_do_not_extend_the_protection(db):
 async def test_duplicate_redemption_changes_nothing(db, fixed, monkeypatch):
     await save_roll(S, 'victim', 90, free_throw=True)
     fixed.append(40)
-    first = await game.redeem(game.ACTION_REROLL, S, 'actor', 'victim', 'same-id')
+    first = await game.redeem(game.Action.REROLL, S, 'actor', 'victim', 'same-id')
     assert first.ok
     monkeypatch.setattr(game.random, 'randint', lambda a, b: pytest.fail('a duplicate must not throw'))
-    again = await game.redeem(game.ACTION_REROLL, S, 'actor', 'victim', 'same-id')
-    assert again.status == game.DUPLICATE
+    again = await game.redeem(game.Action.REROLL, S, 'actor', 'victim', 'same-id')
+    assert again.status == game.Status.DUPLICATE
     assert (await get_roll(S, 'victim')).value == 40
     async with (await get_db()).execute('SELECT COUNT(*) FROM roll_actions') as cursor:
         assert (await cursor.fetchone())[0] == 1
@@ -252,8 +252,8 @@ async def test_concurrent_operations_lose_no_update(db, top):
     await save_roll(S, 'victim', 90, free_throw=True)
     await asyncio.gather(
         game.free_throw(S, 'victim', limit=10),
-        redeem(game.ACTION_REROLL, 'a', 'victim'),
-        redeem(game.ACTION_CURSE, 'b', 'victim'),
+        redeem(game.Action.REROLL, 'a', 'victim'),
+        redeem(game.Action.CURSE, 'b', 'victim'),
     )
     row = await get_roll(S, 'victim')
     assert row.free_throws == 2
@@ -265,7 +265,7 @@ async def test_concurrent_operations_lose_no_update(db, top):
 
 async def test_status_reads_without_starting_a_perk(db):
     await save_roll(S, 'champ', 99, free_throw=True)
-    await add_perk(S, 'champ', game.PERK_SHIELD, 'previous')
+    await add_perk(S, 'champ', game.Perk.SHIELD, 'previous')
     standing = await game.status(S, 'champ', limit=3)
     assert standing.value == 99
     assert standing.free_left == 2
@@ -300,7 +300,7 @@ async def test_no_previous_rolls_no_perks(db):
 async def test_perk_countdown_starts_once(db):
     await _previous_stream({'champ': 95, 'loser': 3})
     await game.grant_perks(S)
-    assert await game.appear(S, 'loser') == [game.PERK_CURSE]
+    assert await game.appear(S, 'loser') == [game.Perk.CURSE]
     assert await game.appear(S, 'loser') == []
 
 
@@ -311,7 +311,7 @@ async def test_perk_curse_is_laid_on_the_first_throw_once(db, top):
     assert first.ceiling == Rewards.CURSE_CEILING
     row = await get_roll(S, 'loser')
     assert row.curse_until is not None
-    assert (await get_perk(S, 'loser', game.PERK_CURSE)).consumed
+    assert (await get_perk(S, 'loser', game.Perk.CURSE)).consumed
 
     await set_curse(S, 'loser', None, None)
     second = await game.free_throw(S, 'loser', limit=3)

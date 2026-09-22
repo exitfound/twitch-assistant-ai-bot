@@ -13,15 +13,17 @@ import random
 import re
 import time
 from datetime import datetime
+from enum import StrEnum
 from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 from src.core.database import get_db, invalidate_knowledge_cache
 
-STATUS_OK = 'ok'
-STATUS_FAILED = 'failed'
-# Too few messages for a chronicle: the row only marks them as seen
-STATUS_SKIPPED = 'skipped'
+class ChronicleStatus(StrEnum):
+    OK = 'ok'
+    FAILED = 'failed'
+    # Too few messages for a chronicle: the row only marks them as seen
+    SKIPPED = 'skipped'
 
 _NOT_COMMAND = "message NOT LIKE '!%'"
 
@@ -132,7 +134,7 @@ async def failed_blocks() -> list[Block]:
     async with db.execute(
         'SELECT conversation, first_id, last_id, message_count FROM chronicles'
         ' WHERE status = ? ORDER BY first_id',
-        (STATUS_FAILED,),
+        (ChronicleStatus.FAILED,),
     ) as cursor:
         return [Block(*row) for row in await cursor.fetchall()]
 

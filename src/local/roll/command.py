@@ -35,11 +35,11 @@ async def handle_roll(ctx: CommandContext) -> None:
     result = await game.free_throw(
         ctx.session_id, ctx.user, limit=limit, unlimited=ctx.message.chatter.broadcaster,
     )
-    if result.status == game.NO_FREE_LEFT:
+    if result.status == game.Status.NO_FREE_LEFT:
         if ctx.bot.rewards_active:
             text = Content.text(
                 'roll_no_free_reward', user=ctx.user, limit=limit,
-                reward=reward_title(game.ACTION_EXTRA),
+                reward=reward_title(game.Action.EXTRA),
             )
         else:
             text = Content.text('roll_no_free', user=ctx.user, limit=limit)
@@ -103,5 +103,5 @@ async def handle_rollstat(ctx: CommandContext) -> None:
         loser, loser_val = standing.loser
         parts.append(Content.text('rollstat_loser', loser=loser, loser_val=loser_val, max=Roll.MAX))
         if standing.champion is not None:
-            parts.append(champion_note(game.Outcome(game.OK, champion=standing.champion)))
+            parts.append(champion_note(game.Outcome(game.Status.OK, champion=standing.champion)))
     await ctx.message.respond(' '.join(filter(None, parts)))

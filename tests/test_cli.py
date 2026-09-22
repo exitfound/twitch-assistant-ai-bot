@@ -100,7 +100,7 @@ def test_emote_merge_dry_run_writes_nothing(tmp_path, monkeypatch):
 async def test_clear_memory_dry_run_deletes_nothing(db, capsys):
     """--dry-run only counts: a real wipe stops the memory until a paid --build-memory."""
     block = Block('2026-09-22 20:00', 1, 100, 60)
-    await storage.save_chronicle(block, 'хроника', storage.STATUS_OK, [('gop', 'событие')])
+    await storage.save_chronicle(block, 'хроника', storage.ChronicleStatus.OK, [('gop', 'событие')])
     await storage.mark_built()
 
     await main.clear_memory(dry_run=True)

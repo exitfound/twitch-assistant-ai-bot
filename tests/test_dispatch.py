@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from fakes import FakeBot, make_message
-from src.core.commands import KIND_GEMINI, CommandContext, CommandEntry
+from src.core.commands import CommandContext, CommandEntry, Kind
 from src.core.component import ChatComponent
 from src.core.config import Follow, Quota
 from src.core.database import count_bot_uses, record_bot_use
@@ -107,7 +107,7 @@ class TestRoute:
 def test_original_args_restore_the_case():
     ctx = CommandContext(
         message=make_message('!ask Что такое РФ'), user='gop', prompt='!ask что такое рф',
-        original_text='!ask Что такое РФ', session_id='s', bot=FakeBot(), kind=KIND_GEMINI,
+        original_text='!ask Что такое РФ', session_id='s', bot=FakeBot(), kind=Kind.GEMINI,
         args='что такое рф',
     )
     assert ctx.original_args == 'Что такое РФ'
@@ -126,7 +126,7 @@ async def test_two_quick_messages_start_one_generation(db, monkeypatch):
     await asyncio.gather(component.event_message(first), component.event_message(second))
 
     assert handler.await_count == 1
-    assert await count_bot_uses('viewer', KIND_GEMINI, 60) == 1
+    assert await count_bot_uses('viewer', Kind.GEMINI, 60) == 1
     refused = first if handler.await_args.args[0].message is second else second
     refused.respond.assert_awaited_once_with('texts.cooldown_gemini')
 
@@ -134,8 +134,8 @@ async def test_two_quick_messages_start_one_generation(db, monkeypatch):
 async def test_quota_refusal_gives_the_cooldown_back(db, monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     monkeypatch.setattr(Quota, 'FOLLOWER_PER_HOUR', 1)
-    await record_bot_use('viewer', KIND_GEMINI)
+    await record_bot_use('viewer', Kind.GEMINI)
     bot = FakeBot()
     component = ChatComponent(bot)
     await component.event_message(make_message('!ask раз'))
-    assert bot.cooldown_remaining('viewer', KIND_GEMINI) == 0
+    assert bot.cooldown_remaining('viewer', Kind.GEMINI) == 0

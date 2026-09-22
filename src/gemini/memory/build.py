@@ -378,7 +378,7 @@ async def process_block(block: Block) -> bool:
     conversation never holds up the ones after it.
     """
     if block.count < Memory.CONVERSATION_MIN_MESSAGES:
-        await storage.save_chronicle(block, '', storage.STATUS_SKIPPED, [])
+        await storage.save_chronicle(block, '', storage.ChronicleStatus.SKIPPED, [])
         logger.info('Память: разговор %s – %d сообщений, мало для хроники', block.key, block.count)
         return True
     try:
@@ -396,7 +396,7 @@ async def process_block(block: Block) -> bool:
     await storage.save_chronicle(
         block,
         chronicle.text if chronicle else '',
-        storage.STATUS_OK if chronicle else storage.STATUS_FAILED,
+        storage.ChronicleStatus.OK if chronicle else storage.ChronicleStatus.FAILED,
         chronicle.events if chronicle else [],
     )
     logger.info('Память: разговор %s (%d сообщений) – хроника %s, профилей обновлено %d из %d',

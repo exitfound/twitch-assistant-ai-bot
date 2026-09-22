@@ -8,7 +8,7 @@ import pytest
 from google.genai import errors, types
 
 from fakes import FakeBot, make_chatter, make_message
-from src.core.commands import KIND_GEMINI, CommandContext
+from src.core.commands import CommandContext, Kind
 from src.core.config import Caps, Emote, Gemini, Who
 from src.core.database import count_bot_uses, get_db
 from src.gemini import answer_context, client, commands, responder
@@ -196,7 +196,7 @@ def ctx(monkeypatch):
     monkeypatch.setattr(responder, 'CHUNK_SEND_DELAY', 0)
     return CommandContext(
         message=make_message('сосурян привет', make_chatter('gop')), user='gop', prompt='привет',
-        original_text='сосурян привет', session_id='2026-09-22 20:00', bot=FakeBot(), kind=KIND_GEMINI,
+        original_text='сосурян привет', session_id='2026-09-22 20:00', bot=FakeBot(), kind=Kind.GEMINI,
     )
 
 

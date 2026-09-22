@@ -7,7 +7,7 @@ import pytest
 
 from fakes import make_chatter
 from src.core import component
-from src.core.commands import ROLE_SUB_VIP_MOD_BROADCASTER, ROLE_VIP_MOD_BROADCASTER
+from src.core.commands import Role
 from src.core.config import Cooldown, Picture, Quota, Roll, Summary, Who
 from src.core.viewer import Tier, tier_of
 from src.gemini import commands as gemini_commands
@@ -65,8 +65,8 @@ def test_cooldown_and_quota(who_, cooldown, quota):
 def test_roles_look_at_badges(who_, vip_role, sub_role):
     chatter = make_chatter(**BADGES[who_])
     assert component._has_role(None, chatter)
-    assert component._has_role(ROLE_VIP_MOD_BROADCASTER, chatter) is vip_role
-    assert component._has_role(ROLE_SUB_VIP_MOD_BROADCASTER, chatter) is sub_role
+    assert component._has_role(Role.VIP_MOD_BROADCASTER, chatter) is vip_role
+    assert component._has_role(Role.SUB_VIP_MOD_BROADCASTER, chatter) is sub_role
 
 
 @pytest.mark.parametrize(('who_', 'limit'), [

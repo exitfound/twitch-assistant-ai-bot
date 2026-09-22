@@ -15,7 +15,8 @@ model retells it the same way every time. !versus takes half the sample per
 person, so two people fit one request.
 
 A blocked request is asked again with less, as free-text answers do
-(ladder.walk()): the whole sample → a smaller one → the old context.
+(ladder.walk()): the whole sample → every block of it cut to 40% → the last messages
+alone. Any block may be what the input filter objects to, so every one shrinks.
 
 The per-stream limits live with the handlers (LIMITS in commands.py, see limits.py).
 """
@@ -65,7 +66,7 @@ class Material:
     facts: list[tuple[str, str]]
     events: list[str]
     sample: list[str]
-    messages: list[str]         # the last ones, oldest first: the old context
+    messages: list[str]         # the last ones, oldest first: the last rung
     recent: list[str]           # the tail of messages that goes into the sample
     relations: list[str]
     dialogue: list[str]         # their past questions to the bot
@@ -75,21 +76,35 @@ class Material:
         return bool(self.facts or self.events or self.messages or self.dialogue)
 
     def add_sample(self, b: ContextBuilder, share: float) -> ContextBuilder:
-        """The random sample; share < 1 cuts events and messages for a smaller rung."""
+        """The random sample; share < 1 cuts every block for a smaller rung."""
         t = self.nick
-        return (b.add_pairs(Content.label('user_facts', target=t), self.facts)
-                .add_lines(Content.label('user_events', target=t), self.events[:round(len(self.events) * share)])
-                .add_lines(Content.label('user_sample', target=t), self.sample[:round(len(self.sample) * share)])
-                .add_lines(Content.label('user_relations', target=t), self.relations)
-                .add_lines(Content.label('user_recent', target=t), self.recent)
-                .add_lines(Content.label('user_interactions', target=t), self.dialogue))
+        return (b.add_pairs(Content.label('user_facts', target=t), cut(self.facts, share))
+                .add_lines(Content.label('user_events', target=t), cut(self.events, share))
+                .add_lines(Content.label('user_sample', target=t), cut(self.sample, share))
+                .add_lines(Content.label('user_relations', target=t), cut(self.relations, share))
+                .add_lines(Content.label('user_recent', target=t), cut(self.recent, share, tail=True))
+                .add_lines(Content.label('user_interactions', target=t), cut(self.dialogue, share, tail=True)))
 
-    def add_old(self, b: ContextBuilder) -> ContextBuilder:
-        """The context the commands had before the sample: the last messages."""
+    def add_last(self, b: ContextBuilder) -> ContextBuilder:
+        """The last rung: the last messages alone, the smallest thing that still says
+        something. Facts stand in only when there are no messages."""
         t = self.nick
-        return (b.add_pairs(Content.label('user_facts', target=t), self.facts)
-                .add_lines(Content.label('user_messages', target=t), self.messages)
-                .add_lines(Content.label('user_interactions', target=t), self.dialogue))
+        if not self.messages:
+            return b.add_pairs(Content.label('user_facts', target=t), self.facts)
+        return b.add_lines(Content.label('user_messages', target=t), self.messages)
+
+
+def cut(items: list, share: float, *, tail: bool = False) -> list:
+    """share of the items, at least one, from the start – or from the end for the latest ones."""
+    n = scaled(len(items), share)
+    if tail:
+        return items[len(items) - n:]
+    return items[:n]
+
+
+def scaled(n: int, part: float) -> int:
+    """part of a configured count, at least one while the count is not zero."""
+    return max(1, round(n * part)) if n else 0
 
 
 async def material(nick: str, part: float, messages_n: int) -> Material:
@@ -99,7 +114,8 @@ async def material(nick: str, part: float, messages_n: int) -> Material:
         storage.random_events(nick, round(Context.WHO_EVENTS * part)),
         storage.random_messages(nick, round(Context.WHO_SAMPLE_MESSAGES * part), MIN_CHARS),
         get_user_messages(nick, messages_n),
-        get_user_interactions(nick, Context.USER_INTERACTIONS),
+        # The past dialogues are the biggest block: 10 pairs run to 1.5 thousand characters
+        get_user_interactions(nick, scaled(Context.USER_INTERACTIONS, part)),
         storage.get_profile(nick),
     )
     relations = profile.relations if profile else []
@@ -123,13 +139,13 @@ async def who_rungs(user: str, target: str) -> list[Rung] | None:
 
     def build(share: float) -> str:
         return (m.add_sample(ContextBuilder(), share)
-                .add_lines(Content.label('who_said', target=target), said)
+                .add_lines(Content.label('who_said', target=target), cut(said, share))
                 .add_raw(question).build())
 
     return unique_rungs([
         ('вся выборка', build(1)),
         ('выборка поменьше', build(0.4)),
-        (f'последние {Context.WHO_MESSAGES}', m.add_old(ContextBuilder()).add_raw(question).build()),
+        (f'последние {Context.WHO_MESSAGES}', m.add_last(ContextBuilder()).add_raw(question).build()),
     ])
 
 
@@ -150,11 +166,11 @@ async def versus_rungs(user: str, m1: Material, m2: Material) -> list[Rung]:
 
     def build(share: float) -> str:
         b = m2.add_sample(m1.add_sample(ContextBuilder(), share), share)
-        return b.add_lines(Content.label('who_said', target=pair), said).add_raw(question).build()
+        return b.add_lines(Content.label('who_said', target=pair), cut(said, share)).add_raw(question).build()
 
     return unique_rungs([
         ('вся выборка', build(1)),
         ('выборка поменьше', build(0.4)),
         (f'последние {Context.VERSUS_MESSAGES}',
-         m2.add_old(m1.add_old(ContextBuilder())).add_raw(question).build()),
+         m2.add_last(m1.add_last(ContextBuilder())).add_raw(question).build()),
     ])

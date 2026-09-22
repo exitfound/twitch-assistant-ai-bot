@@ -670,7 +670,7 @@ docker compose run --rm bot /app/bot.py --lore-sources
 | `SUMMARY_PER_STREAM_FOLLOWER` | `1` | Сколько `!summary` фолловер получает за эфир (вне эфира – за сутки), текущий и прошлый стрим вместе. `0` – без лимита |
 | `SUMMARY_PER_STREAM_VIP` | `3` | То же для VIP |
 | `SUMMARY_PER_STREAM_SUB` | `10` | То же для сабов и модеров. Стример не ограничен |
-| `CONTEXT_USER_INTERACTIONS` | `10` | Прошлых обращений юзера для `!who` / `!versus` |
+| `CONTEXT_USER_INTERACTIONS` | `10` | Прошлых обращений юзера для `!who` (для `!versus` – половина на каждого) |
 | `MEMORY_ENABLED` | `true` | Писать память после разговоров (хроники и профили) |
 | `MEMORY_SILENCE_MINUTES` | `180` | Сколько минут тишины в чате закрывают разговор |
 | `MEMORY_CONVERSATION_MIN_MESSAGES` | `50` | С какого числа сообщений разговор получает хронику |

@@ -3,6 +3,7 @@
 No database and no clock of their own – the time comes in as `now`, so each rule can be
 checked for any moment. game.py applies them under its lock.
 """
+import itertools
 import math
 import random
 import re
@@ -22,19 +23,34 @@ def throw(ceiling: int | None = None) -> int:
 
 
 def parse_nick(raw: str) -> str | None:
-    """Nick from the reward input: the first word without @ and trailing punctuation.
+    """Nick from the reward input: one word without @ and trailing punctuation.
 
-    Viewers write «@Nick», «nick,» or «ник и ещё что-то». Everything after the
-    first word is dropped; anything that does not look like a login – None.
+    Viewers write «@Nick» or «nick,». More than one word, or anything that does not
+    look like a login – None.
     """
     words = raw.strip().split()
-    if not words:
+    if len(words) != 1:
         return None
     nick = clean_nick(words[0])
     # clean_nick() cuts to the login length: a longer word is not a login, not a cut one
     if len(nick) < len(words[0].lstrip('@').rstrip(NICK_TRAILING)):
         return None
     return nick if _NICK_RE.fullmatch(nick) else None
+
+
+def series_pause_left(ages: list[int], series: int, pause: int) -> int | None:
+    """Seconds until the next extra roll opens, or None if it is open now.
+
+    ages – seconds since the player's last extra rolls, newest first. The pause is due
+    only after a full series: `series` rolls, each within `pause` of the one before.
+    """
+    if len(ages) < series:
+        return None
+    last = ages[:series]
+    if any(older - newer >= pause for newer, older in itertools.pairwise(last)):
+        return None
+    left = pause - last[0]
+    return left if left > 0 else None
 
 
 def whole_minutes(seconds: float) -> int | None:

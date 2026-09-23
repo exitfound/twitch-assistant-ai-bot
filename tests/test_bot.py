@@ -1,6 +1,7 @@
 """Bot lifecycle pieces that can be checked without Twitch."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import aiohttp
@@ -40,8 +41,8 @@ async def test_closed_database_is_not_reopened_behind_the_shutdown(db):
 
 
 async def test_background_tasks_start_once_and_stop_quietly_after(caplog):
-    """event_ready fires again on a reconnect, close() runs more than once on shutdown:
-    a loop starts once, is cancelled and awaited the first time, and later calls are silent."""
+    """close() runs more than once on shutdown: a loop starts once, is cancelled and
+    awaited the first time, and later calls are silent."""
     tasks = BackgroundTasks()
     assert tasks.start('loop', lambda: asyncio.sleep(3600))
     assert not tasks.start('loop', lambda: asyncio.sleep(3600))
@@ -50,6 +51,17 @@ async def test_background_tasks_start_once_and_stop_quietly_after(caplog):
     await tasks.stop()
     assert not tasks.running('loop')
     assert [r.getMessage() for r in caplog.records].count('Фоновые задачи остановлены: 1') == 1
+
+
+async def test_a_loop_that_dies_is_logged(caplog):
+    """Loops run until cancelled: one that fails is gone until restart and must say so."""
+    async def broken():
+        raise RuntimeError('boom')
+    tasks = BackgroundTasks()
+    tasks.start('broken', broken)
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert any('broken упала' in r.getMessage() for r in caplog.records)
 
 
 def test_cooldowns_ignore_a_jump_of_the_system_clock(monkeypatch):
@@ -72,6 +84,38 @@ def test_twitchio_still_has_the_private_fields_the_bot_uses():
         chat_socket.check_private_api(object())
 
 
+CHAT = 'channel.chat.message'
+FOLLOW = 'channel.follow'
+REDEEM = 'channel.channel_points_custom_reward_redemption.add'
+
+
+def _watch(bot, subscribe=None) -> chat_socket.SocketWatch:
+    return chat_socket.SocketWatch(bot, 'чат', lambda: str(bot.bot_id), CHAT, frozenset({FOLLOW}),
+                                   subscribe or AsyncMock(), active=lambda: True)
+
+
+def _socket(bot, session: str, *sub_types: str, connected: bool = True):
+    """A registered socket holding subscriptions, as twitchio stores them."""
+    ws = chat_socket.Websocket(client=bot, token_for=str(bot.bot_id), http=bot._http)
+    ws._session_id = session
+    ws._socket = SimpleNamespace(closed=not connected)
+    ws._subscriptions = {f'{session}-{t}': {'type': SimpleNamespace(value=t)} for t in sub_types}
+    bot._websockets[str(bot.bot_id)][session] = ws
+    return ws
+
+
+@pytest.fixture
+def closed(monkeypatch):
+    """Websocket.close() replaced: records the socket and marks it closed, no network."""
+    sockets = []
+
+    async def close(self, *args, **kwargs):
+        self._closed = True
+        sockets.append(self)
+    monkeypatch.setattr(chat_socket.Websocket, 'close', close)
+    return sockets
+
+
 def test_a_migrated_socket_stays_in_the_registry(monkeypatch):
     """On session_reconnect the new socket shares the old one's session id: closing
     the old one must not drop the new one, or the watch subscribes to chat twice."""
@@ -79,14 +123,9 @@ def test_a_migrated_socket_stays_in_the_registry(monkeypatch):
     chat_socket.keep_migrated_sockets()
     chat_socket.keep_migrated_sockets()
     bot = bot_module.Bot()
-    watch = chat_socket.ChatSocketWatch(bot, AsyncMock(), active=lambda: True)
-
-    def socket():
-        ws = chat_socket.Websocket(client=bot, token_for=str(bot.bot_id), http=bot._http)
-        ws._session_id = 'session'
-        return ws
-
-    old, new = socket(), socket()
+    watch = _watch(bot)
+    old, new = _socket(bot, 'session', CHAT), _socket(bot, 'session', CHAT)
+    new._subscriptions = old._subscriptions
     bot._websockets[str(bot.bot_id)]['session'] = new
     old._cleanup()
 
@@ -94,6 +133,70 @@ def test_a_migrated_socket_stays_in_the_registry(monkeypatch):
     assert watch.alive()
     new._cleanup()
     assert not watch.alive()
+
+
+def test_an_open_socket_without_the_subscription_is_deaf():
+    """twitchio keeps a socket open after failing to renew its subscriptions."""
+    bot = bot_module.Bot()
+    watch = _watch(bot)
+    _socket(bot, 'follows-only', FOLLOW)
+    assert not watch.alive()
+    _socket(bot, 'chat', CHAT)
+    assert watch.alive()
+
+
+async def test_a_socket_mid_reconnect_counts_whatever_it_holds():
+    """After a welcome twitchio clears the subscriptions and renews them one by one."""
+    bot = bot_module.Bot()
+    watch = _watch(bot)
+    ws = _socket(bot, 'renewing', connected=False)
+    task = asyncio.create_task(asyncio.sleep(10))
+    ws._connection_tasks.add(task)
+    assert watch.alive()
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
+    assert not watch.alive()
+
+
+def test_a_disconnected_socket_that_no_longer_reconnects_is_dead():
+    """A renewal that died on the network leaves twitchio unable to reconnect the socket,
+    while its chat subscription is still on the books."""
+    bot = bot_module.Bot()
+    watch = _watch(bot)
+    _socket(bot, 'stuck', CHAT, connected=False)
+    assert not watch.alive()
+
+
+async def test_revive_closes_the_feeds_leftovers_and_cancels_their_reconnect(closed):
+    """A leftover socket still holding follows would deliver them twice next to a fresh one,
+    and a reconnect left running would reopen it and push the fresh one out of the registry."""
+    bot = bot_module.Bot()
+    subscribe = AsyncMock()
+    watch = _watch(bot, subscribe)
+    leftover = _socket(bot, 'follows-only', FOLLOW, connected=False)
+    pending = asyncio.create_task(asyncio.sleep(10))
+    leftover._connection_tasks.add(pending)
+    # The reconnect gave up between the check and the close
+    watch._carries = lambda socket: False
+
+    await watch.revive()
+    await asyncio.gather(pending, return_exceptions=True)
+
+    assert closed == [leftover]
+    assert pending.cancelled()
+    subscribe.assert_awaited_once()
+    assert bot._websockets[str(bot.bot_id)] == {}
+
+
+async def test_revive_leaves_another_feeds_socket_on_the_same_token(closed):
+    """With one account for the bot and the channel both watches share the token: closing
+    the other feed's socket would start the two reviving each other forever."""
+    bot = bot_module.Bot()
+    watch = _watch(bot)
+    rewards = _socket(bot, 'rewards', REDEEM)
+    await watch.revive()
+    assert closed == []
+    assert bot._websockets[str(bot.bot_id)] == {'rewards': rewards}
 
 
 @pytest.mark.parametrize(('raw', 'seconds'), [('3h8m33s', 11313), ('45m', 2700), ('9s', 9), ('', 0)])

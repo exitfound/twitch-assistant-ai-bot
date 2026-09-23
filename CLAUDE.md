@@ -137,12 +137,12 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `followers.py` – `FollowerCache`: follower check via Helix with a TTL, fails open
 - `cooldowns.py` – `Cooldowns` on the monotonic clock
 - `tasks.py` – `BackgroundTasks`: loops by name, never started twice
-- `chat_socket.py` – `ChatSocketWatch` (resubscribes when the chat socket is gone), `check_private_api()`, `keep_migrated_sockets()` (keeps a migrated socket in twitchio's registry)
+- `chat_socket.py` – `SocketWatch` (resubscribes when no socket carries the chat or the redemption subscription), `check_private_api()`, `keep_migrated_sockets()` (keeps a migrated socket in twitchio's registry)
 - `tokens.py` – the channel token for rewards, token saving, OAuth links, `token_problem()`
 - `heartbeat.py` – `heartbeat_loop()` for the container healthcheck
 - `stream.py` – `StreamTracker` (session = stream, resume rules), `watch_stream()`, `fetch_live_stream()`, `end_from_vod()`. BOT.md «Сессии»
 - `logging_setup.py` – `setup_logging()`
-- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `safe_format`, `defuse`, `reply_to_bot`, `local_time`, `random_delay`, `gather_cancelling`. `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
+- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `safe_format`, `defuse`, `reply` (a reply that never raises), `reply_to_bot`, `local_time`, `random_delay`, `gather_cancelling`. `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
 
 **gemini**
 - `client.py` – `get_client()`, `generate()` (chat, with the answer deadline), `generate_checked()` (the reason there is no text), `make_gen_config()`, `SAFETY_OFF` / `SAFETY_CHECK`, `usage`, `cost_estimate()` (the one place the Gemini prices live). BOT.md «Шаг 10: Вызов Gemini»
@@ -195,9 +195,9 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 - **The gate.** The cooldown is set right after its check with no `await` in between (twitchio runs every event in its own task); a quota refusal gives it back; a handler rejecting malformed input calls `ctx.refuse()` (cooldown and quota row) or `ctx.clear_cooldown()`. Roles are checked on badges, not on `tier_of()`
 - **Session = stream**; `session_id` is read once per event, since coroutines outlive a switch
 - **Game state** changes only in `local/roll/game.py`, under its lock, one transaction with its journal row
-- **twitchio 3.x.** Its command system is off (`process_commands()` is a no-op). `CustomRewardRedemption.fulfill()` sends the wrong id – statuses go through `_http.patch_custom_reward_redemption()`. A reply carries `parent_user`, not `parent_user_id`. Private fields read by the chat watch and the token check are verified at start. On `session_reconnect` twitchio drops the live socket from its registry unless `keep_migrated_sockets()` ran; the watch then subscribes twice. `event_message` drops a message id it has already seen. Signal handlers are installed again from `event_ready`, because the OAuth adapter's aiohttp replaces them
+- **twitchio 3.x.** Its command system is off (`process_commands()` is a no-op). `CustomRewardRedemption.fulfill()` sends the wrong id – statuses go through `_http.patch_custom_reward_redemption()`. A reply carries `parent_user`, not `parent_user_id`. Private fields read by the chat watch and the token check are verified at start. On `session_reconnect` twitchio drops the live socket from its registry unless `keep_migrated_sockets()` ran; the watch then subscribes twice. After a reconnect twitchio may keep a socket open with its subscriptions lost, or stop reconnecting it at all: a socket counts as alive only while it is connected and holds the watched subscription, or has a reconnect running. `event_ready` fires once per start: nothing in it may raise. `event_message` drops a message id it has already seen. Signal handlers are installed again from `event_ready`, because the OAuth adapter's aiohttp replaces them
 - **Gemini.** Every config comes from `make_gen_config()` (a hand-built one loses `thinking_config`). Chat answers go through `generate()` or `ladder.walk()`, which keep to `GEMINI_ANSWER_DEADLINE`; the memory calls `generate_checked()` directly and takes its own slots. Safety filters are off for the persona and on only for the `!ascii` check. A timeout is not retried
-- **Output.** Every line the bot sends on its own goes through `Bot.send_chat_message()`, which runs `defuse()`; answers go through `cleanup_response()`. `strip_markdown()` keeps `_` (it is part of nicks)
+- **Output.** Every line the bot sends on its own goes through `Bot.send_chat_message()`, which runs `defuse()`; every reply to a viewer goes through `reply()`, which logs a send failure instead of raising; answers go through `cleanup_response()`. `strip_markdown()` keeps `_` (it is part of nicks)
 - **Follow gate.** `bool(await followers.followers)` – the iterator itself is always truthy. The cache fails open
 - **Case.** Free text keeps its case; FTS queries are lowercased (uppercase `AND`/`OR`/`NOT` are operators); Cyrillic facts are matched with `casefold()` in Python, since SQLite folds only ASCII
 - **Tests** (`tests/`, `make test`) set the environment in `conftest.py` before anything from `src` is imported, recreate module-level asyncio primitives per test, and replace `CONTENT.md` with one whose values are the key names. `client.get_client()` raises: a Gemini stub is patched where it is used (`ladder`, `commands`, `proactive`, `picture.command`, `memory.build`). A new module-level lock, semaphore or cache is added to `_isolation` in `conftest.py`
@@ -205,7 +205,7 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (102 variables, grouped by section, each commented) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (111 variables, grouped by section, each commented) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 

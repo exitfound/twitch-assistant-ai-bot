@@ -86,6 +86,24 @@ def reply_to_bot(message: 'twitchio.ChatMessage', bot_id: str | int | None) -> s
     return getattr(reply, 'parent_message_body', None) or None
 
 
+async def reply(message: 'twitchio.ChatMessage', text: str) -> bool:
+    """Reply in chat; True if Twitch took the message. Never raises.
+
+    A refusal or a fallback line must not fail the handler that sends it: when Twitch is
+    unreachable the error is logged once here. Twitch may also drop a message (AutoMod,
+    a duplicate) and report it with sent=False.
+    """
+    try:
+        result = await message.respond(text)
+    except Exception as e:
+        logger.warning('Ответ в чат не ушёл: %s', e)
+        return False
+    if getattr(result, 'sent', True) is False:
+        logger.warning('Twitch отбросил ответ (%s): %r', getattr(result, 'dropped_code', None), text[:80])
+        return False
+    return True
+
+
 async def gather_cancelling(*aws: Awaitable) -> list:
     """Like asyncio.gather(), but the first error cancels the rest and is raised as is.
 

@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from src.core.commands import CommandContext
 from src.core.content import Content
 from src.core.database import count_bot_uses_this_stream, record_bot_use
+from src.core.utils import reply
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +43,13 @@ class PerStreamLimit:
                 limit = self._limit_for(ctx.message.chatter)
                 if limit and await count_bot_uses_this_stream(ctx.user, self.kind, ctx.session_id) >= limit:
                     await ctx.refuse()
-                    await ctx.message.respond(Content.text(f'{self.kind}_no_left', user=ctx.user, limit=limit))
+                    await reply(ctx.message, Content.text(f'{self.kind}_no_left', user=ctx.user, limit=limit))
                     return
                 sent = await serve()
             except Exception:
                 # The viewer paid a quota slot and must hear something rather than nothing
                 logger.exception('!%s: ошибка для %s', self.kind, ctx.user)
-                await ctx.message.respond(Content.text(self._error, user=ctx.user))
+                await reply(ctx.message, Content.text(self._error, user=ctx.user))
                 return
             if sent:
                 # The answer is already in chat: an error here is logged, not answered

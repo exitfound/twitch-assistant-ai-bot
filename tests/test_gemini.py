@@ -66,6 +66,21 @@ async def test_server_error_is_retried(gemini):
     assert gemini.await_count == 2
 
 
+async def test_an_aiohttp_network_error_is_retried(gemini):
+    """google-genai sends through aiohttp when twitchio has installed it."""
+    import aiohttp
+    gemini.side_effect = [aiohttp.ServerDisconnectedError(), _response('ок')]
+    assert await client.generate_checked('q', types.GenerateContentConfig()) == ('ок', None)
+    assert gemini.await_count == 2
+
+
+async def test_an_aiohttp_timeout_is_not_retried(gemini):
+    import aiohttp
+    gemini.side_effect = aiohttp.ServerTimeoutError('slow')
+    assert await client.generate_checked('q', types.GenerateContentConfig()) == (None, None)
+    assert gemini.await_count == 1
+
+
 async def test_rate_limit_gives_up_after_the_retries(gemini):
     gemini.side_effect = errors.ClientError(429, {'error': {'message': 'quota'}})
     assert await client.generate_checked('q', types.GenerateContentConfig()) == (None, None)
@@ -291,6 +306,34 @@ async def test_nothing_reached_chat_means_false(db, ctx):
     ctx.bot.send_chat_message.side_effect = RuntimeError('twitch down')
     assert not await respond_and_save(ctx, 'Раз. ' * 150, '[versus] a vs b', max_chunks=2)
     assert await _saved('[versus] a vs b') == []
+
+
+async def test_chunks_stop_at_the_first_that_did_not_go_out(db, ctx):
+    """A continuation without its start reads as nonsense, and must not be saved as sent."""
+    ctx.bot.send_chat_message.return_value = False
+    assert await respond_and_save(ctx, 'Раз два три. ' * 70, '[versus] a vs b', max_chunks=3)
+    ctx.bot.send_chat_message.assert_awaited_once()
+    assert len((await _saved('[versus] a vs b'))[0]) <= 450
+
+
+async def test_a_failed_save_after_a_good_send_still_counts_as_sent(db, ctx, monkeypatch):
+    monkeypatch.setattr(responder, 'save_bot_interaction', AsyncMock(side_effect=RuntimeError('db')))
+    assert await respond_and_save(ctx, 'Привет!', 'привет')
+
+
+async def test_twitch_down_leaves_the_handler_quietly(db, ctx, monkeypatch):
+    """An answer that cannot be sent is not a generation error, and the fallback line
+    going the same dead way must not escape the listener."""
+    monkeypatch.setattr(commands, 'answer', AsyncMock(return_value=('Привет!', None)))
+    ctx.message.respond.side_effect = RuntimeError('dns')
+    await commands.handle_default(ctx)
+    assert [c.args[0] for c in ctx.message.respond.await_args_list] == ['@gop Привет!', 'texts.no_answer']
+
+
+async def test_a_generation_error_answers_with_its_text(db, ctx, monkeypatch):
+    monkeypatch.setattr(commands, 'answer', AsyncMock(side_effect=RuntimeError('gemini')))
+    await commands.handle_default(ctx)
+    ctx.message.respond.assert_awaited_once_with('texts.gen_error')
 
 
 async def test_send_chunked_keeps_to_the_message_limit(db, ctx):

@@ -14,13 +14,24 @@ async def test_offline_redemption_is_refunded(db):
 async def test_successful_reward_is_fulfilled(db):
     bot = FakeBot()
     assert await handle_redemption(bot, game.Action.SHIELD, 'r1', 'gop', '') is True
-    bot.send_chat_message.assert_awaited_once_with('texts.reward_shield_done')
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_shield_up')
 
 
 async def test_refused_reward_is_refunded_with_its_reason(db):
     bot = FakeBot()
     assert await handle_redemption(bot, game.Action.REROLL, 'r1', 'gop', 'gop') is False
     bot.send_chat_message.assert_awaited_once_with('texts.reward_refund_self')
+
+
+async def test_cleanse_of_yourself_has_its_own_text_and_no_roll_notes(db):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    assert await handle_redemption(bot, game.Action.CURSE, 'r1', 'foe', 'gop') is True
+    bot.send_chat_message.reset_mock()
+    assert await handle_redemption(bot, game.Action.CLEANSE, 'r2', 'gop', 'gop') is True
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_cleanse_self')
+    assert await handle_redemption(bot, game.Action.CLEANSE, 'r3', 'gop', 'gop') is False
+    bot.send_chat_message.assert_awaited_with('texts.reward_refund_not_cursed')
 
 
 async def test_duplicate_is_left_alone_silently(db):

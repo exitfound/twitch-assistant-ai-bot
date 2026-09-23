@@ -4,7 +4,7 @@ import asyncio
 from src.core.commands import CommandContext
 from src.core.config import Roll
 from src.core.content import Content
-from src.core.utils import clean_nick
+from src.core.utils import clean_nick, reply
 from src.local import help_announce
 from src.core.database import get_session_stats, get_total_stats, get_user_stats
 
@@ -12,7 +12,7 @@ from src.core.database import get_session_stats, get_total_stats, get_user_stats
 async def handle_help(ctx: CommandContext) -> None:
     # The command list is about to be in chat – the next reminder is not needed
     help_announce.note_help_shown()
-    await ctx.message.respond(Content.text('help', user=ctx.user, min=Roll.MIN, max=Roll.MAX))
+    await reply(ctx.message, Content.text('help', user=ctx.user, min=Roll.MIN, max=Roll.MAX))
 
 
 async def handle_stats(ctx: CommandContext) -> None:
@@ -53,7 +53,7 @@ async def handle_stats(ctx: CommandContext) -> None:
         days=days,
     )
     # Blocks are separated by a vertical bar so personal, stream and channel do not merge
-    await ctx.message.respond(' | '.join(filter(None, (own_text, session_text, total_text))))
+    await reply(ctx.message, ' | '.join(filter(None, (own_text, session_text, total_text))))
 
 
 def _session_date(session_id: str) -> str:
@@ -72,10 +72,10 @@ def _session_date(session_id: str) -> str:
 async def _other_stats(ctx: CommandContext, target: str) -> None:
     stats = await get_user_stats(ctx.session_id, target)
     if stats is None:
-        await ctx.message.respond(Content.text('stats_unknown', user=ctx.user, target=target))
+        await reply(ctx.message, Content.text('stats_unknown', user=ctx.user, target=target))
         return
     session_msgs, session_interactions, total_msgs, total_interactions = stats
-    await ctx.message.respond(Content.text(
+    await reply(ctx.message, Content.text(
         'stats_user' if ctx.bot.stream_live else 'stats_user_day', user=ctx.user, target=target,
         session_msgs=session_msgs, interactions=session_interactions,
         total_msgs=total_msgs, total_interactions=total_interactions,

@@ -7,6 +7,14 @@ from src.core.content import Content
 from src.local.roll.game import Outcome
 
 
+# How many characters of a viewer's input to quote in a refusal: people write anything there
+INPUT_PREVIEW_CHARS = 25
+
+
+def input_preview(raw: str) -> str:
+    return raw.strip()[:INPUT_PREVIEW_CHARS]
+
+
 def reward_title(action: str) -> str:
     return Content.text(f'reward_{action}_title')
 

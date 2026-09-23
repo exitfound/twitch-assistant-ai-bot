@@ -9,7 +9,7 @@ from twitchio import eventsub
 from twitchio.ext import commands
 
 from src.core import stream as twitch_stream
-from src.core.chat_socket import ChatSocketWatch, check_private_api, keep_migrated_sockets
+from src.core.chat_socket import SocketWatch, check_private_api, keep_migrated_sockets
 from src.core.component import ChatComponent
 from src.core.config import Emote, Files, Help, Memory, Proactive, Rewards, Roll, Twitch, validate_config
 from src.core.content import Content, validate_content
@@ -53,8 +53,19 @@ class Bot(commands.Bot):
         self._tasks = BackgroundTasks()
         self._rewards = RewardService(self)
         self._broadcaster_token = False
-        self._chat = ChatSocketWatch(self, self._subscribe_to_chat,
-                                     active=lambda: not self._shutting_down and bool(self._channel_id))
+        self._chat = SocketWatch(
+            self, 'чат', lambda: str(self.bot_id), eventsub.ChatMessageSubscription.type,
+            frozenset(sub.type for sub in (
+                eventsub.ChannelFollowSubscription, eventsub.StreamOnlineSubscription,
+                eventsub.StreamOfflineSubscription,
+            )),
+            self._subscribe_to_chat, active=lambda: not self._shutting_down and bool(self._channel_id),
+        )
+        self._rewards_watch = SocketWatch(
+            self, 'награды', lambda: self._channel_id, eventsub.ChannelPointsRedeemAddSubscription.type,
+            frozenset(), self._rewards.resubscribe,
+            active=lambda: not self._shutting_down and self._rewards.active,
+        )
         # Set by run_bot(): re-installed after the web adapter has taken the signals
         self.on_shutdown_signal = None
         self._shutting_down = False
@@ -133,13 +144,15 @@ class Bot(commands.Bot):
         """Whether the stream is live right now.
 
         Events about what happened while the bot was down will never arrive: the stream
-        may have started or ended without it. A request error counts as no stream, and
-        the watch_stream() check corrects that within a few minutes.
+        may have started or ended without it. On a request error the stream still open in
+        the DB is taken as live – a restart mid-stream must not split the session or close
+        the game – and the watch_stream() check corrects that within a few minutes.
         """
         try:
             live = await self.fetch_live_stream()
         except Exception:
-            logger.exception('Не удалось узнать, идёт ли эфир – считаю, что нет, сверка поправит')
+            logger.warning('Не удалось узнать, идёт ли эфир', exc_info=True)
+            await self.stream.resume_open()
             return
         if live:
             await self.stream.online(*live)
@@ -164,7 +177,6 @@ class Bot(commands.Bot):
         missed or one that came while the bot was down changes nothing.
         """
         if Memory.ENABLED:
-            # event_ready fires again on a reconnect – one check is enough
             self._tasks.start('memory', memory.memory_loop)
 
     async def _stream_end_from_vod(self, stream_id: str, started_at: float) -> float | None:
@@ -201,9 +213,15 @@ class Bot(commands.Bot):
 
     async def event_ready(self) -> None:
         self.install_signal_handlers()
-        users = await self.fetch_users(ids=[self.bot_id])
-        if users:
-            self._bot_name = users[0].name
+        # twitchio fetched the bot's user at login, failing the start if it could not.
+        # ready fires once per start: an error escaping here would leave the bot deaf
+        self._bot_name = getattr(self.user, 'name', None)
+        if not self._bot_name:
+            try:
+                users = await self.fetch_users(ids=[self.bot_id])
+                self._bot_name = users[0].name if users else None
+            except Exception:
+                logger.exception('Имя бота не получено – бот не ответит в чате до перезапуска')
         logger.info('Бот запущен | Ник: %s | Сессия: %s', self._bot_name or self.bot_id, self.session_id)
         try:
             await self._subscribe_to_chat()
@@ -232,6 +250,8 @@ class Bot(commands.Bot):
         if HEARTBEAT_PATH:
             tasks.start('heartbeat', lambda: heartbeat_loop(Path(HEARTBEAT_PATH)))
         tasks.start('chat_watch', self._chat.loop)
+        if Rewards.ENABLED:
+            tasks.start('rewards_watch', self._rewards_watch.loop)
         # The Twitch check catches a missed stream start or end
         tasks.start('stream_watch', lambda: watch_stream(self))
         if Proactive.ENABLED and tasks.start('proactive', lambda: proactive_loop(self)):
@@ -254,7 +274,7 @@ class Bot(commands.Bot):
                 )
 
     async def _start_rewards(self) -> None:
-        # event_ready also fires after a reconnect – start() survives that
+        # Also called once the channel's token arrives by OAuth – start() survives a second call
         if not Rewards.ENABLED or self._rewards.active or not self._channel_id:
             return
         if not self._broadcaster_token:
@@ -320,7 +340,7 @@ class Bot(commands.Bot):
         await self._tasks.stop()
 
     async def event_websocket_closed(self, payload) -> None:
-        await self._chat.closed()
+        await asyncio.gather(self._chat.closed(), self._rewards_watch.closed())
 
     async def _subscribe_to_chat(self) -> None:
         if not self._channel_id:

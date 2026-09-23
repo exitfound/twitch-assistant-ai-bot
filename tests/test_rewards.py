@@ -44,7 +44,7 @@ async def test_start_creates_the_rewards_and_opens_them_live(db, twitch):
     service, _, broadcaster = twitch
     await service.start('chan', open_=True)
     assert service.active
-    assert len(await get_reward_ids()) == 4
+    assert len(await get_reward_ids()) == 5
     assert set(broadcaster.paused) == {False}
 
 
@@ -67,3 +67,18 @@ async def test_pause_failure_does_not_leave_start_half_done(db, twitch):
     await service.start('chan', open_=True)
     assert service.active
     assert broadcaster.settle_asked, 'stale redemptions must still be settled'
+
+
+async def test_resubscribe_settles_what_was_redeemed_while_deaf(db, twitch):
+    """Redemptions made while the subscription was lost never arrive as events: the
+    points must come back instead of hanging."""
+    service, bot, broadcaster = twitch
+    await service.start('chan', open_=True)
+    bot.subscribe_websocket.reset_mock()
+    broadcaster.settle_asked = False
+
+    await service.resubscribe()
+
+    bot.subscribe_websocket.assert_awaited_once()
+    assert bot.subscribe_websocket.await_args.kwargs['token_for'] == 'chan'
+    assert broadcaster.settle_asked

@@ -41,7 +41,7 @@ async def test_schema_has_every_table(db):
 
 
 def test_fts_query_is_sanitized():
-    assert _sanitize_fts_query('"; DROP TABLE x --') == 'DROP* OR TABLE* OR x'
+    assert _sanitize_fts_query('"; DROP TABLE x --') == 'drop* OR table* OR x'
     assert _sanitize_fts_query('!!!') == ''
 
 
@@ -49,6 +49,12 @@ async def test_search_finds_chat_and_survives_fts_syntax(db):
     await save_chat_message('s', 'gop', 'обсуждаем терраформ и кубернетес')
     assert await search_context('терраформ') == ['gop: обсуждаем терраформ и кубернетес']
     assert await search_context('" OR NEAR(') == []
+
+
+async def test_uppercase_operators_are_plain_words(db):
+    """Free text keeps its case: «NOT» or «OR» in a question must not break the search."""
+    await save_chat_message('s', 'gop', 'почему not работает')
+    assert await search_context('почему NOT работает AND OR', 5) == ['gop: почему not работает']
 
 
 async def test_has_chatted_looks_at_three_tables(db):
@@ -195,3 +201,42 @@ async def test_a_cancelled_begin_does_not_block_every_later_write(db):
         await task
     await save_chat_message('s', 'b', 'next')
     assert await _messages(db) == ['next']
+
+
+async def _chat(session_id: str, count: int) -> None:
+    for i in range(count):
+        await database.save_chat_message(session_id, 'gop', f'сообщение {i}')
+
+
+async def test_previous_session_survives_new_chat(db):
+    await _chat('2026-09-18 20:00', 3)
+    await _chat('2026-09-19 20:00', 1)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-19 20:00', 5)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
+
+
+async def test_previous_session_of_a_silent_stream_is_looked_up_again(db):
+    await _chat('2026-09-18 20:00', 3)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) is None
+    await _chat('2026-09-19 20:00', 1)
+    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
+
+
+async def test_last_session_follows_a_new_stream(db):
+    """Offline the day session stays the same while a stream in between gets its chat."""
+    await _chat('2026-09-18 20:00', 3)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-22', 5)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-21 20:00', 1)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-18 20:00'
+    await _chat('2026-09-21 20:00', 1)
+    assert await database.get_last_chat_session('2026-09-22', 2) == '2026-09-21 20:00'
+
+
+async def test_total_stats(db):
+    await _chat('2026-09-18 20:00', 2)
+    await _chat('2026-09-19', 1)
+    await database.save_chat_message('2026-09-19', 'gop', 'сосурян привет', addressed=True)
+    assert await database.get_total_stats() == (4, 1, 1, 1)

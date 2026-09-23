@@ -29,12 +29,29 @@ async def get_recent_chat(session_id: str, limit: int = 20,
     return list(reversed(rows))
 
 
+# Both lookups scan the whole chat, and every free-text answer and !summary makes one.
+# The session before a given one never changes once found; the latest session other than
+# a given one changes only when some other session gets a message
+_previous_sessions: dict[tuple[str, int], str] = {}
+_last_sessions: dict[tuple[str, int], tuple[str | None, int]] = {}
+_CACHE_MAX = 64
+
+
+def _remember(cache: dict, key: tuple, value: object) -> None:
+    if len(cache) >= _CACHE_MAX:
+        cache.clear()
+    cache[key] = value
+
+
 async def get_previous_chat_session(session_id: str, min_messages: int) -> str | None:
     """The last session before this one with at least min_messages – the previous stream.
 
     Taken from the chat rather than from streams, which does not cover the older
     sessions; a stream nobody wrote in has nothing to remember anyway.
     """
+    key = (session_id, min_messages)
+    if key in _previous_sessions:
+        return _previous_sessions[key]
     db = await get_db()
     async with db.execute(
         "SELECT session_id FROM chat_messages"
@@ -43,20 +60,38 @@ async def get_previous_chat_session(session_id: str, min_messages: int) -> str |
         (session_id, min_messages),
     ) as cursor:
         row = await cursor.fetchone()
-    return row[0] if row else None
+    if row is None:
+        # Not cached: a session with no chat yet has no «before» to look behind
+        return None
+    _remember(_previous_sessions, key, row[0])
+    return row[0]
 
 
 async def get_last_chat_session(exclude: str, min_messages: int) -> str | None:
     """The latest session other than this one with at least min_messages – offline,
     when the current session is a date with no chat, that is the last stream."""
+    key = (exclude, min_messages)
     db = await get_db()
+    if key in _last_sessions:
+        found, checked = _last_sessions[key]
+        async with db.execute(
+            'SELECT EXISTS (SELECT 1 FROM chat_messages WHERE id > ? AND session_id != ?)',
+            (checked, exclude),
+        ) as cursor:
+            if not (await cursor.fetchone())[0]:
+                return found
+    # The newest id first: a message written during the scan makes the next call look again
+    async with db.execute('SELECT COALESCE(MAX(id), 0) FROM chat_messages') as cursor:
+        (checked,) = await cursor.fetchone()
     async with db.execute(
         "SELECT session_id FROM chat_messages WHERE session_id != ? AND message NOT LIKE '!%'"
         ' GROUP BY session_id HAVING COUNT(*) >= ? ORDER BY MAX(id) DESC LIMIT 1',
         (exclude, min_messages),
     ) as cursor:
         row = await cursor.fetchone()
-    return row[0] if row else None
+    found = row[0] if row else None
+    _remember(_last_sessions, key, (found, checked))
+    return found
 
 
 async def get_chat_after(session_id: str, after_id: int) -> int | None:
@@ -120,10 +155,8 @@ async def get_total_stats() -> tuple[int, int, int, int]:
     (`YYYY-MM-DD`) and a stream (`YYYY-MM-DD HH:MM`). They are told apart by id length.
     """
     db = await get_db()
-    async with db.execute('SELECT COUNT(*) FROM chat_messages') as cursor:
-        msgs = (await cursor.fetchone())[0]
-    async with db.execute('SELECT COALESCE(SUM(addressed), 0) FROM chat_messages') as cursor:
-        interactions = (await cursor.fetchone())[0]
+    async with db.execute('SELECT COUNT(*), COALESCE(SUM(addressed), 0) FROM chat_messages') as cursor:
+        msgs, interactions = await cursor.fetchone()
     async with db.execute(
         'SELECT COALESCE(SUM(LENGTH(session_id) > 10), 0), COALESCE(SUM(LENGTH(session_id) = 10), 0)'
         ' FROM (SELECT DISTINCT session_id FROM chat_messages)'

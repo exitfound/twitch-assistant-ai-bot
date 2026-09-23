@@ -103,7 +103,8 @@ def route(text: str, registry: CommandRegistry, bot_name: str,
     not for the bot. Addressing is a call word, an @mention or a reply, and it is
     required only for free text and for a command it precedes: a bare `!who ник`
     works without it. Args are taken as written, so `!who securityexpert` keeps the
-    nick instead of losing the trigger inside it.
+    nick instead of losing the trigger inside it. Commands are lowercased; free text
+    keeps its case – «РФ», «IT» and names mean something only as written.
     """
     text = text.strip()
     lowered = text.lower()
@@ -119,15 +120,14 @@ def route(text: str, registry: CommandRegistry, bot_name: str,
     if not (is_mention or is_sosur or is_reply):
         return None, None, False
 
-    prompt = mention.sub('', lowered)
+    prompt = mention.sub('', text)
     if not is_mention:
         # Addressed by word: that one word goes, the rest is the question – a nick
         # like securityexpert in it must reach the model
         prompt = SOSUR_RE.sub('', prompt, count=1)
-    prompt = prompt.strip()
-    if not prompt:
-        prompt = lowered
-    return registry.resolve(prompt), prompt, True
+    prompt = prompt.strip() or text
+    entry = registry.resolve(prompt.lower())
+    return entry, prompt.lower() if entry else prompt, True
 
 
 class ChatComponent(commands.Component):

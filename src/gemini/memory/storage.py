@@ -74,9 +74,12 @@ async def chat_blocks(silence_minutes: int, *, uncovered: bool) -> list[Block]:
     been quiet for silence_minutes; until then it may still go on.
     """
     db = await get_db()
+    # Chronicle ranges never overlap, so only the one starting last at or before a
+    # message can cover it: one lookup in idx_chronicles_first instead of a scan
+    # of every chronicle per message
     cover = (
-        ' AND NOT EXISTS (SELECT 1 FROM chronicles c'
-        ' WHERE m.id BETWEEN c.first_id AND c.last_id)'
+        ' AND COALESCE((SELECT c.last_id FROM chronicles c WHERE c.first_id <= m.id'
+        ' ORDER BY c.first_id DESC LIMIT 1), -1) < m.id'
     ) if uncovered else ''
     async with db.execute(
         f"SELECT m.id, CAST(strftime('%s', m.created_at) AS INTEGER) FROM chat_messages m"
@@ -379,6 +382,21 @@ async def get_profile(username: str) -> Profile | None:
     if row is None:
         return None
     return Profile(row[0], row[1], _relations(row[2]), row[3], row[4])
+
+
+async def get_profiles(usernames: list[str]) -> dict[str, Profile]:
+    """The profiles of those of the usernames that have one, in one query."""
+    if not usernames:
+        return {}
+    db = await get_db()
+    marks = ', '.join('?' * len(usernames))
+    async with db.execute(
+        'SELECT username, portrait, relations, last_conversation, sessions_seen'
+        f' FROM chatter_profiles WHERE username IN ({marks})',
+        usernames,
+    ) as cursor:
+        rows = await cursor.fetchall()
+    return {row[0]: Profile(row[0], row[1], _relations(row[2]), row[3], row[4]) for row in rows}
 
 
 def _relations(raw: str | None) -> list[dict]:

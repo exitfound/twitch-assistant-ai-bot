@@ -236,6 +236,8 @@ async def _memory(db: aiosqlite.Connection) -> None:
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_chatter_events_user ON chatter_events(username, conversation)'
     )
+    # The memory's uncovered-chat check looks up the chronicle starting last before a message
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_chronicles_first ON chronicles(first_id)')
     # The memory's own state: 'built' is set once bot.py --build-memory has walked the
     # whole history. Until then the bot leaves the memory alone, because a half-built
     # one would be replayed conversation by conversation at many times the cost

@@ -63,7 +63,9 @@ async def get_relevant_facts(username: str, query: str) -> list[tuple[str, str]]
 
 
 def _sanitize_fts_query(text: str) -> str:
-    cleaned = ''.join(c if c.isalnum() or c == ' ' else ' ' for c in text)
+    # Lowercase: an uppercase AND, OR, NOT or NEAR is an FTS5 operator, and the search
+    # ignores case anyway
+    cleaned = ''.join(c if c.isalnum() or c == ' ' else ' ' for c in text.lower())
     words = [w + '*' if len(w) > 3 else w for w in cleaned.split()]
     return ' OR '.join(words)
 

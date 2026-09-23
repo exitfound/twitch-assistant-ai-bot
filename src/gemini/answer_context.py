@@ -1,6 +1,7 @@
 """What the bot sees when someone talks to it in free text, and the fallback ladder.
 
 During a stream the bot gets the whole current stream and the whole previous one,
+together at most CONTEXT_STREAM_MAX_CHARS (the start of the previous one is cut first),
 plus its memory – the profiles of the asker and of the people named, and the previous
 stream's chronicle. Offline (the session is a date) the chat is the day's last
 CONTEXT_CHAT_MESSAGES.
@@ -34,7 +35,7 @@ from src.core.database import (
     search_context,
 )
 from src.core.utils import clean_nick
-from src.gemini.context import ContextBuilder
+from src.gemini.context import ContextBuilder, chat_chars, tail_within
 from src.gemini.ladder import Rung, unique_rungs, walk
 from src.gemini.memory import storage
 
@@ -42,7 +43,12 @@ logger = logging.getLogger(__name__)
 
 # Profiles in one answer: the asker plus up to three people named in the question
 MAX_PEOPLE = 4
-_NICK = re.compile(r'@?[\w]{3,}')
+# Over the character budget a stream loses its start in steps of this many messages:
+# a cut moving with every new message would break the prefix Gemini caches
+CUT_STEP = 50
+# A Twitch login: 4–25 Latin letters, digits and underscores, standing as a whole word.
+# Russian words are never logins, so they are not looked up
+_NICK = re.compile(r'(?<!\w)[a-z0-9_]{4,25}(?!\w)', re.IGNORECASE)
 
 
 @dataclass
@@ -67,11 +73,13 @@ def is_stream_session(session_id: str) -> bool:
 async def _people(user: str, prompt: str) -> list[str]:
     """Profiles of the asker and of the chatters named in the question."""
     named = [clean_nick(w) for w in _NICK.findall(prompt)]
+    nicks = list(dict.fromkeys([user, *named]))
+    profiles = await storage.get_profiles(nicks)
     lines = []
-    for nick in dict.fromkeys([user, *named]):
+    for nick in nicks:
         if len(lines) >= MAX_PEOPLE:
             break
-        profile = await storage.get_profile(nick)
+        profile = profiles.get(nick)
         if profile is None:
             continue
         relations = '; '.join(f'{r["nick"]} – {r["note"]}' for r in profile.relations)
@@ -98,16 +106,24 @@ async def ladder(q: Question) -> list[Rung]:
         # Offline the previous stream is simply the latest one
         storage.chronicle_before(q.session_id if stream else None),
     )
+    # Over the budget the start of the previous stream goes first, then of the current one
+    current = tail_within(current, Context.STREAM_MAX_CHARS, CUT_STEP)
+    previous = tail_within(previous, Context.STREAM_MAX_CHARS - chat_chars(current), CUT_STEP)
     recent = current[-Context.CHAT_MESSAGES:]
     question = Content.prompt('user_question', user=q.user, prompt=q.prompt)
 
     def build(chat: list, prev: list, *, memory: bool = True, extras: bool = True) -> str:
-        b = ContextBuilder().add_pairs(Content.label('facts'), facts)
+        # What stays the same for a whole stream goes first and the chat only grows at
+        # its end, so consecutive answers share a long prefix and Gemini's implicit
+        # cache serves it; what depends on the asker and the question comes last
+        b = ContextBuilder()
         if memory:
-            b.add_lines(Content.label('people'), people)
             b.add_lines(Content.label('chronicle'), [chronicle] if chronicle else [])
         b.add_pairs(Content.label('prev_stream'), prev)
         b.add_pairs(Content.label('chat'), chat)
+        b.add_pairs(Content.label('facts'), facts)
+        if memory:
+            b.add_lines(Content.label('people'), people)
         if extras:
             b.add_lines(Content.label('channel'), found)
             b.add_lines(Content.label('language'), language)

@@ -109,6 +109,51 @@ async def test_usage_is_counted(gemini):
     assert client.usage == {'prompt': 100, 'cached': 40, 'output': 25}
 
 
+async def test_the_slot_is_free_between_retries(gemini, monkeypatch):
+    """A request waiting out its retry pause does not hold a slot: the next viewer's
+    request goes through meanwhile."""
+    monkeypatch.setattr(client, '_semaphore', asyncio.Semaphore(1))
+    monkeypatch.setattr(client, 'RETRY_BASE_DELAY', 0.05)
+    done: list[str] = []
+    failed = []
+
+    async def reply(*, model, contents, config):
+        if contents == 'slow' and not failed:
+            failed.append(contents)
+            raise errors.ServerError(503, {'error': {'message': 'busy'}})
+        return _response(contents)
+    gemini.side_effect = reply
+
+    async def ask(prompt):
+        await client.generate_checked(prompt, types.GenerateContentConfig())
+        done.append(prompt)
+
+    first = asyncio.create_task(ask('slow'))
+    await asyncio.sleep(0.01)
+    await ask('fast')
+    await first
+    assert done == ['fast', 'slow']
+
+
+async def test_generate_gives_up_at_the_answer_deadline(gemini, monkeypatch):
+    monkeypatch.setattr(Gemini, 'ANSWER_DEADLINE', 0.05)
+
+    async def hang(**_):
+        await asyncio.sleep(10)
+    gemini.side_effect = hang
+    assert await asyncio.wait_for(client.generate('q', types.GenerateContentConfig()), 1) is None
+
+
+async def test_the_deadline_covers_the_wait_for_a_slot(gemini, monkeypatch):
+    """Every slot busy with slow requests: the viewer still hears back within the deadline."""
+    monkeypatch.setattr(Gemini, 'ANSWER_DEADLINE', 0.05)
+    monkeypatch.setattr(client, '_semaphore', asyncio.Semaphore(1))
+    gemini.return_value = _response('ок')
+    async with client._semaphore:
+        assert await asyncio.wait_for(client.generate('q', types.GenerateContentConfig()), 1) is None
+    assert gemini.await_count == 0
+
+
 def test_config_carries_the_thinking_budget():
     config = client.make_gen_config(system='s', temperature=0.3)
     assert config.system_instruction == 's'
@@ -180,6 +225,20 @@ async def test_walk_gives_up_at_the_bottom(script):
     answers, _ = script
     answers += [(None, BLOCK_INPUT)] * 3
     assert await _walk() == (None, 'r3')
+
+
+async def test_walk_stops_at_the_answer_deadline(monkeypatch):
+    """Several rungs of slow answers add up: the whole walk has one deadline."""
+    monkeypatch.setattr(Gemini, 'ANSWER_DEADLINE', 0.05)
+    sent = []
+
+    async def slow(prompt, config):
+        sent.append(prompt)
+        await asyncio.sleep(0.03)
+        return None, BLOCK_INPUT
+    monkeypatch.setattr(ladder, 'generate_checked', slow)
+    assert await asyncio.wait_for(_walk(), 1) == (None, 'r2')
+    assert sent == ['p1', 'p2']
 
 
 def test_identical_rungs_are_dropped():

@@ -100,12 +100,18 @@ def _is_transient(error: Exception) -> bool:
 
 
 async def generate(contents: str | list, config: types.GenerateContentConfig) -> str | None:
-    """A Gemini request. Returns None on timeout, block or API refusal.
+    """A Gemini request for chat, within Gemini.ANSWER_DEADLINE. Returns None on timeout,
+    block or API refusal.
 
     contents is either text or a list of parts: that is how !ascii sends the
     picture itself along with the question.
     """
-    text, _ = await generate_checked(contents, config)
+    try:
+        async with asyncio.timeout(Gemini.ANSWER_DEADLINE):
+            text, _ = await generate_checked(contents, config)
+    except TimeoutError:
+        logger.warning('Gemini: ответ не уложился в %d с', Gemini.ANSWER_DEADLINE)
+        return None
     return text
 
 
@@ -143,52 +149,51 @@ async def generate_checked(contents: str | list,
     prompt usually passes on the next try. Both make sense to retry, a timeout
     or an unreachable Gemini does not.
     """
-    async with _semaphore:
-        for attempt in range(Gemini.RETRIES + 1):
-            try:
-                response = await asyncio.wait_for(
-                    get_client().aio.models.generate_content(
-                        model=Gemini.MODEL,
-                        contents=contents,
-                        config=config,
-                    ),
-                    timeout=Gemini.TIMEOUT,
+    for attempt in range(Gemini.RETRIES + 1):
+        try:
+            # A slot per attempt: a request waiting out its retry pause must not
+            # hold one while other viewers queue behind it
+            async with _semaphore, asyncio.timeout(Gemini.TIMEOUT):
+                response = await get_client().aio.models.generate_content(
+                    model=Gemini.MODEL,
+                    contents=contents,
+                    config=config,
                 )
-            except Exception as e:
-                last = attempt == Gemini.RETRIES
-                if not _is_transient(e) or last:
-                    if isinstance(e, asyncio.TimeoutError):
-                        logger.warning('Gemini: таймаут %d с (попыток: %d)', Gemini.TIMEOUT, attempt + 1)
-                    else:
-                        logger.warning('Gemini: запрос не удался (попыток: %d): %s', attempt + 1, e)
-                    if _prompt_error(e):
-                        return None, ERROR
-                    return None, None
-                delay = RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
-                logger.info('Gemini: %s, повтор через %.1f с', type(e).__name__, delay)
-                await asyncio.sleep(delay)
-                continue
+        except Exception as e:
+            last = attempt == Gemini.RETRIES
+            if not _is_transient(e) or last:
+                if isinstance(e, TimeoutError):
+                    logger.warning('Gemini: таймаут %d с (попыток: %d)', Gemini.TIMEOUT, attempt + 1)
+                else:
+                    logger.warning('Gemini: запрос не удался (попыток: %d): %s', attempt + 1, e)
+                if _prompt_error(e):
+                    return None, ERROR
+                return None, None
+            delay = RETRY_BASE_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
+            logger.info('Gemini: %s, повтор через %.1f с', type(e).__name__, delay)
+            await asyncio.sleep(delay)
+            continue
 
-            meta = response.usage_metadata
-            if meta is not None:
-                usage['prompt'] += meta.prompt_token_count or 0
-                usage['cached'] += meta.cached_content_token_count or 0
-                usage['output'] += (meta.candidates_token_count or 0) + (meta.thoughts_token_count or 0)
-            feedback = response.prompt_feedback
-            if feedback and feedback.block_reason:
-                return None, BLOCK_INPUT
-            try:
-                text = response.text
-            except (ValueError, AttributeError):
-                text = None
-            if text:
-                # An answer the output filter cut short is still returned: a chat
-                # answer sends whatever came back
-                return text, None
-            candidate = response.candidates[0] if response.candidates else None
-            if candidate and candidate.finish_reason in _OUTPUT_BLOCKS:
-                logger.debug('Gemini: ответ остановлен фильтром (%s)', candidate.finish_reason)
-                return None, BLOCK_OUTPUT
-            logger.debug('Gemini: пустой ответ (%s)', candidate.finish_reason if candidate else 'нет кандидатов')
-            return None, EMPTY
+        meta = response.usage_metadata
+        if meta is not None:
+            usage['prompt'] += meta.prompt_token_count or 0
+            usage['cached'] += meta.cached_content_token_count or 0
+            usage['output'] += (meta.candidates_token_count or 0) + (meta.thoughts_token_count or 0)
+        feedback = response.prompt_feedback
+        if feedback and feedback.block_reason:
+            return None, BLOCK_INPUT
+        try:
+            text = response.text
+        except (ValueError, AttributeError):
+            text = None
+        if text:
+            # An answer the output filter cut short is still returned: a chat
+            # answer sends whatever came back
+            return text, None
+        candidate = response.candidates[0] if response.candidates else None
+        if candidate and candidate.finish_reason in _OUTPUT_BLOCKS:
+            logger.debug('Gemini: ответ остановлен фильтром (%s)', candidate.finish_reason)
+            return None, BLOCK_OUTPUT
+        logger.debug('Gemini: пустой ответ (%s)', candidate.finish_reason if candidate else 'нет кандидатов')
+        return None, EMPTY
     return None, None

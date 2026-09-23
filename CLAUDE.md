@@ -137,7 +137,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `followers.py` – `FollowerCache`: follower check via Helix with a TTL, fails open
 - `cooldowns.py` – `Cooldowns` on the monotonic clock
 - `tasks.py` – `BackgroundTasks`: loops by name, never started twice
-- `chat_socket.py` – `ChatSocketWatch` (resubscribes when the chat socket is gone), `check_private_api()`
+- `chat_socket.py` – `ChatSocketWatch` (resubscribes when the chat socket is gone), `check_private_api()`, `keep_migrated_sockets()` (keeps a migrated socket in twitchio's registry)
 - `tokens.py` – the channel token for rewards, token saving, OAuth links, `token_problem()`
 - `heartbeat.py` – `heartbeat_loop()` for the container healthcheck
 - `stream.py` – `StreamTracker` (session = stream, resume rules), `watch_stream()`, `fetch_live_stream()`, `end_from_vod()`. BOT.md «Сессии»
@@ -195,7 +195,7 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 - **The gate.** The cooldown is set right after its check with no `await` in between (twitchio runs every event in its own task); a quota refusal gives it back; a handler rejecting malformed input calls `ctx.refuse()` (cooldown and quota row) or `ctx.clear_cooldown()`. Roles are checked on badges, not on `tier_of()`
 - **Session = stream**; `session_id` is read once per event, since coroutines outlive a switch
 - **Game state** changes only in `local/roll/game.py`, under its lock, one transaction with its journal row
-- **twitchio 3.x.** Its command system is off (`process_commands()` is a no-op). `CustomRewardRedemption.fulfill()` sends the wrong id – statuses go through `_http.patch_custom_reward_redemption()`. A reply carries `parent_user`, not `parent_user_id`. Private fields read by the chat watch and the token check are verified at start. Signal handlers are installed again from `event_ready`, because the OAuth adapter's aiohttp replaces them
+- **twitchio 3.x.** Its command system is off (`process_commands()` is a no-op). `CustomRewardRedemption.fulfill()` sends the wrong id – statuses go through `_http.patch_custom_reward_redemption()`. A reply carries `parent_user`, not `parent_user_id`. Private fields read by the chat watch and the token check are verified at start. On `session_reconnect` twitchio drops the live socket from its registry unless `keep_migrated_sockets()` ran; the watch then subscribes twice. `event_message` drops a message id it has already seen. Signal handlers are installed again from `event_ready`, because the OAuth adapter's aiohttp replaces them
 - **Gemini.** Every config comes from `make_gen_config()` (a hand-built one loses `thinking_config`). Chat answers go through `generate()` or `ladder.walk()`, which keep to `GEMINI_ANSWER_DEADLINE`; the memory calls `generate_checked()` directly and takes its own slots. Safety filters are off for the persona and on only for the `!ascii` check. A timeout is not retried
 - **Output.** Every line the bot sends on its own goes through `Bot.send_chat_message()`, which runs `defuse()`; answers go through `cleanup_response()`. `strip_markdown()` keeps `_` (it is part of nicks)
 - **Follow gate.** `bool(await followers.followers)` – the iterator itself is always truthy. The cache fails open

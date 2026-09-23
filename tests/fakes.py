@@ -1,4 +1,5 @@
 """Stand-ins for the twitchio objects and the Bot that handlers touch."""
+import itertools
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -13,8 +14,12 @@ def make_chatter(name: str = 'viewer', *, broadcaster=False, moderator=False,
     )
 
 
+_message_ids = itertools.count(1)
+
+
 def make_message(text: str, chatter: SimpleNamespace | None = None, *, reply=None) -> SimpleNamespace:
-    return SimpleNamespace(text=text, chatter=chatter or make_chatter(), reply=reply, respond=AsyncMock())
+    return SimpleNamespace(id=f'msg-{next(_message_ids)}', text=text, chatter=chatter or make_chatter(),
+                           reply=reply, respond=AsyncMock())
 
 
 class FakeBot:

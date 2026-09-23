@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fakes import FakeBot, make_message
+from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, CommandEntry, Kind
 from src.core.component import ChatComponent, route
 from src.core.config import Follow, Quota
@@ -148,6 +148,22 @@ async def test_two_quick_messages_start_one_generation(db, monkeypatch):
     assert await count_bot_uses('viewer', Kind.GEMINI, 60) == 1
     refused = first if handler.await_args.args[0].message is second else second
     refused.respond.assert_awaited_once_with('texts.cooldown_gemini')
+
+
+async def test_a_repeated_delivery_runs_the_command_once(db, monkeypatch):
+    """Two chat subscriptions or an EventSub redelivery bring the same message twice:
+    one !roll must not become two throws."""
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    component = ChatComponent(FakeBot())
+    entry = component._registry.resolve('!roll')
+    handler = AsyncMock()
+    monkeypatch.setattr(entry, 'handler', handler)
+
+    message = make_message('!roll')
+    await asyncio.gather(component.event_message(message), component.event_message(message))
+    await component.event_message(make_message('!roll', make_chatter('other')))
+
+    assert handler.await_count == 2
 
 
 async def test_quota_refusal_gives_the_cooldown_back(db, monkeypatch):

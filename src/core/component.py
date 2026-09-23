@@ -6,6 +6,7 @@ src/gemini, src/local and src/local/roll get into the registry.
 import logging
 import math
 import re
+from collections import OrderedDict
 
 import twitchio
 from twitchio.ext import commands
@@ -53,6 +54,10 @@ FOLLOW_HINT_SCOPE = 'follow_hint'
 # brake every one of their messages gets a refusal
 DENY_SCOPE = 'deny'
 DENY_REPEAT_SECONDS = 30
+
+# EventSub may deliver a message more than once, and a second chat subscription doubles
+# everything: ids of this many recent messages are remembered to drop the repeat
+SEEN_MESSAGES = 500
 
 
 def _quota_per_hour(tier: Tier) -> int:
@@ -136,6 +141,7 @@ class ChatComponent(commands.Component):
         self.bot = bot
         self._followers = FollowerCache()
         self._registry = CommandRegistry()
+        self._seen: OrderedDict[str, None] = OrderedDict()
         add = self._registry.add
         # All commands work as bare text, without addressing the bot.
         # Order matters: longer triggers are registered first.
@@ -155,11 +161,23 @@ class ChatComponent(commands.Component):
             add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI,
                 role=Role.SUB_VIP_MOD_BROADCASTER)
 
+    def _repeated(self, message_id: str) -> bool:
+        """True for a message already seen; no await, so two deliveries cannot both pass."""
+        if message_id in self._seen:
+            logger.warning('Сообщение %s пришло повторно – пропускаю', message_id)
+            return True
+        self._seen[message_id] = None
+        if len(self._seen) > SEEN_MESSAGES:
+            self._seen.popitem(last=False)
+        return False
+
     @commands.Component.listener()
     async def event_message(self, message: twitchio.ChatMessage) -> None:
         if str(message.chatter.id) == str(self.bot.bot_id):
             return
         if not self.bot.bot_name:
+            return
+        if self._repeated(message.id):
             return
 
         # session_id is taken once: it changes when a stream starts or ends, and coroutines outlive that

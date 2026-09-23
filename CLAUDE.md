@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository: the rules, the layout and the invariants. How each mechanic works is in `BOT.md`.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository: the rules, the layout and the invariants. How each mechanic works is in `docs/BOT.md`.
 
 ## Project Overview
 
@@ -11,11 +11,12 @@ Twitch chat bot powered by Gemini 2.5 Flash. Commands (`!who`, `!ask`, …) work
 | File | Holds | Language |
 |---|---|---|
 | `README.md` | what the bot can do, installation, operations, CLI, the command and environment variable tables, project tree | Russian |
-| `BOT.md` | the one detailed reference: every mechanic, its numbers and the failure modes it guards against | Russian |
+| `docs/BOT.md` | the one detailed reference: every mechanic, its numbers and the failure modes it guards against | Russian |
 | `CLAUDE.md` | this file: rules, layout, module map, invariants | English |
-| `CONTENT.md` | everything the bot says; `<!-- … -->` notes explain keys | Russian |
+| `docs/CONTENT.md` | everything the bot says, read by the code; `<!-- … -->` notes explain keys | Russian |
 | `.env.example` | every environment variable with a comment | Russian |
-| `AUDIT.md` | the dated audit report and work plan | Russian |
+
+`BOT.md` and `CONTENT.md` below mean the files in `docs/`.
 
 Before changing a feature, read its section in `BOT.md`.
 
@@ -108,7 +109,7 @@ Entry point is thin; all logic lives in `src/`, split into packages by purpose.
 | `src/local/roll/` | the «залупа стрима» game: throws, channel-points rewards, perks, curse-lift announcements. A local feature that grew big enough for its own subpackage | anything about `!roll` |
 | `src/cli/` | `bot.py --…` commands; the bot does not start | a maintenance command |
 
-A feature that grows its own tables, texts and background loops gets **its own subpackage inside the package of its kind** – `local/<feature>/` like `local/roll/`, or `gemini/<feature>/` if it generates text – instead of spreading across several files of `local/` and `core/`: roll is a local feature of the bot, not a top-level one. Table schema and migrations still go into `init_db()` in `src/core/db/schema.py` (one place to keep startup idempotent); the feature's queries live in its package, like `src/local/roll/storage.py`. Each package's `__init__.py` lists its modules. Paths to `CONTENT.md` and `chat_history.db` live in `src/core/paths.py`: they default to the repository root via `Path(__file__).parents[2]`, and `BOT_DB_PATH` / `BOT_CONTENT_PATH` move them – that is how the container keeps its data on a volume instead of inside the image. `db/connection.py` and `content.py` import `DB_PATH` / `CONTENT_PATH` under their own names, because callers import `get_db()` rather than the path, and the tests patch them there.
+A feature that grows its own tables, texts and background loops gets **its own subpackage inside the package of its kind** – `local/<feature>/` like `local/roll/`, or `gemini/<feature>/` if it generates text – instead of spreading across several files of `local/` and `core/`: roll is a local feature of the bot, not a top-level one. Table schema and migrations still go into `init_db()` in `src/core/db/schema.py` (one place to keep startup idempotent); the feature's queries live in its package, like `src/local/roll/storage.py`. Each package's `__init__.py` lists its modules. Paths to `CONTENT.md` and `chat_history.db` live in `src/core/paths.py`: they default to `docs/CONTENT.md` and `chat_history.db` in the repository root, found via `Path(__file__).parents[2]`, and `BOT_DB_PATH` / `BOT_CONTENT_PATH` move them – that is how the container keeps its data on a volume instead of inside the image. `db/connection.py` and `content.py` import `DB_PATH` / `CONTENT_PATH` under their own names, because callers import `get_db()` rather than the path, and the tests patch them there.
 
 ### Modules
 
@@ -120,7 +121,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `component.py` – `ChatComponent`: the registry of all commands, `event_message`, the pure `route()` and the gate `_gate()` (follow, cooldown, role, quota), `event_follow`. BOT.md «Обработка сообщений»
 - `commands.py` – `CommandContext`, `CommandEntry`, `CommandRegistry`, `Kind` and `Role` (`StrEnum`: their values are the plain strings stored in cooldown keys and `bot_uses.kind`)
 - `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `Summary`, `Who`, `Picture`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`
-- `paths.py` – `DB_PATH`, `CONTENT_PATH`: the repository root, or `BOT_DB_PATH` / `BOT_CONTENT_PATH`
+- `paths.py` – `DB_PATH`, `CONTENT_PATH`: `chat_history.db` in the repository root and `docs/CONTENT.md`, or `BOT_DB_PATH` / `BOT_CONTENT_PATH`
 - `content.py` – `CONTENT.md` access (`Content.prompt/label/text/items`), mtime cache, `REQUIRED`, `validate_content()`
 - `database.py` – facade re-exporting `src/core/db/`: callers import every query from here
 - `db/connection.py` – the shared connection (`get_db()`, `close_db()`, `reopen()`), `transaction()`, `backup_db()`, `vacuum_db()`
@@ -215,7 +216,6 @@ Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_C
   - **Required:** the constraint, the invariant or the failure mode that makes the code what it is. A number that justifies a constant stays as a bare number, without who measured it or when.
   - **Length:** two or three lines for a comment. A docstring is one summary line, plus at most a short paragraph of constraints. Anything longer belongs in the docs, not next to the code.
   - Rewrite instead of deleting: `# The owner asked on 2026-09-15 to lower this from 5 to 3, because…` becomes `# Three throws: beyond that the points economy takes over`.
-  - The one exception is `AUDIT.md`, a dated report where the dates are the subject.
   - Rationale that is genuinely long belongs in `BOT.md` as a statement of how the thing works, still without the history of how it got there.
 - **Docs are part of the change, not a follow-up.** Every change to behaviour, config, schema or layout updates the affected docs in the *same* turn, before reporting the work as done. A change that is only documented in the commit message is unfinished. Each fact lives in one document (see "Documentation"): how a mechanic works – `BOT.md`; what the bot can do, installation, operations, the command and variable tables – `README.md`; layout, module map and these rules – `CLAUDE.md`; plus `.env.example` and the `<!-- … -->` notes in `CONTENT.md`. Do not retell a mechanic in a second document – link to it
 - Adding a command: one `add()` line in `ChatComponent.__init__` + a handler in the right package (see "Where code goes") + its texts in `## texts` of `CONTENT.md` and in `REQUIRED` (`src/core/content.py`). Then: `README.md` (command table), `BOT.md` (registry table and its own «Шаг 7…» section), `CLAUDE.md` only if a module was added

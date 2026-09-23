@@ -59,7 +59,7 @@ async def test_import_and_clear_by_source(db):
 
 def test_emote_merge_adds_and_keeps_the_file_whole(tmp_path, monkeypatch):
     path = tmp_path / 'CONTENT.md'
-    shutil.copy(ROOT / 'CONTENT.md', path)
+    shutil.copy(ROOT / 'docs' / 'CONTENT.md', path)
     monkeypatch.setattr(emotes, 'CONTENT_PATH', path)
     before = content.parse(path.read_text(encoding='utf-8'))['lists']
     existing = content._lines(before['emotes'])[0]
@@ -76,7 +76,7 @@ def test_emote_replace_keeps_the_multiline_note(tmp_path, monkeypatch):
     """Replace mode rebuilds the list but keeps the note: losing its closing `-->` would
     comment out every key down to the next note, and the bot would not start."""
     path = tmp_path / 'CONTENT.md'
-    shutil.copy(ROOT / 'CONTENT.md', path)
+    shutil.copy(ROOT / 'docs' / 'CONTENT.md', path)
     monkeypatch.setattr(emotes, 'CONTENT_PATH', path)
     before = content.parse(path.read_text(encoding='utf-8'))
 
@@ -91,7 +91,7 @@ def test_emote_replace_keeps_the_multiline_note(tmp_path, monkeypatch):
 
 def test_emote_merge_dry_run_writes_nothing(tmp_path, monkeypatch):
     path = tmp_path / 'CONTENT.md'
-    shutil.copy(ROOT / 'CONTENT.md', path)
+    shutil.copy(ROOT / 'docs' / 'CONTENT.md', path)
     monkeypatch.setattr(emotes, 'CONTENT_PATH', path)
     original = path.read_text(encoding='utf-8')
     emotes.merge({'Тестовые': ['BrandNewEmote']}, write=False)

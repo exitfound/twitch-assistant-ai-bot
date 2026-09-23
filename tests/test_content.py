@@ -86,7 +86,7 @@ def test_missing_required_key_aborts_startup():
 def test_the_real_content_file_is_complete(monkeypatch):
     """The cheapest check in the project: a text added to CONTENT.md but not to REQUIRED,
     or a key renamed by a typo, fails here instead of at the next bot start."""
-    real = ROOT / 'CONTENT.md'
+    real = ROOT / 'docs' / 'CONTENT.md'
     monkeypatch.setattr(content, 'CONTENT_PATH', real)
     monkeypatch.setattr(content, '_content', content._ContentFile(real))
     validate_content()

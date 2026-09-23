@@ -108,14 +108,18 @@ async def get_action_status(redemption_id: str) -> str | None:
     return row[0] if row else None
 
 
-async def has_action(session_id: str, action: str, target: str, status: str) -> bool:
+async def seconds_since_actions(
+    session_id: str, action: str, target: str, status: str, limit: int,
+) -> list[int]:
+    """Seconds since each of the last `limit` such actions on the target, newest first."""
     db = await get_db()
     async with db.execute(
-        'SELECT 1 FROM roll_actions'
-        ' WHERE session_id = ? AND action = ? AND target = ? AND status = ? LIMIT 1',
-        (session_id, action, target, status),
+        "SELECT CAST(strftime('%s', 'now') - strftime('%s', created_at) AS INTEGER)"
+        ' FROM roll_actions WHERE session_id = ? AND action = ? AND target = ? AND status = ?'
+        ' ORDER BY id DESC LIMIT ?',
+        (session_id, action, target, status, limit),
     ) as cursor:
-        return await cursor.fetchone() is not None
+        return [seconds for (seconds,) in await cursor.fetchall()]
 
 
 async def seconds_since_action(session_id: str, action: str, target: str, status: str) -> int | None:

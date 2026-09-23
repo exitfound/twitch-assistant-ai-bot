@@ -2,6 +2,7 @@ import asyncio
 import logging
 import random
 
+import aiohttp
 import httpx
 from google import genai
 from google.genai import errors, types
@@ -90,13 +91,16 @@ def _is_transient(error: Exception) -> bool:
     """Whether the request is worth retrying: server overload, rate limit or network.
 
     A timeout is deliberately excluded: the viewer in chat is already waiting
-    Gemini.TIMEOUT seconds, and retries would stretch the answer to minutes.
+    Gemini.TIMEOUT seconds, and retries would stretch the answer to minutes. google-genai
+    goes through aiohttp whenever it is installed (twitchio brings it), httpx otherwise.
     """
+    if isinstance(error, TimeoutError):
+        return False
     if isinstance(error, errors.ServerError):
         return True
     if isinstance(error, errors.APIError):
         return error.code in (408, 429)
-    return isinstance(error, httpx.TransportError)
+    return isinstance(error, (httpx.TransportError, aiohttp.ClientConnectionError, aiohttp.ClientPayloadError))
 
 
 async def generate(contents: str | list, config: types.GenerateContentConfig) -> str | None:

@@ -19,7 +19,7 @@ import twitchio
 from twitchio import eventsub
 from twitchio.ext import commands
 
-from src.core.config import Rewards
+from src.core.config import Rewards, Roll
 from src.core.content import Content
 from src.local.roll import game
 from src.local.roll.redemption import handle_redemption
@@ -53,22 +53,23 @@ class RewardSpec:
 
     @property
     def prompt(self) -> str:
-        # On Twitch the reward description comes with the input field, so it is set
-        # only on rewards that need a nick
-        if not self.input_required:
-            return ''
+        # The reward's description on Twitch; on a reward that takes a nick it is also
+        # the caption of the input field
         return Content.text(
             f'reward_{self.action}_prompt', ceiling=Rewards.CURSE_CEILING,
-            protect=Rewards.REROLL_PROTECT_MINUTES, **curse_values(),
+            protect=Rewards.REROLL_PROTECT_MINUTES, cleanse_protect=Rewards.CLEANSE_PROTECT_MINUTES,
+            shield=Rewards.SHIELD_MINUTES, series=Rewards.EXTRA_SERIES, pause=Rewards.EXTRA_PAUSE_MINUTES,
+            max=Roll.MAX, **curse_values(),
         )[:PROMPT_MAX]
 
 
 def _specs() -> list[RewardSpec]:
     return [
-        RewardSpec(game.Action.EXTRA, Rewards.COST_EXTRA, False, 0),
-        RewardSpec(game.Action.REROLL, Rewards.COST_REROLL, True, Rewards.ATTACK_MAX_PER_USER),
-        RewardSpec(game.Action.CURSE, Rewards.COST_CURSE, True, Rewards.ATTACK_MAX_PER_USER),
-        RewardSpec(game.Action.SHIELD, Rewards.COST_SHIELD, False, 0),
+        RewardSpec(game.Action.EXTRA, Rewards.COST_EXTRA, False, Rewards.EXTRA_MAX_PER_USER),
+        RewardSpec(game.Action.REROLL, Rewards.COST_REROLL, True, Rewards.REROLL_MAX_PER_USER),
+        RewardSpec(game.Action.CURSE, Rewards.COST_CURSE, True, Rewards.CURSE_MAX_PER_USER),
+        RewardSpec(game.Action.SHIELD, Rewards.COST_SHIELD, False, Rewards.SHIELD_MAX_PER_USER),
+        RewardSpec(game.Action.CLEANSE, Rewards.COST_CLEANSE, True, Rewards.CLEANSE_MAX_PER_USER),
     ]
 
 
@@ -81,7 +82,7 @@ def _changes(reward: twitchio.CustomReward, spec: RewardSpec) -> dict:
         changes['cost'] = spec.cost
     if reward.input_required != spec.input_required:
         changes['input_required'] = spec.input_required
-    if spec.input_required and reward.prompt != spec.prompt:
+    if reward.prompt != spec.prompt:
         changes['prompt'] = spec.prompt
     limit = reward.max_per_user_stream
     if (limit.value if limit.enabled else 0) != spec.max_per_user:
@@ -114,10 +115,7 @@ class RewardService:
         # Anything redeemed before the subscription will never arrive as an event
         started = datetime.datetime.now(datetime.UTC)
         await self._sync()
-        await self._bot.subscribe_websocket(
-            eventsub.ChannelPointsRedeemAddSubscription(broadcaster_user_id=channel_id),
-            as_bot=False, token_for=channel_id,
-        )
+        await self._subscribe()
         self.active = True
         # The subscription is live from here: a failure below is logged, not raised, or
         # the service would stay half-started with no retry on reconnect
@@ -134,6 +132,25 @@ class RewardService:
             await self._settle_stale(started)
         except Exception:
             logger.exception('Не удалось разобрать зависшие выкупы')
+
+    async def resubscribe(self) -> None:
+        """Subscribe again after the socket watch found the subscription lost.
+
+        What was redeemed while the bot was deaf never arrives as an event: those points
+        are refunded, the same way as after a crash.
+        """
+        started = datetime.datetime.now(datetime.UTC)
+        await self._subscribe()
+        try:
+            await self._settle_stale(started)
+        except Exception:
+            logger.exception('Не удалось разобрать зависшие выкупы')
+
+    async def _subscribe(self) -> None:
+        await self._bot.subscribe_websocket(
+            eventsub.ChannelPointsRedeemAddSubscription(broadcaster_user_id=self._channel_id),
+            as_bot=False, token_for=self._channel_id,
+        )
 
     async def stop(self) -> None:
         """Pause the rewards: while the bot is away, there is nothing to spend points on."""
@@ -221,11 +238,11 @@ class RewardService:
             logger.exception('Не удалось выставить статус %s выкупу %s', status, redemption_id)
 
     async def _settle_stale(self, started: datetime.datetime) -> None:
-        """Settle redemptions left without a status since the previous run.
+        """Settle redemptions left without a status before the subscription.
 
-        That happens when the bot crashed before it could pause the rewards.
-        They cannot be applied retroactively – the session and the rolls are different
-        by now – so the points are refunded. The exception is a reward that was applied
+        That happens when the bot crashed before it could pause the rewards, or while the
+        subscription was lost. They are not applied retroactively – the rolls have moved on
+        since – so the points are refunded. The exception is a reward that was applied
         but not yet fulfilled: that one gets fulfilled.
         """
         broadcaster = self._broadcaster()
@@ -242,7 +259,7 @@ class RewardService:
                 await self._set_status(reward.id, redemption.id, FULFILLED if applied else CANCELED)
                 settled += 1
         if settled:
-            logger.warning('Разобрано зависших выкупов с прошлого запуска: %d', settled)
+            logger.warning('Разобрано зависших выкупов: %d', settled)
 
 
 class RewardComponent(commands.Component):

@@ -22,7 +22,7 @@ from src.core.database import (
 )
 from src.core.followers import FollowerCache
 from src.core.port import BotPort
-from src.core.utils import SOSUR_RE, SOSUR_VARIANTS, reply_to_bot  # noqa: F401  (SOSUR_VARIANTS – the public place to edit the list)
+from src.core.utils import SOSUR_RE, SOSUR_VARIANTS, reply, reply_to_bot  # noqa: F401  (SOSUR_VARIANTS – the public place to edit the list)
 from src.core.viewer import Tier, by_tier, tier_of
 from src.gemini.commands import (
     handle_ask, handle_default, handle_summary, handle_versus, handle_who,
@@ -147,10 +147,10 @@ class ChatComponent(commands.Component):
         # Order matters: longer triggers are registered first.
         add(HELP_TRIGGER,      handle_help)
         add(STATS_TRIGGER,     handle_stats,     prefix=True)
-        # Longer trigger first, by the rule above: both are exact matches,
-        # so «!rollstat» never reaches !roll
+        # Longer trigger first, by the rule above. !roll takes a prefix only to answer
+        # «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out
         add(ROLLSTAT_TRIGGER,  handle_rollstat)
-        add(ROLL_TRIGGER,      handle_roll)
+        add(ROLL_TRIGGER,      handle_roll,      prefix=True)
         add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=Kind.GEMINI)
         add(WHO_TRIGGER,       handle_who,       prefix=True, kind=Kind.GEMINI)
         add(VERSUS_TRIGGER,    handle_versus,    prefix=True, kind=Kind.GEMINI)
@@ -220,10 +220,11 @@ class ChatComponent(commands.Component):
             # Recorded before generation: a failed request also cost a queue slot and money
             await record_bot_use(user, kind)
 
-        if entry is None:
-            await handle_default(ctx)
-            return
-        await entry.handler(ctx)
+        try:
+            await (handle_default if entry is None else entry.handler)(ctx)
+        except Exception:
+            # Handlers answer their own failures; this is the net under a bug in one
+            logger.exception('Команда %s от %s упала', entry.trigger if entry else 'свободный текст', user)
 
     async def _gate(self, message: twitchio.ChatMessage, user: str, entry: CommandEntry | None,
                     kind: Kind) -> bool:
@@ -243,7 +244,7 @@ class ChatComponent(commands.Component):
             remaining = self.bot.cooldown_remaining(user, kind)
             if remaining > 0:
                 key = 'cooldown_gemini' if kind == Kind.GEMINI else 'cooldown_local'
-                await message.respond(Content.text(key, user=user, seconds=int(remaining) + 1))
+                await reply(message, Content.text(key, user=user, seconds=int(remaining) + 1))
                 return False
 
         if entry is not None and not _has_role(entry.role, message.chatter):
@@ -258,12 +259,16 @@ class ChatComponent(commands.Component):
         # Quota on top of the cooldown: only Gemini requests count – they cost
         # money. Local commands are held by the cooldown alone. A refusal gives the
         # cooldown back: nothing was served
-        if kind == Kind.GEMINI and not (
-            await self._within_channel_quota(message, user, tier)
-            and await self._within_quota(message, user, tier)
-        ):
-            self.bot.clear_cooldown(user, kind)
-            return False
+        if kind == Kind.GEMINI:
+            try:
+                within = (await self._within_channel_quota(message, user, tier)
+                          and await self._within_quota(message, user, tier))
+            except Exception:
+                self.bot.clear_cooldown(user, kind)
+                raise
+            if not within:
+                self.bot.clear_cooldown(user, kind)
+                return False
         return True
 
     async def _allowed_without_follow(self, message: twitchio.ChatMessage, user: str,
@@ -279,7 +284,7 @@ class ChatComponent(commands.Component):
         # spam would turn into refusal spam
         if not self.bot.cooldown_remaining(user, FOLLOW_HINT_SCOPE):
             self.bot.set_cooldown(user, Follow.HINT_MINUTES * 60, FOLLOW_HINT_SCOPE)
-            await message.respond(Content.text('follow_required', user=user, command=HELP_TRIGGER))
+            await reply(message, Content.text('follow_required', user=user, command=HELP_TRIGGER))
         return False
 
     async def _deny(self, message: twitchio.ChatMessage, user: str, key: str, **values) -> None:
@@ -292,7 +297,7 @@ class ChatComponent(commands.Component):
         if self.bot.cooldown_remaining(user, DENY_SCOPE):
             return
         self.bot.set_cooldown(user, DENY_REPEAT_SECONDS, DENY_SCOPE)
-        await message.respond(Content.text(key, user=user, **values))
+        await reply(message, Content.text(key, user=user, **values))
 
     async def _within_channel_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:
         """Whether the channel as a whole is within its window. False – already refused.

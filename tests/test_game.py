@@ -69,6 +69,33 @@ async def test_extra_uses_the_limit_stored_by_the_chat_throw(db):
     assert outcome.free_left == Roll.FREE_SUB - 1
 
 
+async def test_extra_rolls_pause_after_a_full_series(db):
+    for _ in range(3):
+        await game.free_throw(S, 'gop', limit=3)
+    for _ in range(Rewards.EXTRA_SERIES):
+        assert (await redeem(game.Action.EXTRA, 'gop')).ok
+    paused = await redeem(game.Action.EXTRA, 'gop')
+    assert paused.status == game.Status.EXTRA_PAUSE
+    assert paused.protect_minutes_left == Rewards.EXTRA_PAUSE_MINUTES
+    db_ = await get_db()
+    await db_.execute(
+        "UPDATE roll_actions SET created_at = datetime('now', ?) WHERE action = 'extra'",
+        (f'-{Rewards.EXTRA_PAUSE_MINUTES} minutes',),
+    )
+    await db_.commit()
+    assert (await redeem(game.Action.EXTRA, 'gop')).ok
+
+
+@pytest.mark.parametrize(('ages', 'left'), [
+    ([10, 20, 30, 40], None),               # not a full series yet
+    ([10, 20, 30, 40, 50], 290),            # a series: the pause runs from the latest
+    ([10, 20, 30, 40, 400], None),          # a pause inside it broke the series
+    ([300, 310, 320, 330, 340], None),      # the pause has passed
+])
+def test_series_pause(ages, left):
+    assert rules.series_pause_left(ages, 5, 300) == left
+
+
 async def test_extra_after_free_throws_does_not_spend_them(db):
     for _ in range(3):
         await game.free_throw(S, 'gop', limit=3)
@@ -148,6 +175,8 @@ async def test_lifted_curse_is_reported_once(db):
 @pytest.mark.parametrize(('user_input', 'status'), [
     ('!!!', game.Status.BAD_TARGET),
     ('', game.Status.BAD_TARGET),
+    ('victim other', game.Status.EXTRA_WORDS),
+    ('@victim спасибо', game.Status.EXTRA_WORDS),
     ('@Actor,', game.Status.SELF_TARGET),
     ('nobody', game.Status.NOT_ROLLED),
 ])
@@ -196,8 +225,27 @@ async def test_reroll_of_someone_who_never_played(db):
 async def test_bought_shield_blocks_rerolls(db):
     await save_roll(S, 'victim', 50, free_throw=True)
     assert (await redeem(game.Action.SHIELD, 'victim')).ok
-    assert (await redeem(game.Action.SHIELD, 'victim')).status == game.Status.ALREADY_SHIELDED
-    assert (await redeem(game.Action.REROLL, 'actor', 'victim')).status == game.Status.SHIELDED
+    again = await redeem(game.Action.SHIELD, 'victim')
+    assert again.status == game.Status.ALREADY_SHIELDED
+    assert again.protect_minutes_left == Rewards.SHIELD_MINUTES
+    blocked = await redeem(game.Action.REROLL, 'actor', 'victim')
+    assert blocked.status == game.Status.SHIELDED
+    assert blocked.protect_minutes_left == Rewards.SHIELD_MINUTES
+
+
+async def test_bought_shield_runs_out_and_can_be_bought_again(db):
+    await save_roll(S, 'victim', 50, free_throw=True)
+    assert (await redeem(game.Action.SHIELD, 'victim')).ok
+    db_ = await get_db()
+    await db_.execute(
+        "UPDATE roll_actions SET created_at = datetime('now', ?) WHERE action = 'shield'",
+        (f'-{Rewards.SHIELD_MINUTES} minutes',),
+    )
+    await db_.commit()
+    assert (await game.status(S, 'victim', limit=3)).shield_left is None
+    assert (await redeem(game.Action.REROLL, 'actor', 'victim')).ok
+    assert (await redeem(game.Action.SHIELD, 'victim')).ok
+    assert (await game.status(S, 'victim', limit=3)).shield_left == Rewards.SHIELD_MINUTES
 
 
 async def test_perk_shield_blocks_rerolls_with_minutes(db):
@@ -228,6 +276,56 @@ async def test_refused_rerolls_do_not_extend_the_protection(db):
     )
     await db_.commit()
     assert (await redeem(game.Action.REROLL, 'c', 'victim')).ok
+
+
+# --- cleanse -----------------------------------------------------------------
+
+async def test_cleanse_lifts_a_curse_and_keeps_the_roll(db, top):
+    await save_roll(S, 'victim', 90, free_throw=True)
+    assert (await redeem(game.Action.CURSE, 'actor', 'victim')).ok
+    cleansed = await redeem(game.Action.CLEANSE, 'friend', '@Victim')
+    assert cleansed.ok and cleansed.target == 'victim'
+    assert cleansed.ceiling == Rewards.CURSE_CEILING - Rewards.CURSE_STEP
+    assert cleansed.protect_minutes_left == Rewards.CLEANSE_PROTECT_MINUTES
+    row = await get_roll(S, 'victim')
+    assert row.curse_ceiling is None and row.value == Rewards.CURSE_CEILING
+    assert (await game.free_throw(S, 'victim', limit=3)).ceiling is None
+
+
+async def test_cleanse_yourself_is_allowed(db):
+    await save_roll(S, 'victim', 90, free_throw=True)
+    assert (await redeem(game.Action.CURSE, 'actor', 'victim')).ok
+    assert (await redeem(game.Action.CLEANSE, 'victim', 'victim')).ok
+
+
+async def test_cleanse_without_a_curse_is_refused(db):
+    await save_roll(S, 'victim', 90, free_throw=True)
+    assert (await redeem(game.Action.CLEANSE, 'victim', 'victim')).status == game.Status.NOT_CURSED
+    assert (await redeem(game.Action.CLEANSE, 'a', 'x y')).status == game.Status.EXTRA_WORDS
+
+
+async def test_cleanse_cancels_the_loser_curse_still_waiting(db):
+    await _previous_stream({'champ': 95, 'loser': 3})
+    await game.grant_perks(S)
+    await save_chat_message(S, 'loser', 'привет')
+    assert (await redeem(game.Action.CLEANSE, 'loser', 'loser')).ok
+    assert (await game.free_throw(S, 'loser', limit=3)).ceiling is None
+
+
+async def test_a_cleansed_player_cannot_be_cursed_for_a_while(db):
+    await save_roll(S, 'victim', 90, free_throw=True)
+    assert (await redeem(game.Action.CURSE, 'a', 'victim')).ok
+    assert (await redeem(game.Action.CLEANSE, 'victim', 'victim')).ok
+    again = await redeem(game.Action.CURSE, 'b', 'victim')
+    assert again.status == game.Status.CLEANSED
+    assert again.protect_minutes_left == Rewards.CLEANSE_PROTECT_MINUTES
+    db_ = await get_db()
+    await db_.execute(
+        "UPDATE roll_actions SET created_at = datetime('now', ?) WHERE action = 'cleanse'",
+        (f'-{Rewards.CLEANSE_PROTECT_MINUTES} minutes',),
+    )
+    await db_.commit()
+    assert (await redeem(game.Action.CURSE, 'b', 'victim')).ok
 
 
 # --- journal -----------------------------------------------------------------
@@ -318,7 +416,8 @@ async def test_perk_curse_is_laid_on_the_first_throw_once(db, top):
 
 
 @pytest.mark.parametrize(('raw', 'nick'), [
-    ('@Nick', 'nick'), ('nick, и ещё', 'nick'), ('Nick!', 'nick'), ('ник', None), ('', None), ('x' * 26, None),
+    ('@Nick', 'nick'), ('  @Nick,  ', 'nick'), ('Nick!', 'nick'),
+    ('nick, и ещё', None), ('nick1 nick2', None), ('ник', None), ('', None), ('x' * 26, None),
 ])
 def test_parse_nick(raw, nick):
     assert rules.parse_nick(raw) == nick

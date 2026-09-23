@@ -7,7 +7,7 @@ from src.core.commands import CommandContext
 from src.core.config import Gemini, Summary, Who
 from src.core.content import Content
 from src.core.database import get_last_tagged_interaction
-from src.core.utils import clean_nick, reply_to_bot
+from src.core.utils import clean_nick, reply, reply_to_bot
 from src.core.viewer import by_tier, tier_of
 from src.gemini import summary, who
 from src.gemini.answer_context import Question, answer
@@ -40,12 +40,13 @@ async def handle_default(ctx: CommandContext) -> None:
     )
     try:
         text, _ = await answer(question, make_gen_config())
-        if not await respond_and_save(ctx, text, ctx.prompt):
-            logger.warning('Ответ не отправлен для %s, запрос: %s', ctx.user, ctx.prompt[:100])
-            await ctx.message.respond(Content.text('no_answer', user=ctx.user))
     except Exception:
         logger.exception('Gemini: ошибка генерации для %s', ctx.user)
-        await ctx.message.respond(Content.text('gen_error', user=ctx.user))
+        await reply(ctx.message, Content.text('gen_error', user=ctx.user))
+        return
+    if not await respond_and_save(ctx, text, ctx.prompt):
+        logger.warning('Ответ не отправлен для %s, запрос: %s', ctx.user, ctx.prompt[:100])
+        await reply(ctx.message, Content.text('no_answer', user=ctx.user))
 
 
 async def handle_ask(ctx: CommandContext) -> None:
@@ -53,7 +54,7 @@ async def handle_ask(ctx: CommandContext) -> None:
     question = ctx.original_args
     if not question:
         await ctx.refuse()
-        await ctx.message.respond(Content.text('ask_usage', user=ctx.user))
+        await reply(ctx.message, Content.text('ask_usage', user=ctx.user))
         return
     try:
         ask_config = make_gen_config(
@@ -69,10 +70,11 @@ async def handle_ask(ctx: CommandContext) -> None:
                 previous_question=previous[0], previous_answer=previous[1],
             )
         text = await generate(contents, ask_config)
-        await send_chunked(ctx, text, f'{ASK_TAG} {question}', max_chunks=ASK_MAX_CHUNKS)
     except Exception:
         logger.exception('Gemini !ask: ошибка для %s', ctx.user)
-        await ctx.message.respond(Content.text('ask_error', user=ctx.user))
+        await reply(ctx.message, Content.text('ask_error', user=ctx.user))
+        return
+    await send_chunked(ctx, text, f'{ASK_TAG} {question}', max_chunks=ASK_MAX_CHUNKS)
 
 
 async def handle_summary(ctx: CommandContext) -> None:
@@ -88,7 +90,7 @@ async def handle_summary(ctx: CommandContext) -> None:
             tag, empty = '[summary]', 'summary_empty'
         if result is None:
             await ctx.refuse()
-            await ctx.message.respond(Content.text(empty, user=ctx.user))
+            await reply(ctx.message, Content.text(empty, user=ctx.user))
             return False
         return await send_chunked(ctx, result[0], tag)
 
@@ -122,7 +124,7 @@ async def handle_who(ctx: CommandContext) -> None:
     target = clean_nick(args[0]) if args else ''
     if not target:
         await ctx.refuse()
-        await ctx.message.respond(Content.text('who_usage', user=ctx.user))
+        await reply(ctx.message, Content.text('who_usage', user=ctx.user))
         return
 
     async def run() -> bool:
@@ -130,12 +132,12 @@ async def handle_who(ctx: CommandContext) -> None:
         if rungs is None:
             # Gemini was not called – a typo in the nick must not cost cooldown or quota
             await ctx.refuse()
-            await ctx.message.respond(Content.text('who_unknown', user=ctx.user, target=target))
+            await reply(ctx.message, Content.text('who_unknown', user=ctx.user, target=target))
             return False
         text, _ = await walk(rungs, make_gen_config(), ctx.user)
         if await respond_and_save(ctx, text, who.who_tag(target), WHO_MAX):
             return True
-        await ctx.message.respond(Content.text('who_failed', user=ctx.user, target=target))
+        await reply(ctx.message, Content.text('who_failed', user=ctx.user, target=target))
         return False
 
     await LIMITS[who.WHO_KIND].run(ctx, run)
@@ -147,7 +149,7 @@ async def handle_versus(ctx: CommandContext) -> None:
     nicks = list(dict.fromkeys(nick for nick in map(clean_nick, args) if nick))
     if len(nicks) < 2:
         await ctx.refuse()
-        await ctx.message.respond(Content.text('versus_usage', user=ctx.user))
+        await reply(ctx.message, Content.text('versus_usage', user=ctx.user))
         return
     nick1, nick2 = nicks[0], nicks[1]
 
@@ -162,14 +164,14 @@ async def handle_versus(ctx: CommandContext) -> None:
             else:
                 text = Content.text('versus_unknown_one', user=ctx.user,
                                     target=nick2 if m1.known else nick1)
-            await ctx.message.respond(text)
+            await reply(ctx.message, text)
             return False
         rungs = await who.versus_rungs(ctx.user, m1, m2)
         text, _ = await walk(rungs, make_gen_config(), ctx.user)
         if await respond_and_save(ctx, text, who.versus_tag(nick1, nick2),
                                   max_chunks=VERSUS_MAX_CHUNKS):
             return True
-        await ctx.message.respond(Content.text('versus_failed', user=ctx.user))
+        await reply(ctx.message, Content.text('versus_failed', user=ctx.user))
         return False
 
     await LIMITS[who.VERSUS_KIND].run(ctx, run)

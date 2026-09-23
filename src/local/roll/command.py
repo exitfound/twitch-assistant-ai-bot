@@ -5,8 +5,9 @@ from src.core.commands import CommandContext
 from src.core.config import Roll
 from src.core.content import Content
 from src.core.viewer import by_tier, tier_of
+from src.core.utils import reply
 from src.local.roll import game
-from src.local.roll.texts import champion_note, curse_note, reward_title
+from src.local.roll.texts import champion_note, curse_note, input_preview, reward_title
 
 logger = logging.getLogger(__name__)
 
@@ -24,10 +25,17 @@ def free_limit_for(chatter) -> int:
 
 
 async def handle_roll(ctx: CommandContext) -> None:
+    if ctx.args:
+        # «!roll 5», «!roll @nick»: a throw takes nothing, and silence reads as a broken bot
+        await ctx.refuse()
+        await reply(ctx.message, Content.text(
+            'roll_bad_input', user=ctx.user, input=input_preview(ctx.original_args),
+        ))
+        return
     if not ctx.bot.stream_live:
         # The game lives inside a stream: no throws are accepted without one
         ctx.clear_cooldown()
-        await ctx.message.respond(Content.text('roll_offline', user=ctx.user))
+        await reply(ctx.message, Content.text('roll_offline', user=ctx.user))
         return
     # The broadcaster rolls without limit and without the free-throws-left note,
     # everyone else gets a limit by their badges
@@ -43,11 +51,11 @@ async def handle_roll(ctx: CommandContext) -> None:
             )
         else:
             text = Content.text('roll_no_free', user=ctx.user, limit=limit)
-        await ctx.message.respond(text)
+        await reply(ctx.message, text)
         return
     if result.loser is None:
         logger.error('Ролл сохранён, но лузер сессии %s не найден', ctx.session_id)
-        await ctx.message.respond(Content.text('roll_error', user=ctx.user))
+        await reply(ctx.message, Content.text('roll_error', user=ctx.user))
         return
     loser_name, loser_val = result.loser
     # For a cursed player the «из» (out of) is their ceiling, not the roll's upper bound
@@ -65,7 +73,7 @@ async def handle_roll(ctx: CommandContext) -> None:
         else Content.text('roll_free_left', free_left=result.free_left)
     )
     note = curse_note(result)
-    await ctx.message.respond(' '.join(filter(None, (text, champion_note(result), free_left, note))))
+    await reply(ctx.message, ' '.join(filter(None, (text, champion_note(result), free_left, note))))
 
 
 async def handle_rollstat(ctx: CommandContext) -> None:
@@ -74,7 +82,7 @@ async def handle_rollstat(ctx: CommandContext) -> None:
     if not ctx.bot.stream_live:
         # The game lives inside a stream, and outside one there is nothing to show
         ctx.clear_cooldown()
-        await ctx.message.respond(Content.text('roll_offline', user=ctx.user))
+        await reply(ctx.message, Content.text('roll_offline', user=ctx.user))
         return
     chatter = ctx.message.chatter
     standing = await game.status(
@@ -93,8 +101,8 @@ async def handle_rollstat(ctx: CommandContext) -> None:
         parts.append(Content.text('roll_free_left', free_left=standing.free_left))
     if standing.curse_minutes_left is not None:
         parts.append(Content.text('rollstat_curse_hold', minutes=standing.curse_minutes_left))
-    if standing.shield:
-        parts.append(Content.text('rollstat_shield'))
+    if standing.shield_left is not None:
+        parts.append(Content.text('rollstat_shield_left', minutes=standing.shield_left))
     elif standing.shield_minutes_left is not None:
         parts.append(Content.text('rollstat_perk_shield', minutes=standing.shield_minutes_left))
     if standing.loser is None:
@@ -104,4 +112,4 @@ async def handle_rollstat(ctx: CommandContext) -> None:
         parts.append(Content.text('rollstat_loser', loser=loser, loser_val=loser_val, max=Roll.MAX))
         if standing.champion is not None:
             parts.append(champion_note(game.Outcome(game.Status.OK, champion=standing.champion)))
-    await ctx.message.respond(' '.join(filter(None, parts)))
+    await reply(ctx.message, ' '.join(filter(None, parts)))

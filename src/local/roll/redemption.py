@@ -6,37 +6,39 @@ say in chat what came of it.
 """
 import logging
 
-from src.core.config import Roll
+from src.core.config import Rewards, Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
 from src.core.port import BotPort
 from src.local.roll import game
 from src.local.roll.storage import get_action_status
-from src.local.roll.texts import champion_note, curse_note, curse_values, reward_title
+from src.local.roll.texts import champion_note, curse_note, curse_values, input_preview, reward_title
 
 logger = logging.getLogger(__name__)
-
-# How many characters of the reward input to quote in a refusal: people write anything there
-INPUT_PREVIEW_CHARS = 25
 
 _DONE = {
     game.Action.EXTRA: 'reward_extra_done',
     game.Action.REROLL: 'reward_reroll_done',
     game.Action.CURSE: 'reward_curse_hit',
-    game.Action.SHIELD: 'reward_shield_done',
+    game.Action.SHIELD: 'reward_shield_up',
+    game.Action.CLEANSE: 'reward_cleanse_done',
 }
 
 _REFUND = {
     game.Status.FREE_LEFT: 'reward_refund_free_left',
+    game.Status.EXTRA_PAUSE: 'reward_refund_extra_pause',
     game.Status.BAD_TARGET: 'reward_refund_bad_target',
+    game.Status.EXTRA_WORDS: 'reward_refund_extra_words',
     game.Status.SELF_TARGET: 'reward_refund_self',
     game.Status.NOT_ROLLED: 'reward_refund_not_rolled',
-    game.Status.SHIELDED: 'reward_refund_shielded',
-    game.Status.ALREADY_SHIELDED: 'reward_refund_shield_active',
+    game.Status.SHIELDED: 'reward_refund_shield_holds',
+    game.Status.ALREADY_SHIELDED: 'reward_refund_shield_still_up',
     game.Status.ALREADY_CURSED: 'reward_refund_already_cursed',
     game.Status.PROTECTED: 'reward_refund_protected',
     game.Status.UNKNOWN_TARGET: 'reward_refund_unknown_target',
     game.Status.PERK_SHIELDED: 'reward_refund_perk_shield',
+    game.Status.NOT_CURSED: 'reward_refund_not_cursed',
+    game.Status.CLEANSED: 'reward_refund_cleansed',
 }
 
 # After these rewards a note about the target's curse is appended to the text
@@ -88,20 +90,23 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
         # The target has not rolled yet: there is no «было – стало» (before – after) to write
         elif action == game.Action.REROLL and outcome.old_value is None:
             key = 'reward_reroll_first'
+        elif action == game.Action.CLEANSE and outcome.target == user:
+            key = 'reward_cleanse_self'
     else:
         key = _REFUND.get(outcome.status, 'reward_error')
     loser, loser_val = outcome.loser or ('', '')
     text = Content.text(
         key, user=user, reward=reward_title(action), target=outcome.target,
-        input=user_input.strip()[:INPUT_PREVIEW_CHARS],
+        input=input_preview(user_input),
         old=outcome.old_value, value=outcome.value, free_left=outcome.free_left,
+        shield=Rewards.SHIELD_MINUTES, series=Rewards.EXTRA_SERIES,
         loser=loser, loser_val=loser_val, max=Roll.MAX,
         ceiling=outcome.ceiling, next=outcome.next_ceiling,
         minutes=outcome.curse_minutes_left, protect=outcome.protect_minutes_left,
         **curse_values(),
     )
-    # A shield does not change the roll – no champion or curse note is appended to it
-    if outcome.ok and action != game.Action.SHIELD:
+    # A shield and a cleanse do not change the roll – no champion or curse note is appended
+    if outcome.ok and action not in (game.Action.SHIELD, game.Action.CLEANSE):
         note = ''
         if action in _WITH_CURSE_NOTE:
             note = curse_note(outcome)

@@ -1,10 +1,11 @@
 """Output helpers from src/core/utils.py: what every chat line goes through."""
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
-from src.core.utils import NICK_MAX, clean_nick, defuse, gather_cancelling, reply_to_bot, safe_format
+from src.core.utils import NICK_MAX, clean_nick, defuse, gather_cancelling, reply, reply_to_bot, safe_format
 from src.gemini.output import (
     EM_DASH, EN_DASH, cleanup_response, find_banned, fix_dashes, split_into_chunks, strip_links, strip_markdown,
     strip_pings, trim_to_sentence,
@@ -141,3 +142,15 @@ class TestGatherCancelling:
         with pytest.raises(ValueError, match='boom'):
             await gather_cancelling(fails(), slow())
         assert cancelled.is_set()
+
+
+async def test_reply_swallows_a_send_error():
+    """A refusal or a fallback line must not fail the handler sending it."""
+    message = SimpleNamespace(respond=AsyncMock(side_effect=RuntimeError('dns')))
+    assert not await reply(message, 'текст')
+
+
+async def test_reply_reports_a_message_twitch_dropped():
+    dropped = SimpleNamespace(sent=False, dropped_code='automod')
+    assert not await reply(SimpleNamespace(respond=AsyncMock(return_value=dropped)), 'текст')
+    assert await reply(SimpleNamespace(respond=AsyncMock(return_value=SimpleNamespace(sent=True))), 'текст')

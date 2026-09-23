@@ -29,6 +29,24 @@ async def test_restart_mid_stream_keeps_the_session(db):
     assert again.session_id == session
 
 
+async def test_twitch_unreachable_at_startup_resumes_the_open_stream(db):
+    """A restart mid-stream during a network outage must not split the session."""
+    first = StreamTracker()
+    await first.online('s1', time.time() - 3600)
+    again = StreamTracker()
+    assert await again.resume_open()
+    assert again.live and again.stream_id == 's1' and again.session_id == first.session_id
+
+
+async def test_nothing_to_resume_after_a_closed_stream(db):
+    tracker = StreamTracker()
+    await tracker.online('s1', time.time() - 3600)
+    await tracker.offline()
+    again = StreamTracker()
+    assert not await again.resume_open()
+    assert not again.live
+
+
 async def test_short_outage_keeps_the_session(db):
     tracker = StreamTracker()
     await tracker.online('s1', time.time() - 3600)

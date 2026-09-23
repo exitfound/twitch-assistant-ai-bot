@@ -21,7 +21,7 @@ def test_curse_bounds_are_put_right(monkeypatch):
 def test_zero_curse_step_is_refused(monkeypatch):
     """With a step of 0 the ceiling never reaches the floor and a curse lasts all stream."""
     monkeypatch.setenv('REWARD_CURSE_STEP', '0')
-    assert config._curse_step() == 5
+    assert config._curse_step() == 10
 
 
 def test_attribute_access_in_a_template_does_not_crash():

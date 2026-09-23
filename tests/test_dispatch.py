@@ -50,13 +50,17 @@ def component():
     ('!stat nick', handle_stats),
     ('!rollstat', handle_rollstat),
     ('!roll', handle_roll),
+    ('!roll 5', handle_roll),
+    ('!roll: @nick', handle_roll),
+    ('!rollstat 5', None),
     ('!who nick', handle_who),
 ])
 def test_registry_resolves_the_real_commands(component, text, handler):
-    assert component._registry.resolve(text).handler is handler
+    entry = component._registry.resolve(text)
+    assert (entry.handler if entry else None) is handler
 
 
-@pytest.mark.parametrize('text', ['!whoever', '!roll 5', '!rolls', 'привет'])
+@pytest.mark.parametrize('text', ['!whoever', '!rolls', '!rollstats', 'привет'])
 def test_registry_ignores_near_misses(component, text):
     assert component._registry.resolve(text) is None
 
@@ -164,6 +168,32 @@ async def test_a_repeated_delivery_runs_the_command_once(db, monkeypatch):
     await component.event_message(make_message('!roll', make_chatter('other')))
 
     assert handler.await_count == 2
+
+
+async def test_roll_with_anything_after_it_is_refused_without_a_throw(db, monkeypatch):
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    bot = FakeBot()
+    component = ChatComponent(bot)
+    throw = AsyncMock()
+    monkeypatch.setattr('src.local.roll.game.free_throw', throw)
+
+    message = make_message('!roll 100 ПЛИЗ')
+    await component.event_message(message)
+
+    throw.assert_not_awaited()
+    message.respond.assert_awaited_once_with('texts.roll_bad_input')
+    assert bot.cooldown_remaining('viewer', Kind.LOCAL) == 0
+
+
+async def test_a_failing_quota_check_gives_the_cooldown_back(db, monkeypatch):
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    monkeypatch.setattr(Quota, 'CHANNEL_PER_HOUR', 10)
+    bot = FakeBot()
+    component = ChatComponent(bot)
+    monkeypatch.setattr('src.core.component.count_channel_bot_uses', AsyncMock(side_effect=RuntimeError('db')))
+    with pytest.raises(RuntimeError):
+        await component.event_message(make_message('!ask раз'))
+    assert bot.cooldown_remaining('viewer', Kind.GEMINI) == 0
 
 
 async def test_quota_refusal_gives_the_cooldown_back(db, monkeypatch):

@@ -18,6 +18,7 @@ from src.core.config import Picture
 from src.core.content import Content
 from src.core.database import save_bot_interaction
 from src.core.viewer import by_tier, tier_of
+from src.core.utils import reply
 from src.gemini.client import SAFETY_CHECK, generate, make_gen_config
 from src.gemini.limits import PerStreamLimit
 from src.gemini.output import TWITCH_MSG_MAX
@@ -70,7 +71,7 @@ async def _serve(ctx: CommandContext) -> bool:
     if not url:
         # No link – no traffic or generation spent, refund the quota
         await ctx.refuse()
-        await ctx.message.respond(Content.text('ascii_usage', user=ctx.user))
+        await reply(ctx.message, Content.text('ascii_usage', user=ctx.user))
         return False
 
     cached = _cache.get(url)
@@ -91,7 +92,7 @@ async def _serve(ctx: CommandContext) -> bool:
         if description is None:
             logger.info('!ascii: %s принёс картинку, которую Gemini показывать не дал: %r',
                         ctx.user, verdict.strip()[:100])
-            await ctx.message.respond(Content.text('ascii_blocked', user=ctx.user))
+            await reply(ctx.message, Content.text('ascii_blocked', user=ctx.user))
             return False
 
     # The art goes out without a reply: a reply prepends a nick, and the first
@@ -99,7 +100,7 @@ async def _serve(ctx: CommandContext) -> bool:
     if not await ctx.bot.send_chat_message(art):
         # Not sent – the viewer saw no picture, nothing to charge the limit for
         logger.warning('!ascii: картинка для %s не ушла в чат', ctx.user)
-        await ctx.message.respond(Content.text('ascii_failed', user=ctx.user))
+        await reply(ctx.message, Content.text('ascii_failed', user=ctx.user))
         return False
     if description:
         # Not said in chat, but remembered: otherwise the bot does not know what it
@@ -145,7 +146,7 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
         # quota slot is not refunded – otherwise downloads could run forever
         if e.code == BAD_URL:
             await ctx.refuse()
-        await ctx.message.respond(Content.text(e.code, user=ctx.user))
+        await reply(ctx.message, Content.text(e.code, user=ctx.user))
         return None
 
     # Decoding and resizing are CPU-bound: run in a thread so as not to
@@ -154,7 +155,7 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
         render, data, limit=TWITCH_MSG_MAX, max_cols=Picture.MAX_COLS,
     )
     if not art:
-        await ctx.message.respond(Content.text('ascii_failed', user=ctx.user))
+        await reply(ctx.message, Content.text('ascii_failed', user=ctx.user))
         return None
 
     if not Picture.CHECK:
@@ -165,7 +166,7 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
         # about this picture), so it fails closed – nothing unchecked is shown. Not
         # cached, or one failure would block the link until restart
         logger.warning('!ascii: картинку от %s проверить не удалось, не показываю', ctx.user)
-        await ctx.message.respond(Content.text('ascii_unchecked', user=ctx.user))
+        await reply(ctx.message, Content.text('ascii_unchecked', user=ctx.user))
         return None
     return art, verdict
 

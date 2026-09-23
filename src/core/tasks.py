@@ -18,12 +18,13 @@ class BackgroundTasks:
     def start(self, name: str, loop: Callable[[], Coroutine]) -> bool:
         """Start the loop unless it is already running. True – started now.
 
-        event_ready fires again on every reconnect: a second copy of a loop would
-        double every announcement.
+        A second copy of a loop would double every announcement.
         """
         if self.running(name):
             return False
-        self._tasks[name] = asyncio.create_task(loop(), name=name)
+        task = asyncio.create_task(loop(), name=name)
+        task.add_done_callback(_ended)
+        self._tasks[name] = task
         return True
 
     async def stop(self) -> None:
@@ -43,3 +44,14 @@ class BackgroundTasks:
             if isinstance(result, Exception):
                 logger.warning('Фоновая задача завершилась с ошибкой: %r', result)
         logger.info('Фоновые задачи остановлены: %d', len(tasks))
+
+
+def _ended(task: asyncio.Task) -> None:
+    # Every loop runs until it is cancelled: one that ends on its own is gone until restart
+    if task.cancelled():
+        return
+    error = task.exception()
+    if error is not None:
+        logger.error('Фоновая задача %s упала и больше не работает', task.get_name(), exc_info=error)
+    else:
+        logger.warning('Фоновая задача %s завершилась и больше не работает', task.get_name())

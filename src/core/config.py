@@ -299,7 +299,7 @@ def _curse_range() -> tuple[int, int]:
 def _curse_step() -> int:
     # At least 1: with 0 the ceiling never reaches the floor, and a curse would last the
     # whole stream instead of lifting after the hold
-    return _env_int('REWARD_CURSE_STEP', 5, 1, 1000)
+    return _env_int('REWARD_CURSE_STEP', 10, 1, 1000)
 
 
 class Rewards:
@@ -309,21 +309,37 @@ class Rewards:
     # Prices in points. A viewer without a subscription earns about 300 per hour
     COST_EXTRA: int = _env_int('REWARD_COST_EXTRA', 100, 1, 1_000_000)
     COST_REROLL: int = _env_int('REWARD_COST_REROLL', 250, 1, 1_000_000)
-    COST_CURSE: int = _env_int('REWARD_COST_CURSE', 1000, 1, 1_000_000)
+    COST_CURSE: int = _env_int('REWARD_COST_CURSE', 750, 1, 1_000_000)
     COST_SHIELD: int = _env_int('REWARD_COST_SHIELD', 500, 1, 1_000_000)
+    COST_CLEANSE: int = _env_int('REWARD_COST_CLEANSE', 1000, 1, 1_000_000)
     # Curse: the victim's throw is at most CURSE_CEILING, every further throw
     # on them – their own or someone's reroll – lowers the ceiling by CURSE_STEP, not below CURSE_FLOOR.
     # On the floor the ceiling holds for CURSE_HOLD_MINUTES, then the curse lifts
     CURSE_CEILING, CURSE_FLOOR = _curse_range()
     CURSE_STEP: int = _curse_step()
-    CURSE_HOLD_MINUTES: int = _env_int('REWARD_CURSE_HOLD_MINUTES', 15, 1, 1440)
+    CURSE_HOLD_MINUTES: int = _env_int('REWARD_CURSE_HOLD_MINUTES', 30, 1, 1440)
     # After a successful reroll the target is immune to new rerolls for this many minutes:
     # Twitch's limit counts each attacker separately, and a crowd finishes off one target.
     # A curse pierces this protection, like the shield. 0 – no protection
     REROLL_PROTECT_MINUTES: int = _env_int('REWARD_REROLL_PROTECT_MINUTES', 3, 0, 1440)
-    # How many times one viewer may reroll and curse per stream – each reward
-    # has its own limit, counted by Twitch itself. 0 – no limit
-    ATTACK_MAX_PER_USER: int = _env_int('REWARD_ATTACK_MAX_PER_USER', 3, 0, 1000)
+    # How long a bought shield holds off rerolls, counted from the purchase
+    SHIELD_MINUTES: int = _env_int('REWARD_SHIELD_MINUTES', 60, 1, 1440)
+    # A cleansed player cannot be cursed again for this many minutes: without it a
+    # cheaper curse would undo a cleanse right away
+    CLEANSE_PROTECT_MINUTES: int = _env_int('REWARD_CLEANSE_PROTECT_MINUTES', 30, 1, 1440)
+    # Extra rolls come in series: after EXTRA_SERIES of them, each within the pause of the
+    # previous, the next opens EXTRA_PAUSE_MINUTES after the last. A pause that long
+    # starts a new series. Twitch has no per-viewer cooldown, so the bot counts it
+    EXTRA_SERIES: int = _env_int('REWARD_EXTRA_SERIES', 5, 1, 1000)
+    EXTRA_PAUSE_MINUTES: int = _env_int('REWARD_EXTRA_PAUSE_MINUTES', 5, 1, 1440)
+    # How many times one viewer may redeem each reward per stream, counted by Twitch
+    # itself. 0 – no limit. A limit set by hand in the Twitch dashboard is reset to
+    # these on the next start
+    EXTRA_MAX_PER_USER: int = _env_int('REWARD_EXTRA_MAX_PER_USER', 0, 0, 1000)
+    REROLL_MAX_PER_USER: int = _env_int('REWARD_REROLL_MAX_PER_USER', 3, 0, 1000)
+    CURSE_MAX_PER_USER: int = _env_int('REWARD_CURSE_MAX_PER_USER', 3, 0, 1000)
+    SHIELD_MAX_PER_USER: int = _env_int('REWARD_SHIELD_MAX_PER_USER', 0, 0, 1000)
+    CLEANSE_MAX_PER_USER: int = _env_int('REWARD_CLEANSE_MAX_PER_USER', 3, 0, 1000)
 
 
 class Context:

@@ -7,6 +7,7 @@ from src.core.commands import CommandContext
 from src.core.config import Caps, Chat, Emote
 from src.core.content import Content
 from src.core.database import save_bot_interaction
+from src.core.utils import reply
 from src.gemini.output import (
     caps_preserve_mentions, cleanup_response, find_banned, fix_dashes, is_caps,
     split_into_chunks, strip_markdown, trim_to_sentence,
@@ -45,7 +46,7 @@ def passes_moderation(text: str) -> bool:
 
 async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
                            max_len: int = TWITCH_MSG_MAX, max_chunks: int = 1) -> bool:
-    """Send the answer as a reply and save it. False if there is nothing to send.
+    """Send the answer as a reply and save it. False if nothing reached chat.
 
     max_chunks > 1 lets the answer run over several messages (!versus): the length
     budget is then max_chunks × (450 − CHUNK_SLACK) and max_len is ignored.
@@ -61,33 +62,46 @@ async def respond_and_save(ctx: CommandContext, text: str | None, tag: str,
     text = maybe_add_emote(text, max_len)
     if max_chunks == 1:
         # The nick followed directly by the text, no colon or dash: that way it reads as a remark
-        await ctx.message.respond(f'@{ctx.user} {text}')
-        await save_bot_interaction(ctx.session_id, ctx.user, tag, text)
+        if not await reply(ctx.message, f'@{ctx.user} {text}'):
+            return False
+        await _save(ctx, tag, text)
         return True
     chunks = split_into_chunks(text, TWITCH_MSG_MAX, TWITCH_MSG_MAX * max_chunks)[:max_chunks]
     sent = await _send_chunks(ctx, chunks, tag)
     if sent:
-        await save_bot_interaction(ctx.session_id, ctx.user, tag, ' '.join(sent))
-    # Honestly whether anything reached chat: _send_chunks() swallows send errors, and
-    # the caller counts a served request by this, so an unconditional True would charge
-    # the viewer's per-stream limit for a failed send
+        await _save(ctx, tag, ' '.join(sent))
+    # Honestly whether anything reached chat: the caller counts a served request by this,
+    # so an unconditional True would charge the viewer's per-stream limit for a failed send
     return bool(sent)
 
 
+async def _save(ctx: CommandContext, tag: str, text: str) -> None:
+    # The answer is already in chat: a failed save is logged, and the viewer must not
+    # get an error line after a good answer
+    try:
+        await save_bot_interaction(ctx.session_id, ctx.user, tag, text)
+    except Exception:
+        logger.exception('Ответ для %s отправлен, но не сохранён', ctx.user)
+
+
 async def _send_chunks(ctx: CommandContext, chunks: list[str], tag: str) -> list[str]:
-    """Send chunks: the first as a reply, the rest after a pause. Returns what went out."""
+    """Send chunks: the first as a reply, the rest after a pause. Returns what went out.
+
+    Stops at the first chunk that did not go out: a continuation without its start
+    reads as nonsense.
+    """
     logger.info('%s: отправка %d чанк(ов), %d символов', tag, len(chunks), sum(map(len, chunks)))
     sent: list[str] = []
     for i, chunk in enumerate(chunks):
-        try:
-            if i == 0:
-                await ctx.message.respond(f'@{ctx.user} {chunk}')
-            else:
-                await asyncio.sleep(CHUNK_SEND_DELAY)
-                await ctx.bot.send_chat_message(chunk)
-            sent.append(chunk)
-        except Exception:
-            logger.exception('Не удалось отправить чанк %d/%d для %s', i + 1, len(chunks), tag)
+        if i == 0:
+            ok = await reply(ctx.message, f'@{ctx.user} {chunk}')
+        else:
+            await asyncio.sleep(CHUNK_SEND_DELAY)
+            ok = await ctx.bot.send_chat_message(chunk)
+        if not ok:
+            logger.warning('Чанк %d/%d для %s не отправлен', i + 1, len(chunks), tag)
+            break
+        sent.append(chunk)
     return sent
 
 
@@ -100,11 +114,11 @@ async def send_chunked(
     Returns whether anything reached chat.
     """
     if not text:
-        await ctx.message.respond(Content.text('no_answer', user=ctx.user))
+        await reply(ctx.message, Content.text('no_answer', user=ctx.user))
         return False
     text = fix_dashes(strip_markdown(text))
     if not passes_moderation(text):
-        await ctx.message.respond(Content.text('filtered', user=ctx.user))
+        await reply(ctx.message, Content.text('filtered', user=ctx.user))
         return False
 
     limit = max_chunks or Chat.MAX_CHUNKS
@@ -115,5 +129,5 @@ async def send_chunked(
     chunks = split_into_chunks(text, TWITCH_MSG_MAX, TWITCH_MSG_MAX * limit)[:limit]
     sent = await _send_chunks(ctx, chunks, tag)
     if sent:
-        await save_bot_interaction(ctx.session_id, ctx.user, tag, ' '.join(sent))
+        await _save(ctx, tag, ' '.join(sent))
     return bool(sent)

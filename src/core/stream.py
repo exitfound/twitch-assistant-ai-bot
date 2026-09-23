@@ -114,6 +114,21 @@ class StreamTracker:
             logger.info('Эфир %s закончился, сессия %s закрыта', self._stream_id, self._session)
         self._stream_id = self._session = None
 
+    async def resume_open(self) -> bool:
+        """Twitch could not be asked at startup: the stream still open in the DB goes on.
+
+        True – it was resumed. If it has in fact ended, watch_stream() closes it after
+        CONFIRMATIONS checks, with the end time of that moment.
+        """
+        async with self._lock:
+            last = await get_last_stream()
+            if last is None or last.ended_at is not None:
+                return False
+            self._stream_id, self._session = last.stream_id, last.session_id
+        logger.warning('Эфир %s открыт в базе – продолжаю сессию %s до сверки с Twitch',
+                       last.stream_id, last.session_id)
+        return True
+
     async def settle_missed_end(self) -> None:
         """No stream at startup, but the last one in the DB is open: the bot missed its end."""
         async with self._lock:

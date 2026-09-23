@@ -9,7 +9,7 @@ from twitchio import eventsub
 from twitchio.ext import commands
 
 from src.core import stream as twitch_stream
-from src.core.chat_socket import ChatSocketWatch, check_private_api
+from src.core.chat_socket import ChatSocketWatch, check_private_api, keep_migrated_sockets
 from src.core.component import ChatComponent
 from src.core.config import Emote, Files, Help, Memory, Proactive, Rewards, Roll, Twitch, validate_config
 from src.core.content import Content, validate_content
@@ -104,6 +104,7 @@ class Bot(commands.Bot):
 
     async def setup_hook(self) -> None:
         check_private_api(self)
+        keep_migrated_sockets()
         await init_db()
         if Twitch.BOT_TOKEN and Twitch.BOT_REFRESH:
             await self.add_token(Twitch.BOT_TOKEN, Twitch.BOT_REFRESH)

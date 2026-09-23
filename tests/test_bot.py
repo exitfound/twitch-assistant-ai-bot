@@ -1,6 +1,7 @@
 """Bot lifecycle pieces that can be checked without Twitch."""
 
 import asyncio
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
@@ -69,6 +70,30 @@ def test_twitchio_still_has_the_private_fields_the_bot_uses():
     chat_socket.check_private_api(bot_module.Bot())
     with pytest.raises(RuntimeError, match='_websockets'):
         chat_socket.check_private_api(object())
+
+
+def test_a_migrated_socket_stays_in_the_registry(monkeypatch):
+    """On session_reconnect the new socket shares the old one's session id: closing
+    the old one must not drop the new one, or the watch subscribes to chat twice."""
+    monkeypatch.setattr(chat_socket.Websocket, '_cleanup', chat_socket.Websocket._cleanup)
+    chat_socket.keep_migrated_sockets()
+    chat_socket.keep_migrated_sockets()
+    bot = bot_module.Bot()
+    watch = chat_socket.ChatSocketWatch(bot, AsyncMock(), active=lambda: True)
+
+    def socket():
+        ws = chat_socket.Websocket(client=bot, token_for=str(bot.bot_id), http=bot._http)
+        ws._session_id = 'session'
+        return ws
+
+    old, new = socket(), socket()
+    bot._websockets[str(bot.bot_id)]['session'] = new
+    old._cleanup()
+
+    assert bot._websockets[str(bot.bot_id)] == {'session': new}
+    assert watch.alive()
+    new._cleanup()
+    assert not watch.alive()
 
 
 @pytest.mark.parametrize(('raw', 'seconds'), [('3h8m33s', 11313), ('45m', 2700), ('9s', 9), ('', 0)])

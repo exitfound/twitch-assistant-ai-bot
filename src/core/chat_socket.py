@@ -30,8 +30,33 @@ def check_private_api(bot: commands.Bot) -> None:
         missing.append('Websocket._closed')
     if not isinstance(getattr(getattr(bot, '_http', None), '_tokens', None), dict):
         missing.append('ManagedHTTPClient._tokens')
+    if not callable(getattr(Websocket, '_cleanup', None)):
+        missing.append('Websocket._cleanup')
     if missing:
         raise RuntimeError(f'twitchio изменился, нет полей: {", ".join(missing)} – проверь версию в requirements.in')
+
+
+def keep_migrated_sockets() -> None:
+    """Keep a socket that took over a session in twitchio's registry.
+
+    On session_reconnect Twitch keeps the session id: twitchio registers the new socket
+    under the old one's id, then the old one's _cleanup() pops that key. The live socket
+    falls out of the registry, the watch sees none and subscribes again, and every chat
+    message arrives twice.
+    """
+    original = Websocket._cleanup
+    if getattr(original, 'keeps_successor', False):
+        return
+
+    def cleanup(self: Websocket, closed: bool = True) -> None:
+        sockets = self._client._websockets.get(self._token_for, {}) if self._client else {}
+        successor = sockets.get(self.session_id or '')
+        original(self, closed)
+        if successor is not None and successor is not self:
+            sockets[self.session_id] = successor
+
+    cleanup.keeps_successor = True
+    Websocket._cleanup = cleanup
 
 
 def stored_token(bot: commands.Bot, user_id: str) -> dict | None:

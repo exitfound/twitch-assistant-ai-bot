@@ -81,7 +81,7 @@ async def transaction() -> AsyncIterator[aiosqlite.Connection]:
             except BaseException:
                 # Unconditional: a cancelled BEGIN still runs in aiosqlite's thread, and the
                 # rollback is queued after it. A failed COMMIT would otherwise stay open and
-                # every later write fail – the bot deaf while its heartbeat reads healthy
+                # every later write fail – the bot deaf while its process looks alive
                 await db.rollback()
                 raise
         finally:

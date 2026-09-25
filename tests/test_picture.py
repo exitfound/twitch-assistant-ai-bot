@@ -12,7 +12,7 @@ from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, Kind
 from src.core.config import Gemini
 from src.core.database import count_bot_uses
-from src.gemini import limits
+from src.core import limits
 from src.gemini.picture import command, fetch, render
 from src.gemini.picture.fetch import BAD_URL, PictureError
 

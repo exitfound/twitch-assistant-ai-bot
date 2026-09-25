@@ -30,6 +30,27 @@ def test_oauth_hint_only_for_token_problems(error, hint):
     assert tokens.token_problem(error) is hint
 
 
+def _token_holder(stored: dict) -> SimpleNamespace:
+    return SimpleNamespace(bot_id='1000', _http=SimpleNamespace(_tokens=stored), add_token=AsyncMock())
+
+
+async def test_a_stored_bot_token_wins_over_env(monkeypatch):
+    """A new login lands in .tio.tokens.json; the stale .env token must not replace it."""
+    monkeypatch.setattr(tokens.Twitch, 'BOT_TOKEN', 'old')
+    monkeypatch.setattr(tokens.Twitch, 'BOT_REFRESH', 'old-refresh')
+    holder = _token_holder({'1000': {'token': 'fresh', 'refresh': 'fresh-refresh'}})
+    await tokens.add_bot_token(holder)
+    holder.add_token.assert_not_awaited()
+
+
+async def test_env_bot_token_is_the_fallback(monkeypatch):
+    monkeypatch.setattr(tokens.Twitch, 'BOT_TOKEN', 'env')
+    monkeypatch.setattr(tokens.Twitch, 'BOT_REFRESH', 'env-refresh')
+    holder = _token_holder({})
+    await tokens.add_bot_token(holder)
+    holder.add_token.assert_awaited_once_with('env', 'env-refresh')
+
+
 async def test_closed_database_is_not_reopened_behind_the_shutdown(db):
     """A task finishing after close_db() would open a new connection, and its non-daemon
     thread would keep the process from exiting."""

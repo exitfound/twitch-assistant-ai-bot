@@ -1,10 +1,13 @@
 """Output helpers from src/core/utils.py: what every chat line goes through."""
 import asyncio
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from zoneinfo import ZoneInfo
 
 import pytest
 
+from src.core import logging_setup
 from src.core.utils import NICK_MAX, clean_nick, defuse, gather_cancelling, reply, reply_to_bot, safe_format
 from src.gemini.output import (
     EM_DASH, EN_DASH, cleanup_response, find_banned, fix_dashes, split_into_chunks, strip_links, strip_markdown,
@@ -154,3 +157,11 @@ async def test_reply_reports_a_message_twitch_dropped():
     dropped = SimpleNamespace(sent=False, dropped_code='automod')
     assert not await reply(SimpleNamespace(respond=AsyncMock(return_value=dropped)), 'текст')
     assert await reply(SimpleNamespace(respond=AsyncMock(return_value=SimpleNamespace(sent=True))), 'текст')
+
+
+def test_log_times_are_in_the_bot_zone(monkeypatch):
+    """The container runs in UTC with no TZ: the log must still show the bot's zone."""
+    monkeypatch.setattr(logging_setup.Clock, 'ZONE', ZoneInfo('Europe/Moscow'))
+    record = logging.LogRecord('x', logging.INFO, __file__, 1, 'msg', None, None)
+    record.created = 0.0    # 1970-01-01 00:00 UTC = 03:00 in Moscow
+    assert logging_setup.make_formatter().formatTime(record).startswith('1970-01-01 03:00:00')

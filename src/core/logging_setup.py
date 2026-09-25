@@ -1,12 +1,21 @@
 import logging
 import logging.handlers
+from datetime import datetime
 from pathlib import Path
 
-from src.core.config import Logging
+from src.core.config import Clock, Logging
 
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 
 _configured = False
+
+
+def make_formatter() -> logging.Formatter:
+    """LOG_FORMAT with times in BOT_TIMEZONE: the container runs in UTC, and the log must
+    match the times in chat and in session ids."""
+    formatter = logging.Formatter(LOG_FORMAT)
+    formatter.converter = lambda seconds: datetime.fromtimestamp(seconds, Clock.ZONE).timetuple()
+    return formatter
 
 
 def setup_logging(default_level: str = 'INFO') -> None:
@@ -42,5 +51,8 @@ def setup_logging(default_level: str = 'INFO') -> None:
         except OSError:
             logging.getLogger(__name__).exception('Не удалось открыть LOG_FILE=%s', Logging.FILE)
 
-    logging.basicConfig(level=level, format=LOG_FORMAT, handlers=handlers, force=True)
+    formatter = make_formatter()
+    for handler in handlers:
+        handler.setFormatter(formatter)
+    logging.basicConfig(level=level, handlers=handlers, force=True)
     _configured = True

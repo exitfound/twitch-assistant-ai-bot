@@ -2,7 +2,6 @@ import asyncio
 import contextlib
 import logging
 import signal
-from pathlib import Path
 
 import twitchio
 from twitchio import eventsub
@@ -11,31 +10,28 @@ from twitchio.ext import commands
 from src.core import stream as twitch_stream
 from src.core.chat_socket import SocketWatch, check_private_api, keep_migrated_sockets
 from src.core.component import ChatComponent
-from src.core.config import Emote, Files, Help, Memory, Proactive, Rewards, Roll, Twitch, validate_config
+from src.core.config import Emote, Help, Memory, Proactive, Rewards, Roll, Twitch, validate_config
 from src.core.content import Content, validate_content
 from src.core.cooldowns import Cooldowns
 from src.core.database import close_db, init_db
-from src.core.heartbeat import heartbeat_loop
 from src.core.logging_setup import setup_logging
 from src.core.stream import StreamTracker, watch_stream
 from src.core.tasks import BackgroundTasks
 from src.core.tokens import (
-    OAUTH_SCOPES, OAUTH_SCOPES_FOLLOWS, add_broadcaster_token, oauth_link, store_tokens, token_problem,
+    OAUTH_SCOPES, OAUTH_SCOPES_FOLLOWS, add_bot_token, add_broadcaster_token, oauth_link, store_tokens,
+    token_problem,
 )
 from src.core.utils import defuse
 from src.gemini.memory import build as memory
 from src.gemini.proactive import proactive_loop
 from src.local.emote_spam import emote_spam_loop
+from src.local import clip
 from src.local.help_announce import help_loop
 from src.local.roll import perks
 from src.local.roll.announce import curse_lift_loop
 from src.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
 
 logger = logging.getLogger(__name__)
-
-# Liveness file for the container healthcheck. Empty – no heartbeat, which is how
-# a run outside a container behaves
-HEARTBEAT_PATH = Files.HEARTBEAT or ''
 
 
 class Bot(commands.Bot):
@@ -117,8 +113,7 @@ class Bot(commands.Bot):
         check_private_api(self)
         keep_migrated_sockets()
         await init_db()
-        if Twitch.BOT_TOKEN and Twitch.BOT_REFRESH:
-            await self.add_token(Twitch.BOT_TOKEN, Twitch.BOT_REFRESH)
+        await add_bot_token(self)
         users = await self.fetch_users(logins=[Twitch.CHANNEL])
         if users:
             self._channel_id = str(users[0].id)
@@ -247,8 +242,6 @@ class Bot(commands.Bot):
                 logger.warning('ID канала не получен – фоновые задачи не запущены')
             return
         tasks = self._tasks
-        if HEARTBEAT_PATH:
-            tasks.start('heartbeat', lambda: heartbeat_loop(Path(HEARTBEAT_PATH)))
         tasks.start('chat_watch', self._chat.loop)
         if Rewards.ENABLED:
             tasks.start('rewards_watch', self._rewards_watch.loop)
@@ -335,6 +328,12 @@ class Bot(commands.Bot):
         except Exception:
             logger.exception('Не удалось отправить сообщение в чат')
             return False
+
+    async def create_clip(self, seconds: int, title: str | None) -> str | None:
+        """Clip the stream's last seconds as the bot: the link, or None (src/local/clip.py)."""
+        if not self._channel_id:
+            raise RuntimeError('ID канала не получен – клип сделать нельзя')
+        return await clip.make_clip(self, self._channel_id, str(self.bot_id), seconds, title)
 
     async def stop_background_tasks(self) -> None:
         await self._tasks.stop()

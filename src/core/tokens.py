@@ -1,4 +1,4 @@
-"""Twitch user tokens: the OAuth links, the channel's token for rewards, saving to disk."""
+"""Twitch user tokens: the OAuth links, the bot's and the channel's tokens, saving to disk."""
 import logging
 from pathlib import Path
 
@@ -11,7 +11,7 @@ from src.core.config import Twitch
 
 logger = logging.getLogger(__name__)
 
-OAUTH_SCOPES = 'user:read:chat+user:write:chat+user:bot'
+OAUTH_SCOPES = 'user:read:chat+user:write:chat+user:bot+clips:edit'
 OAUTH_SCOPES_FOLLOWS = f'{OAUTH_SCOPES}+moderator:read:followers'
 
 # Where twitchio keeps the tokens: the name it uses by default, next to the working
@@ -36,6 +36,17 @@ def token_problem(error: Exception) -> bool:
         return error.status in (401, 403)
     # TimeoutError is an OSError
     return not isinstance(error, (OSError, aiohttp.ClientError))
+
+
+async def add_bot_token(bot: commands.Bot) -> None:
+    """Add the bot's token from .env unless twitchio already loaded one from .tio.tokens.json.
+
+    The file is the fresher of the two: twitchio writes every refresh and every new login
+    there, while .env keeps the value it was given. Adding .env on top would bring back the
+    old token and drop the scopes a new login granted.
+    """
+    if stored_token(bot, str(bot.bot_id)) is None and Twitch.BOT_TOKEN and Twitch.BOT_REFRESH:
+        await bot.add_token(Twitch.BOT_TOKEN, Twitch.BOT_REFRESH)
 
 
 async def add_broadcaster_token(bot: commands.Bot, channel_id: str, scope: str) -> bool:
@@ -85,6 +96,7 @@ async def store_tokens(bot: commands.Bot, whose: str, env_name: str,
     except OSError as e:
         logger.warning('Не удалось ограничить права на %s: %s', path, e)
     logger.info(
-        'Токен %s получен (…%s) и сохранён в %s. Значение для %s в .env возьми оттуда',
+        'Токен %s получен (…%s) и сохранён в %s – следующий запуск возьмёт его оттуда. '
+        '%s в .env нужен, только если этого файла не будет',
         whose, payload.access_token[-4:], path, env_name,
     )

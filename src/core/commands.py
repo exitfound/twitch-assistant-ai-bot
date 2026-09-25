@@ -24,7 +24,7 @@ class Kind(StrEnum):
 
 
 class Role(StrEnum):
-    # From the subscriber badge up: VIP, moderator and broadcaster pass too (!ascii)
+    # From the subscriber badge up: VIP, moderator and broadcaster pass too (!ask, !ascii, !clip)
     SUB_VIP_MOD_BROADCASTER = 'sub_vip_mod_broadcaster'
 
 

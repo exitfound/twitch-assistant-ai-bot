@@ -1,12 +1,9 @@
-# Bookworm, like the distroless runtime: a package built from source here links against
-# the same glibc it will run on
 FROM python:3.11-slim-bookworm AS builder
 
 WORKDIR /build
 
 COPY requirements.txt .
 
-# requirements.txt is the lock compiled from requirements.in: it pins every package down to its dependencies, and each download is checked by hash
 RUN pip install --no-cache-dir --no-compile --require-hashes --target /deps -r requirements.txt
 
 
@@ -21,8 +18,6 @@ ENV PYTHONPATH=/deps \
 
 WORKDIR /app
 
-# A group too: without it the process runs with gid 0 and the database files it creates
-# on the volume belong to root's group
 USER 1000:1000
 
 CMD ["/app/bot.py"]

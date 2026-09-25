@@ -5,7 +5,7 @@ PY := ./venv/bin/python3
 
 LOCK := $(PY) -m piptools compile --generate-hashes --strip-extras --no-emit-index-url
 
-venv:  ## Fresh venv on the Python the image uses: the bot's set as the image has it, plus the dev tools
+venv:
 	rm -rf venv
 	python3.11 -m venv venv
 	$(PY) -m pip install --upgrade pip
@@ -22,10 +22,10 @@ test:
 
 check: lint test
 
-audit:  ## Known vulnerabilities in the pinned set
+audit:
 	$(PY) -m pip_audit -r requirements.txt -r requirements-dev.txt
 
-lock:  ## Recompile requirements*.txt after a change in requirements*.in
+lock:
 	$(LOCK) -o requirements.txt requirements.in
 	$(LOCK) --allow-unsafe -o requirements-dev.txt requirements-dev.in
 
@@ -38,16 +38,17 @@ restart:
 logs:
 	docker compose logs -f --tail=200 bot
 
-backup:  ## Consistent copy of the live database into data/, safe while the bot runs
+backup:
 	docker compose run --rm bot /app/bot.py --backup /data/chat_history.backup-$$(date +%F-%H%M).db
 
 # New Twitch tokens. The container publishes no port – twitchio's OAuth adapter listens on
 # localhost inside it – so the bot runs on the host for the login, from data/, where the
 # container keeps .tio.tokens.json and the database (named explicitly: the default is the
-# repository root). The shell catches Ctrl+C for itself, so the container
-# comes back up after the bot stops
+# repository root). The shell catches Ctrl+C for itself, so the container comes back up
+# after the bot stops. `up -d` rather than `start`: a changed .env reaches only a
+# recreated container
 oauth:
 	@echo "Бот в контейнере останавливается: два процесса на одной паре токенов разлогинят друг друга."
 	@echo "Открой ссылку из лога, войди нужным аккаунтом, затем Ctrl+C – контейнер поднимется сам."
 	docker compose stop bot
-	@trap "true" INT; cd data && TZ=Europe/Moscow BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py; cd .. && docker compose start bot
+	@trap "true" INT; cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py; cd .. && docker compose up -d bot

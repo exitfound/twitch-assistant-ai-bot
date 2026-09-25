@@ -4,16 +4,16 @@ import logging
 
 
 from src.core.commands import CommandContext
-from src.core.config import Gemini, Summary, Who
+from src.core.config import Ask, Gemini, Summary, Who
 from src.core.content import Content
 from src.core.database import get_last_tagged_interaction
+from src.core.limits import PerStreamLimit
 from src.core.utils import clean_nick, reply, reply_to_bot
 from src.core.viewer import by_tier, tier_of
 from src.gemini import summary, who
 from src.gemini.answer_context import Question, answer
 from src.gemini.client import generate, make_gen_config
 from src.gemini.ladder import walk
-from src.gemini.limits import PerStreamLimit
 from src.gemini.output import WHO_MAX
 from src.gemini.responder import respond_and_save, send_chunked
 
@@ -24,6 +24,8 @@ logger = logging.getLogger(__name__)
 VERSUS_MAX_CHUNKS = 2
 
 ASK_TAG = '[ask]'
+# The kind !ask is recorded under in bot_uses for its per-stream limit
+ASK_KIND = 'ask'
 # An answer to !ask is at most two Twitch messages. send_chunked trims the excess
 # at a sentence end
 ASK_MAX_CHUNKS = 2
@@ -56,7 +58,8 @@ async def handle_ask(ctx: CommandContext) -> None:
         await ctx.refuse()
         await reply(ctx.message, Content.text('ask_usage', user=ctx.user))
         return
-    try:
+
+    async def run() -> bool:
         ask_config = make_gen_config(
             system=Content.prompt('ask'), temperature=Gemini.ASK_TEMPERATURE,
         )
@@ -70,11 +73,10 @@ async def handle_ask(ctx: CommandContext) -> None:
                 previous_question=previous[0], previous_answer=previous[1],
             )
         text = await generate(contents, ask_config)
-    except Exception:
-        logger.exception('Gemini !ask: ошибка для %s', ctx.user)
-        await reply(ctx.message, Content.text('ask_error', user=ctx.user))
-        return
-    await send_chunked(ctx, text, f'{ASK_TAG} {question}', max_chunks=ASK_MAX_CHUNKS)
+        return await send_chunked(ctx, text, f'{ASK_TAG} {question}', max_chunks=ASK_MAX_CHUNKS)
+
+    # An error answers with ask_error from the limit; only an answer that reached chat counts
+    await LIMITS[ASK_KIND].run(ctx, run)
 
 
 async def handle_summary(ctx: CommandContext) -> None:
@@ -97,11 +99,12 @@ async def handle_summary(ctx: CommandContext) -> None:
     await LIMITS[summary.KIND].run(ctx, run)
 
 
-# Per-stream limits of !who, !versus and !summary: kind → (follower, VIP, subscriber
+# Per-stream limits of !ask, !who, !versus and !summary: kind → (follower, VIP, subscriber
 # or moderator), 0 – unlimited. The broadcaster is never limited; a subscribing VIP
-# counts as a subscriber
+# counts as a subscriber. A follower never reaches !ask: the dispatcher lets in badges only
 def _limit_for(kind: str, chatter) -> int:
     follower, vip, sub = {
+        ASK_KIND: (Ask.PER_STREAM_VIP, Ask.PER_STREAM_VIP, Ask.PER_STREAM_SUB),
         who.WHO_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
         who.VERSUS_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
         summary.KIND: (Summary.PER_STREAM_FOLLOWER, Summary.PER_STREAM_VIP, Summary.PER_STREAM_SUB),
@@ -111,6 +114,7 @@ def _limit_for(kind: str, chatter) -> int:
 
 # One limit per command. The limit function reads the config on every call
 LIMITS = {
+    ASK_KIND: PerStreamLimit(ASK_KIND, functools.partial(_limit_for, ASK_KIND), 'ask_error'),
     who.WHO_KIND: PerStreamLimit(who.WHO_KIND, functools.partial(_limit_for, who.WHO_KIND), 'gen_failed'),
     who.VERSUS_KIND: PerStreamLimit(who.VERSUS_KIND, functools.partial(_limit_for, who.VERSUS_KIND), 'gen_failed'),
     summary.KIND: PerStreamLimit(summary.KIND, functools.partial(_limit_for, summary.KIND), 'summary_error'),

@@ -11,7 +11,8 @@ from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, Kind
 from src.core.config import Caps, Emote, Gemini, Who
 from src.core.database import count_bot_uses, get_db
-from src.gemini import client, commands, ladder, limits, responder
+from src.core import limits
+from src.gemini import client, commands, ladder, responder
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR
 from src.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
 from src.gemini.who import WHO_KIND
@@ -388,3 +389,39 @@ async def test_a_bookkeeping_error_after_the_answer_is_not_reported(db, ctx, mon
     monkeypatch.setattr(limits, 'record_bot_use', broken)
     await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
     ctx.message.respond.assert_not_awaited()
+
+
+# --- !ask per-stream limit --------------------------------------------------
+
+def _ask_ctx(chatter) -> CommandContext:
+    return CommandContext(
+        message=make_message('!ask что такое РФ', chatter), user=chatter.name, prompt='!ask что такое рф',
+        original_text='!ask что такое РФ', session_id='2026-09-22 20:00', bot=FakeBot(), kind=Kind.GEMINI,
+        args='что такое рф',
+    )
+
+
+@pytest.mark.parametrize(('chatter', 'answered'), [
+    (make_chatter('vip', vip=True), 3),
+    (make_chatter('sub', subscriber=True), 10),
+    (make_chatter('mod', moderator=True), 10),
+    (make_chatter('streamer', broadcaster=True), 12),
+])
+async def test_ask_is_limited_per_stream_by_status(db, ctx, monkeypatch, chatter, answered):
+    """VIP 3, subscriber and moderator 10, broadcaster unlimited, as !ascii."""
+    monkeypatch.setattr(commands, 'generate', AsyncMock(return_value='Ответ.'))
+    replies = [_ask_ctx(chatter) for _ in range(12)]
+    for ask_ctx in replies:
+        await commands.handle_ask(ask_ctx)
+    refused = [c for c in replies if c.message.respond.await_args
+               and c.message.respond.await_args.args[0] == 'texts.ask_no_left']
+    assert len(replies) - len(refused) == answered
+    assert await count_bot_uses(chatter.name, commands.ASK_KIND, 60) == answered
+
+
+async def test_a_failed_ask_is_not_counted(db, ctx, monkeypatch):
+    monkeypatch.setattr(commands, 'generate', AsyncMock(side_effect=RuntimeError('gemini down')))
+    ask_ctx = _ask_ctx(make_chatter('fan', subscriber=True))
+    await commands.handle_ask(ask_ctx)
+    ask_ctx.message.respond.assert_awaited_once_with('texts.ask_error')
+    assert await count_bot_uses('fan', commands.ASK_KIND, 60) == 0

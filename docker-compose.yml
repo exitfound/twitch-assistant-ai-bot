@@ -7,25 +7,13 @@ services:
     stop_grace_period: 30s
     working_dir: /data
     command: ["/app/bot.py"]
-    # No ports: twitchio's OAuth adapter listens on localhost inside the container, so a
-    # published port never answered. Tokens are obtained on the host with `make oauth`
     user: "1000:1000"
     env_file: .env
     environment:
-      TZ: Europe/Moscow
       BOT_DB_PATH: /data/chat_history.db
-      BOT_HEARTBEAT: /data/heartbeat
-    # The tree read-only: the bot writes only to /data, and the tree also holds .env and
-    # its own code. --sync-emotes, which rewrites CONTENT.md, runs from the host venv
     volumes:
       - ./:/app:ro
       - ./data:/data
-    healthcheck:
-      test: ["CMD", "/usr/bin/python3.11", "-c", "import os,sys,time; sys.exit(0 if time.time()-os.path.getmtime('/data/heartbeat')<180 else 1)"]
-      interval: 60s
-      timeout: 5s
-      retries: 3
-      start_period: 90s
     logging:
       driver: json-file
       options:

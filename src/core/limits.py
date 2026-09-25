@@ -1,4 +1,4 @@
-"""Per-stream limits of the commands that cost a Gemini call: !who, !versus, !summary, !ascii.
+"""Per-stream limits of commands: !ask, !who, !versus, !summary, !ascii, !clip.
 
 Counted in bot_uses under the command's own kind since the stream start, so a restart
 resets nothing; offline, where the session is a date, the window is 24 hours.

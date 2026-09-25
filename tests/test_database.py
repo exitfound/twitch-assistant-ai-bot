@@ -171,7 +171,7 @@ async def test_another_writer_does_not_commit_a_half_done_transaction(db):
 
 async def test_a_failed_commit_does_not_block_every_later_write(db, monkeypatch):
     """A commit that raises (a full or broken volume) left the transaction open, and every
-    later BEGIN failed: the bot went deaf while the heartbeat kept it «healthy»."""
+    later BEGIN failed: the bot went deaf while its process kept running."""
     real_commit = db.commit
     calls = []
 

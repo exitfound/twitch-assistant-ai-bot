@@ -14,7 +14,7 @@ from twitchio.ext import commands
 from src.core.commands import (
     CommandContext, CommandEntry, CommandRegistry, Kind, Role,
 )
-from src.core.config import Cooldown, Follow, Picture, Quota
+from src.core.config import Clip, Cooldown, Follow, Picture, Quota
 from src.core.content import Content
 from src.core.database import (
     count_bot_uses, count_channel_bot_uses, oldest_bot_use_age, record_bot_use,
@@ -28,6 +28,7 @@ from src.gemini.commands import (
     handle_ask, handle_default, handle_summary, handle_versus, handle_who,
 )
 from src.gemini.picture.command import handle_ascii
+from src.local.clip import handle_clip
 from src.local.commands import handle_help, handle_stats
 from src.local.follow import handle_follow
 from src.local.roll.command import handle_roll, handle_rollstat
@@ -44,6 +45,7 @@ VERSUS_TRIGGER = '!versus'
 ROLL_TRIGGER = '!roll'
 ROLLSTAT_TRIGGER = '!rollstat'
 ASCII_TRIGGER = '!ascii'
+CLIP_TRIGGER = '!clip'
 
 # Cooldown scope for the «follow the channel» hint: so the bot does not repeat it
 # on every message of a non-following viewer
@@ -154,12 +156,15 @@ class ChatComponent(commands.Component):
         add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=Kind.GEMINI)
         add(WHO_TRIGGER,       handle_who,       prefix=True, kind=Kind.GEMINI)
         add(VERSUS_TRIGGER,    handle_versus,    prefix=True, kind=Kind.GEMINI)
-        add(ASK_TRIGGER,       handle_ask,       prefix=True, kind=Kind.GEMINI)
+        add(ASK_TRIGGER,       handle_ask,       prefix=True, kind=Kind.GEMINI,
+            role=Role.SUB_VIP_MOD_BROADCASTER)
         if Picture.ENABLED:
             # A disabled feature must not linger as a command that silently
             # does nothing: it simply does not exist
             add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI,
                 role=Role.SUB_VIP_MOD_BROADCASTER)
+        if Clip.ENABLED:
+            add(CLIP_TRIGGER,  handle_clip,  prefix=True, role=Role.SUB_VIP_MOD_BROADCASTER)
 
     def _repeated(self, message_id: str) -> bool:
         """True for a message already seen; no await, so two deliveries cannot both pass."""

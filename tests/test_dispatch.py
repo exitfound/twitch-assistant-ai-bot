@@ -44,6 +44,17 @@ def component():
     return ChatComponent(FakeBot())
 
 
+async def test_ask_is_closed_to_a_viewer_without_badges(db, monkeypatch):
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    component = ChatComponent(FakeBot())
+    handler = AsyncMock()
+    monkeypatch.setattr(component._registry.resolve('!ask'), 'handler', handler)
+    message = make_message('!ask вопрос')
+    await component.event_message(message)
+    handler.assert_not_awaited()
+    message.respond.assert_awaited_once_with('texts.role_denied_sub')
+
+
 @pytest.mark.parametrize(('text', 'handler'), [
     ('!help-bot', handle_help),
     ('!stat', handle_stats),
@@ -141,11 +152,10 @@ async def test_two_quick_messages_start_one_generation(db, monkeypatch):
     first await after its check, or both messages pass it."""
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     component = ChatComponent(FakeBot())
-    entry = component._registry.resolve('!ask')
     handler = AsyncMock()
-    monkeypatch.setattr(entry, 'handler', handler)
+    monkeypatch.setattr('src.core.component.handle_default', handler)
 
-    first, second = make_message('!ask раз'), make_message('!ask два')
+    first, second = make_message('сосурян раз'), make_message('сосурян два')
     await asyncio.gather(component.event_message(first), component.event_message(second))
 
     assert handler.await_count == 1
@@ -192,7 +202,7 @@ async def test_a_failing_quota_check_gives_the_cooldown_back(db, monkeypatch):
     component = ChatComponent(bot)
     monkeypatch.setattr('src.core.component.count_channel_bot_uses', AsyncMock(side_effect=RuntimeError('db')))
     with pytest.raises(RuntimeError):
-        await component.event_message(make_message('!ask раз'))
+        await component.event_message(make_message('сосурян раз'))
     assert bot.cooldown_remaining('viewer', Kind.GEMINI) == 0
 
 
@@ -202,5 +212,7 @@ async def test_quota_refusal_gives_the_cooldown_back(db, monkeypatch):
     await record_bot_use('viewer', Kind.GEMINI)
     bot = FakeBot()
     component = ChatComponent(bot)
-    await component.event_message(make_message('!ask раз'))
+    message = make_message('сосурян раз')
+    await component.event_message(message)
+    message.respond.assert_awaited_once_with('texts.quota_exceeded')
     assert bot.cooldown_remaining('viewer', Kind.GEMINI) == 0

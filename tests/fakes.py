@@ -23,7 +23,7 @@ def make_message(text: str, chatter: SimpleNamespace | None = None, *, reply=Non
 
 
 class FakeBot:
-    """The part of Bot that handlers touch: session, stream state, cooldowns, sending."""
+    """The part of Bot that handlers touch: session, stream state, cooldowns, sending, clips."""
 
     def __init__(self, *, session_id: str = '2026-09-22 20:00', stream_live: bool = True) -> None:
         self.session_id = session_id
@@ -32,6 +32,7 @@ class FakeBot:
         self.bot_name = 'sosuryan_bot'
         self.rewards_active = False
         self.send_chat_message = AsyncMock(return_value=True)
+        self.create_clip = AsyncMock(return_value='https://clips.twitch.tv/FakeClip')
         self._cooldowns: dict[str, float] = {}
 
     def cooldown_remaining(self, user: str, scope: str) -> float:

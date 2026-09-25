@@ -30,7 +30,7 @@ from src.core.config import Gemini
 from src.gemini import client, commands
 from src.gemini.memory import build
 from src.gemini.picture import command as picture_command
-from src.local import help_announce
+from src.local import clip, help_announce
 from src.local.roll import game, perks
 
 def content_text() -> str:
@@ -66,7 +66,7 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(game, '_lock', asyncio.Lock())
     monkeypatch.setattr(build, '_slots', asyncio.Semaphore(build.MEMORY_CONCURRENCY))
     monkeypatch.setattr(build, '_lock', asyncio.Lock())
-    for limit in [*commands.LIMITS.values(), picture_command.LIMIT]:
+    for limit in [*commands.LIMITS.values(), picture_command.LIMIT, clip.LIMIT]:
         monkeypatch.setattr(limit, 'busy', set())
     monkeypatch.setattr(picture_command, '_cache', collections.OrderedDict())
     monkeypatch.setattr(perks, '_pending', {})

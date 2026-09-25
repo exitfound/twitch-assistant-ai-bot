@@ -129,13 +129,11 @@ class Files:
     # Empty – the repository root (see src/core/paths.py); a container moves them to a volume
     DB: str | None = _env_raw('BOT_DB_PATH')
     CONTENT: str | None = _env_raw('BOT_CONTENT_PATH')
-    # Liveness file for the container healthcheck. Empty – no heartbeat
-    HEARTBEAT: str | None = _env_raw('BOT_HEARTBEAT')
 
 
 class Clock:
-    # One zone for session ids and memory keys, whatever zone the process runs in:
-    # the container, the host CLI and make oauth must name sessions alike
+    # One zone for session ids, memory keys and log times, whatever zone the process runs
+    # in: the container, the host CLI and make oauth must name sessions alike
     ZONE: ZoneInfo = _env_zone('BOT_TIMEZONE', 'Europe/Moscow')
 
 
@@ -211,6 +209,13 @@ class Follow:
     HINT_MINUTES: int = _env_int('FOLLOW_HINT_MINUTES', 10, 1, 1440)
 
 
+class Ask:
+    # !ask per stream (offline – per 24 hours). The command is open from the subscriber
+    # badge up, like !ascii. The broadcaster is not limited, 0 – no limit
+    PER_STREAM_VIP: int = _env_int('ASK_PER_STREAM_VIP', 3, 0, 1000)
+    PER_STREAM_SUB: int = _env_int('ASK_PER_STREAM_SUB', 10, 0, 1000)
+
+
 class Summary:
     # !summary per stream (offline – per 24 hours), the current and the previous
     # stream counted together. The broadcaster is not limited. 0 – no limit
@@ -255,6 +260,27 @@ class Picture:
     # Show the picture to Gemini so it decides whether it may be drawn.
     # Better not to turn off: the link comes from a viewer
     CHECK: bool = _env_bool('PICTURE_CHECK', True)
+
+
+def _clip_lengths() -> tuple[int, int]:
+    shortest = _env_int('CLIP_MIN_SECONDS', 10, 5, 60)
+    default = _env_int('CLIP_DEFAULT_SECONDS', 30, 5, 60)
+    if default < shortest:
+        logger.warning('CLIP_DEFAULT_SECONDS=%s короче CLIP_MIN_SECONDS=%s, используется %s',
+                       default, shortest, shortest)
+        default = shortest
+    return shortest, default
+
+
+class Clip:
+    # !clip [секунды] [название]: the bot clips the last seconds of the stream, as its own
+    # account. Twitch takes 5 to 60 seconds; a viewer sees the stream a few seconds late,
+    # so a clip shorter than MIN_SECONDS tends to miss the moment
+    ENABLED: bool = _env_bool('CLIP_ENABLED', True)
+    MIN_SECONDS, DEFAULT_SECONDS = _clip_lengths()
+    # Clips per viewer per stream: the command is open from the subscriber badge up.
+    # The broadcaster is unlimited, 0 – no limit
+    PER_STREAM: int = _env_int('CLIP_PER_STREAM', 3, 0, 1000)
 
 
 class Stream:

@@ -3,7 +3,6 @@
 No database and no clock of their own – the time comes in as `now`, so each rule can be
 checked for any moment. game.py applies them under its lock.
 """
-import itertools
 import math
 import random
 import re
@@ -38,18 +37,34 @@ def parse_nick(raw: str) -> str | None:
     return nick if _NICK_RE.fullmatch(nick) else None
 
 
-def series_pause_left(ages: list[int], series: int, pause: int) -> int | None:
-    """Seconds until the next extra roll opens, or None if it is open now.
+def burst_pause_left(times: list[float], now: float, throws: int, window: int, pause: int) -> float | None:
+    """Seconds until a player who threw too fast may throw again, or None if they may now.
 
-    ages – seconds since the player's last extra rolls, newest first. The pause is due
-    only after a full series: `series` rolls, each within `pause` of the one before.
+    times – the player's last throws, newest first. Too fast is `throws` of them within
+    `window` seconds; the pause runs from the newest, so a refused attempt, which is
+    not a throw, does not stretch it.
     """
-    if len(ages) < series:
+    if len(times) < throws or times[0] - times[throws - 1] > window:
         return None
-    last = ages[:series]
-    if any(older - newer >= pause for newer, older in itertools.pairwise(last)):
+    left = pause - (now - times[0])
+    return left if left > 0 else None
+
+
+def window_left(times: list[float], now: float, limit: int, window: int) -> float | None:
+    """Seconds until a buyer who used up their window may buy again, or None if they may now.
+
+    times – their past purchases, oldest first. A window opens with the first purchase
+    and lasts `window` seconds; the first purchase after it opens the next one. Only
+    `limit` fit into a window.
+    """
+    start, count = None, 0
+    for moment in times:
+        if start is None or moment - start >= window:
+            start, count = moment, 0
+        count += 1
+    if start is None or count < limit:
         return None
-    left = pause - last[0]
+    left = window - (now - start)
     return left if left > 0 else None
 
 

@@ -8,8 +8,10 @@
 .claude/
 *.pyc
 *.log
-chat_history.db
-chat_history.db-*
+# Any database: --backup without a path writes chat_history.backup-<date>.db into the
+# repository root, and COPY . /app would bake the whole chat into the image
+*.db
+*.db-*
 data/
 logs/
 backups/

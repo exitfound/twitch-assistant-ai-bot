@@ -7,10 +7,10 @@ from src.core.commands import CommandContext
 from src.core.config import Caps, Chat, Emote
 from src.core.content import Content
 from src.core.database import save_bot_interaction
-from src.core.utils import reply
+from src.core.utils import find_banned, reply
 from src.gemini.output import (
-    caps_preserve_mentions, cleanup_response, find_banned, fix_dashes, is_caps,
-    split_into_chunks, strip_markdown, trim_to_sentence,
+    caps_preserve_mentions, cleanup_response, fix_dashes, is_caps,
+    split_into_chunks, strip_links, strip_markdown, trim_to_sentence,
     CHUNK_SEND_DELAY, TWITCH_MSG_MAX,
 )
 
@@ -107,16 +107,20 @@ async def _send_chunks(ctx: CommandContext, chunks: list[str], tag: str) -> list
 
 async def send_chunked(
     ctx: CommandContext, text: str | None, tag: str, max_chunks: int | None = None,
+    *, links: bool = True,
 ) -> bool:
     """A long answer: markdown is stripped, the text is split into chunks.
 
     max_chunks is the message cap for this command, CHAT_MAX_CHUNKS by default.
-    Returns whether anything reached chat.
+    links=False drops links: for a text built from other people's chat, where a viewer
+    could plant one for the bot to repeat. Returns whether anything reached chat.
     """
     if not text:
         await reply(ctx.message, Content.text('no_answer', user=ctx.user))
         return False
     text = fix_dashes(strip_markdown(text))
+    if not links:
+        text = strip_links(text)
     if not passes_moderation(text):
         await reply(ctx.message, Content.text('filtered', user=ctx.user))
         return False

@@ -14,13 +14,15 @@ import dataclasses
 import time
 from enum import StrEnum
 
-from src.core.config import Rewards, Roll
+from src.core.config import Rewards, Roll, Twitch
 from src.core.database import get_previous_stream_session, get_session_start, has_chatted, transaction
+from src.core.viewer import Tier, by_tier
 from src.local.roll import rules
 from src.local.roll.storage import (
     RollRow, activate_perks, add_perk, consume_perk, get_action_status, get_expired_curses,
     get_last_roll_session_before, get_perk, get_roll, get_session_champion, get_session_loser,
-    save_action, save_roll, seconds_since_action, seconds_since_actions, set_curse,
+    count_actions, get_tier, last_throws, reroll_times, save_action, save_roll, save_throw, seconds_since_action,
+    set_curse, set_tier,
 )
 
 class Action(StrEnum):
@@ -43,7 +45,11 @@ class Status(StrEnum):
     OK = 'ok'
     NO_FREE_LEFT = 'no_free_left'           # !roll: free throws are used up
     FREE_LEFT = 'free_left'                 # extra roll bought while free throws are still left
-    EXTRA_PAUSE = 'extra_pause'             # extra roll right after a full series of them
+    TOO_FAST = 'too_fast'                   # a throw of your own right after a burst of them
+    REROLL_LIMIT = 'reroll_limit'           # the buyer's rerolls for this window are used up
+    SHIELD_LIMIT = 'shield_limit'           # the buyer's shields for this stream are used up
+    CURSE_LIMIT = 'curse_limit'             # the buyer's curses for this stream are used up
+    CLEANSE_LIMIT = 'cleanse_limit'         # the buyer's cleanses for this stream are used up
     BAD_TARGET = 'bad_target'               # the reward input is not a nick
     EXTRA_WORDS = 'extra_words'             # the reward input holds more than one word
     SELF_TARGET = 'self_target'             # rerolling or cursing yourself
@@ -76,6 +82,7 @@ class Outcome:
     next_ceiling: int | None = None         # ceiling of the next one
     curse_minutes_left: int | None = None   # ceiling on the floor: minutes until it lifts
     protect_minutes_left: int | None = None # protection after a reroll: minutes left
+    limit: int | None = None                # rerolls per window, other rewards per stream
 
     @property
     def ok(self) -> bool:
@@ -109,6 +116,7 @@ def _thrown(target: str, old_value: int | None, throw: Throw, standings: Standin
 
 async def _throw_for(
     session_id: str, user: str, row: RollRow | None, *, free_throw: bool, limit: int | None = None,
+    tier: str | None = None,
 ) -> Throw:
     """A throw on a player's row – their own or someone else's reroll.
 
@@ -124,11 +132,11 @@ async def _throw_for(
             curse = (Rewards.CURSE_CEILING, None)
     if curse is None:
         value = rules.throw()
-        await save_roll(session_id, user, value, free_throw=free_throw, limit=limit)
+        await save_roll(session_id, user, value, free_throw=free_throw, limit=limit, tier=tier)
         return Throw(value)
     ceiling, floor_at = curse
     value = rules.throw(ceiling)
-    await save_roll(session_id, user, value, free_throw=free_throw, limit=limit)
+    await save_roll(session_id, user, value, free_throw=free_throw, limit=limit, tier=tier)
     now = time.time()
     next_ceiling, floor_at = rules.lowered(ceiling, floor_at, now)
     await set_curse(session_id, user, next_ceiling, floor_at, until)
@@ -217,7 +225,7 @@ async def appear(session_id: str, user: str) -> list[str]:
 # --- operations --------------------------------------------------------------
 
 async def free_throw(
-    session_id: str, user: str, *, limit: int, unlimited: bool = False,
+    session_id: str, user: str, *, limit: int, unlimited: bool = False, tier: str | None = None,
 ) -> Outcome:
     """A free !roll: no more than limit per session.
 
@@ -225,13 +233,21 @@ async def free_throw(
     stored in the player's row, because a reward redemption arrives without badges.
     unlimited (broadcaster) still counts the throw, so the paid extra roll behaves the
     same for them, and free_left is None since there is no remainder to mention.
+    tier – the badges of this !roll, stored for the rerolls the player may buy.
     """
     async with _lock, transaction():
         row = await get_roll(session_id, user)
+        if row is not None and tier is not None:
+            # Before any refusal: a viewer who subscribed mid-stream gets the wider
+            # reroll limit even if this throw is refused
+            await set_tier(session_id, user, tier)
         used = row.free_throws if row else 0
         if not unlimited and used >= limit:
             return Outcome(Status.NO_FREE_LEFT, target=user, free_left=0)
-        throw = await _throw_for(session_id, user, row, free_throw=True, limit=limit)
+        if not unlimited and (wait := await _burst_minutes_left(session_id, user)):
+            return Outcome(Status.TOO_FAST, target=user, protect_minutes_left=wait)
+        throw = await _throw_for(session_id, user, row, free_throw=True, limit=limit, tier=tier)
+        await save_throw(session_id, user, time.time())
         standings = await _standings(session_id)
     return _thrown(user, row.value if row else None, throw, standings,
                    free_left=None if unlimited else max(0, limit - used - 1))
@@ -333,16 +349,31 @@ async def _extra(session_id: str, actor: str) -> Outcome:
     if used < limit:
         # Points for a throw that is free anyway are almost certainly a misclick
         return Outcome(Status.FREE_LEFT, target=actor, free_left=limit - used)
-    ages = await seconds_since_actions(session_id, Action.EXTRA, actor, Status.OK, Rewards.EXTRA_SERIES)
-    wait = rules.series_pause_left(ages, Rewards.EXTRA_SERIES, Rewards.EXTRA_PAUSE_MINUTES * 60)
-    if wait is not None:
-        return Outcome(Status.EXTRA_PAUSE, target=actor, protect_minutes_left=rules.whole_minutes(wait))
+    # A redemption carries no badges: the broadcaster is known by the channel's login
+    if actor != (Twitch.CHANNEL or '').lower() and (wait := await _burst_minutes_left(session_id, actor)):
+        return Outcome(Status.TOO_FAST, target=actor, protect_minutes_left=wait)
     throw = await _throw_for(session_id, actor, row, free_throw=False)
+    await save_throw(session_id, actor, time.time())
     return _thrown(actor, row.value if row else None, throw, await _standings(session_id))
 
 
+async def _burst_minutes_left(session_id: str, user: str) -> int | None:
+    """Whole minutes the player waits after throwing too fast. None – they may throw now.
+
+    Free !roll and paid extra rolls count together: Twitch has no per-viewer cooldown
+    on a reward, and subscribers have no cooldown on !roll.
+    """
+    times = await last_throws(session_id, user, Roll.BURST_THROWS)
+    wait = rules.burst_pause_left(times, time.time(), Roll.BURST_THROWS, Roll.BURST_SECONDS,
+                                  Roll.BURST_PAUSE_MINUTES * 60)
+    return rules.whole_minutes(wait) if wait is not None else None
+
+
 async def _shield(session_id: str, actor: str) -> Outcome:
-    left = await _shield_left(session_id, actor)
+    if limit := await _stream_limit_reached(session_id, actor, Action.SHIELD):
+        return Outcome(Status.SHIELD_LIMIT, target=actor, limit=limit)
+    # The champion's shield counts too: a second one on top of it would add nothing
+    left = await _shield_left(session_id, actor) or await _perk_shield_left(session_id, actor)
     if left is not None:
         return Outcome(Status.ALREADY_SHIELDED, target=actor, protect_minutes_left=left)
     return Outcome(Status.OK, target=actor)
@@ -406,6 +437,12 @@ async def _protection_left(session_id: str, target: str) -> int | None:
 
 
 async def _reroll(session_id: str, actor: str, user_input: str) -> Outcome:
+    limit = await _buyer_limit(session_id, actor)
+    if limit is not None:
+        wait = rules.window_left(await reroll_times(session_id, actor), time.time(), limit,
+                                 Rewards.REROLL_WINDOW_MINUTES * 60)
+        if wait is not None:
+            return Outcome(Status.REROLL_LIMIT, protect_minutes_left=rules.whole_minutes(wait), limit=limit)
     found = await _target(session_id, actor, user_input, require_roll=False)
     if isinstance(found, Outcome):
         return found
@@ -425,7 +462,34 @@ async def _reroll(session_id: str, actor: str, user_input: str) -> Outcome:
     return _thrown(target, row.value if row else None, throw, await _standings(session_id))
 
 
+async def _stream_limit_reached(session_id: str, actor: str, action: str) -> int | None:
+    """The buyer's limit for this action per stream once it is used up, None – they may buy.
+
+    Only successful purchases count: a refused one gave the points back.
+    """
+    limit = await _buyer_limit(session_id, actor)
+    if limit is not None and await count_actions(session_id, actor, action) >= limit:
+        return limit
+    return None
+
+
+async def _buyer_limit(session_id: str, actor: str) -> int | None:
+    """How many rerolls per window, or shields, curses and cleanses per stream, the buyer
+    may make, None – no limit (the broadcaster).
+
+    A redemption carries no badges: the status is the one their last !roll stored, and
+    a buyer who has not rolled this session counts as a follower.
+    """
+    if actor == (Twitch.CHANNEL or '').lower():
+        return None
+    tier = await get_tier(session_id, actor) or Tier.REGULAR
+    return by_tier(Tier(tier), sub=Rewards.LIMIT_SUB, vip=Rewards.LIMIT_VIP,
+                   regular=Rewards.LIMIT_FOLLOWER, broadcaster=None)
+
+
 async def _curse(session_id: str, actor: str, user_input: str) -> Outcome:
+    if limit := await _stream_limit_reached(session_id, actor, Action.CURSE):
+        return Outcome(Status.CURSE_LIMIT, limit=limit)
     found = await _target(session_id, actor, user_input, require_roll=True)
     if isinstance(found, Outcome):
         return found
@@ -454,6 +518,8 @@ async def _cleanse(session_id: str, actor: str, user_input: str) -> Outcome:
     The previous stream's loser curse not laid yet is cancelled too, or it would land
     on the next throw. The target may be the buyer.
     """
+    if limit := await _stream_limit_reached(session_id, actor, Action.CLEANSE):
+        return Outcome(Status.CLEANSE_LIMIT, limit=limit)
     found = await _target(session_id, actor, user_input, require_roll=False, allow_self=True)
     if isinstance(found, Outcome):
         return found

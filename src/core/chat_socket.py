@@ -84,7 +84,8 @@ class SocketWatch:
 
     def __init__(self, bot: commands.Bot, name: str, token_for: Callable[[], str | None],
                  sub_type: str, owned: frozenset[str], subscribe: Callable[[], Awaitable[None]],
-                 active: Callable[[], bool]) -> None:
+                 active: Callable[[], bool],
+                 on_failure: Callable[[Exception], Awaitable[bool]] | None = None) -> None:
         self._bot = bot
         self._name = name               # for the log: «чат», «награды»
         self._token_for = token_for     # the key of the feed's sockets in twitchio's registry
@@ -92,7 +93,14 @@ class SocketWatch:
         self._owned = owned | {sub_type}    # every type subscribe() creates
         self._subscribe = subscribe     # subscribes the feed anew
         self._active = active           # False while shutting down or before the feed started
+        # Told of a failed resubscription; True – it handled the error (a dead token)
+        self._on_failure = on_failure
         self._lock = asyncio.Lock()
+        # The last attempt failed: only the minute check retries. A failed attempt closes
+        # its own socket, and retrying on that close would turn into a loop
+        self._failed = False
+        # A close check is already waiting: a burst of closes makes one attempt, not one each
+        self._close_pending = False
 
     def _sockets(self) -> list[Websocket]:
         return list(self._bot._websockets.get(self._token_for() or '', {}).values())
@@ -138,17 +146,26 @@ class SocketWatch:
         """A socket closed. Fired for every close, a normal reconnect included; a socket
         that is reconnecting still counts, so this only speeds up the watch when the
         subscription was really lost."""
-        if not self._active():
+        if not self._active() or self._failed or self._close_pending:
             return
-        await asyncio.sleep(CLOSED_GRACE_SECONDS)
+        self._close_pending = True
+        try:
+            await asyncio.sleep(CLOSED_GRACE_SECONDS)
+        finally:
+            self._close_pending = False
         await self._try_revive()
 
     async def _try_revive(self) -> None:
         try:
             await self.revive()
         except Exception as e:
+            self._failed = True
+            if self._on_failure is not None and await self._on_failure(e):
+                return
             # Twitch or the network is still down: the next check tries again
             logger.warning('Переподписка «%s» не удалась: %s', self._name, e)
+        else:
+            self._failed = False
 
 
 async def _close(socket: Websocket) -> None:

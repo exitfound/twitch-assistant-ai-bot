@@ -21,20 +21,20 @@ async def _noop(ctx):
 
 class TestCommandEntry:
     def test_exact_entry_matches_only_itself(self):
-        entry = CommandEntry('!roll', _noop, prefix=False, role=None, kind='local')
+        entry = CommandEntry('!roll', _noop, prefix=False, kind='local')
         assert entry.match('!roll')
         assert not entry.match('!roll 5')
         assert entry.extract_args('!roll') == ''
 
     def test_prefix_entry_needs_a_word_boundary(self):
-        entry = CommandEntry('!who', _noop, prefix=True, role=None, kind='local')
+        entry = CommandEntry('!who', _noop, prefix=True, kind='local')
         assert entry.match('!who')
         assert entry.match('!who nick')
         assert not entry.match('!whoever')
 
     @pytest.mark.parametrize('prompt', ['!ask: вопрос', '!ask:вопрос', '!ask, вопрос', '!ask вопрос'])
     def test_separators_before_args(self, prompt):
-        entry = CommandEntry('!ask', _noop, prefix=True, role=None, kind='local')
+        entry = CommandEntry('!ask', _noop, prefix=True, kind='local')
         assert entry.match(prompt)
         assert entry.extract_args(prompt) == 'вопрос'
 
@@ -44,15 +44,81 @@ def component():
     return ChatComponent(FakeBot())
 
 
-async def test_ask_is_closed_to_a_viewer_without_badges(db, monkeypatch):
+@pytest.mark.parametrize('text', ['!ask вопрос', '!who nick', '!versus a b', '!summary'])
+async def test_per_stream_commands_are_open_to_a_follower(db, monkeypatch, text):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     component = ChatComponent(FakeBot())
     handler = AsyncMock()
-    monkeypatch.setattr(component._registry.resolve('!ask'), 'handler', handler)
-    message = make_message('!ask вопрос')
+    monkeypatch.setattr(component._registry.resolve(text), 'handler', handler)
+    message = make_message(text)
     await component.event_message(message)
+    handler.assert_awaited_once()
+
+
+# --- follow gate ---------------------------------------------------------------
+
+@pytest.fixture
+def gated(monkeypatch):
+    """A component with the follow requirement on and !stat's handler replaced by a mock."""
+    monkeypatch.setattr(Follow, 'REQUIRED', True)
+    bot = FakeBot()
+    component = ChatComponent(bot)
+    handler = AsyncMock()
+    monkeypatch.setattr(component._registry.resolve('!stat'), 'handler', handler)
+    return component, bot, handler
+
+
+async def test_a_viewer_who_does_not_follow_is_refused_once(db, gated):
+    """The hint repeats at most once per FOLLOW_HINT_MINUTES: command spam must not turn
+    into refusal spam."""
+    component, bot, handler = gated
+    bot.follows = False
+    first, second = make_message('!stat', make_chatter('gop')), make_message('!stat', make_chatter('gop'))
+    await component.event_message(first)
+    await component.event_message(second)
     handler.assert_not_awaited()
-    message.respond.assert_awaited_once_with('texts.role_denied_sub')
+    first.respond.assert_awaited_once_with('texts.follow_required')
+    second.respond.assert_not_awaited()
+
+
+async def test_a_follower_passes_and_is_cached(db, gated):
+    component, bot, handler = gated
+    await component.event_message(make_message('!stat', make_chatter('gop')))
+    handler.assert_awaited_once()
+    # The check comes before the cooldown, so a repeat within it still asks the cache
+    await component.event_message(make_message('!stat', make_chatter('gop')))
+    assert bot.follow_checks == 1
+
+
+async def test_a_new_follow_is_not_held_back_by_the_cache(db, gated):
+    """A viewer refused a minute ago follows: event_follow drops the cached «no»."""
+    component, bot, handler = gated
+    bot.follows = False
+    await component.event_message(make_message('!stat', make_chatter('gop')))
+    bot.follows = True
+    component._followers.forget('id-gop')
+    await component.event_message(make_message('!stat', make_chatter('gop')))
+    handler.assert_awaited_once()
+
+
+async def test_a_helix_error_lets_the_viewer_in(db, gated):
+    """A silent Twitch must not lock the chat out of the bot."""
+    component, bot, handler = gated
+    bot.follows = RuntimeError('helix down')
+    await component.event_message(make_message('!stat', make_chatter('gop')))
+    handler.assert_awaited_once()
+
+
+async def test_badges_and_help_skip_the_follow_check(db, gated, monkeypatch):
+    component, bot, handler = gated
+    bot.follows = False
+    await component.event_message(make_message('!stat', make_chatter('vip', vip=True)))
+    handler.assert_awaited_once()
+    help_handler = AsyncMock()
+    monkeypatch.setattr(component._registry.resolve('!help-bot'), 'handler', help_handler)
+    await component.event_message(make_message('!help-bot', make_chatter('gop')))
+    help_handler.assert_awaited_once()
+    assert bot.follow_checks == 0
 
 
 @pytest.mark.parametrize(('text', 'handler'), [
@@ -214,5 +280,5 @@ async def test_quota_refusal_gives_the_cooldown_back(db, monkeypatch):
     component = ChatComponent(bot)
     message = make_message('сосурян раз')
     await component.event_message(message)
-    message.respond.assert_awaited_once_with('texts.quota_exceeded')
+    message.respond.assert_awaited_once_with('texts.quota_exceeded texts.sub_hint')
     assert bot.cooldown_remaining('viewer', Kind.GEMINI) == 0

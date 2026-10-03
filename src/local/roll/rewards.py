@@ -11,6 +11,7 @@ A redemption is handled at once: the bot applies the reward and immediately fulf
 it or cancels it with a refund. Neither the streamer nor the viewer has to click
 anything. While the bot is off, the rewards are paused.
 """
+import asyncio
 import dataclasses
 import datetime
 import logging
@@ -58,7 +59,9 @@ class RewardSpec:
         return Content.text(
             f'reward_{self.action}_prompt', ceiling=Rewards.CURSE_CEILING,
             protect=Rewards.REROLL_PROTECT_MINUTES, cleanse_protect=Rewards.CLEANSE_PROTECT_MINUTES,
-            shield=Rewards.SHIELD_MINUTES, series=Rewards.EXTRA_SERIES, pause=Rewards.EXTRA_PAUSE_MINUTES,
+            shield=Rewards.SHIELD_MINUTES, throws=Roll.BURST_THROWS, pause=Roll.BURST_PAUSE_MINUTES,
+            window=Rewards.REROLL_WINDOW_MINUTES, follower=Rewards.LIMIT_FOLLOWER,
+            vip=Rewards.LIMIT_VIP, sub=Rewards.LIMIT_SUB,
             max=Roll.MAX, **curse_values(),
         )[:PROMPT_MAX]
 
@@ -102,32 +105,35 @@ class RewardService:
         # even before start() finishes, so a stream starting mid-start is not lost
         self._open = False
         self.active = False
+        # start() comes from event_ready, a new login and the retry after a failure:
+        # two at once would both find a reward missing and create it twice
+        self._starting = asyncio.Lock()
 
     async def start(self, channel_id: str, *, open_: bool) -> None:
         """Create or update the rewards, subscribe, settle stale redemptions.
 
         open_ – whether the stream is live. Offline the game is closed and rewards stay paused.
         """
-        if self.active:
-            return
-        self._channel_id = channel_id
-        self._open = open_
-        # Anything redeemed before the subscription will never arrive as an event
-        started = datetime.datetime.now(datetime.UTC)
-        await self._sync()
-        await self._subscribe()
-        self.active = True
+        async with self._starting:
+            if self.active:
+                return
+            self._channel_id = channel_id
+            self._open = open_
+            # Anything redeemed before the subscription will never arrive as an event
+            started = datetime.datetime.now(datetime.UTC)
+            await self._sync()
+            await self._subscribe()
+            self.active = True
         # The subscription is live from here: a failure below is logged, not raised, or
         # the service would stay half-started with no retry on reconnect
-        try:
-            await self._set_paused(not self._open)
+        if await self._set_paused(not self._open):
             logger.info(
                 'Награды за баллы канала подключены (%s): %s',
                 'эфир идёт' if self._open else 'на паузе до начала эфира',
                 ', '.join(s.title for s in _specs()),
             )
-        except Exception:
-            logger.exception('Награды подключены, но паузу выставить не удалось')
+        else:
+            logger.warning('Награды подключены, но паузу выставить удалось не всем')
         try:
             await self._settle_stale(started)
         except Exception:
@@ -157,11 +163,15 @@ class RewardService:
         if not self.active:
             return
         self.active = False
-        try:
-            await self._set_paused(True)
+        if await self._set_paused(True):
             logger.info('Награды за баллы канала поставлены на паузу')
-        except Exception:
-            logger.exception('Не удалось поставить награды на паузу')
+
+    def drop(self) -> None:
+        """The channel's token is gone: stop without touching Twitch, which would refuse.
+
+        start() brings the service back once a new token arrives.
+        """
+        self.active = False
 
     async def set_open(self, open_: bool) -> None:
         """The stream started or ended: unpause the rewards or pause them.
@@ -171,11 +181,8 @@ class RewardService:
         self._open = open_
         if not self.active:
             return
-        try:
-            await self._set_paused(not open_)
+        if await self._set_paused(not open_):
             logger.info('Награды за баллы канала %s', 'сняты с паузы' if open_ else 'на паузе до начала эфира')
-        except Exception:
-            logger.exception('Не удалось переключить паузу наград')
 
     async def on_redemption(self, payload: twitchio.ChannelPointsRedemptionAdd) -> None:
         action = self._actions.get(payload.reward.id)
@@ -220,10 +227,29 @@ class RewardService:
             actions[reward.id] = spec.action
         self._actions = actions
 
-    async def _set_paused(self, paused: bool) -> None:
+    async def _set_paused(self, paused: bool) -> bool:
+        """Pause or unpause every reward; True – all of them. Never raises.
+
+        One failing reward does not stop the rest: otherwise a reward deleted by hand
+        would leave the ones after it open offline or paused on stream. A deleted one
+        (404) is forgotten until the next start, which creates it again.
+        """
         broadcaster = self._broadcaster()
-        for reward_id in self._actions:
-            await broadcaster.update_custom_reward(reward_id, paused=paused)
+        done = True
+        for reward_id, action in list(self._actions.items()):
+            try:
+                await broadcaster.update_custom_reward(reward_id, paused=paused)
+            except twitchio.HTTPException as e:
+                if e.status == 404:
+                    logger.warning('Награда %s удалена на Twitch – без неё до перезапуска', action)
+                    self._actions.pop(reward_id, None)
+                    continue
+                logger.warning('Награда %s: пауза не переключилась: %s', action, e)
+                done = False
+            except Exception as e:
+                logger.warning('Награда %s: пауза не переключилась: %r', action, e)
+                done = False
+        return done
 
     async def _set_status(self, reward_id: str, redemption_id: str, status: str) -> None:
         # CustomRewardRedemption.fulfill() in twitchio 3.x sends the channel id

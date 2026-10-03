@@ -1,6 +1,7 @@
 """Schema, quotas and the chat queries in src/core/db/, on a temporary database."""
 import asyncio
 import contextlib
+import sqlite3
 
 import pytest
 
@@ -10,9 +11,9 @@ from src.core.database import (
     get_user_interactions, has_chatted, init_db, record_bot_use, save_bot_interaction,
     save_chat_message, search_context, transaction,
 )
-from src.core.db import schema
+from src.core.db import connection, schema
 from src.core.db.knowledge import _sanitize_fts_query
-from src.local.roll.storage import save_roll
+from src.local.roll.storage import get_session_loser, save_roll
 
 
 async def _tables(db) -> set[str]:
@@ -35,9 +36,37 @@ async def test_schema_has_every_table(db):
     tables = await _tables(db)
     for name in ('chat_messages', 'bot_uses', 'bot_interactions', 'facts', 'chronicles',
                  'chatter_events', 'memory_state', 'chatter_profiles', 'knowledge', 'rolls',
-                 'rewards', 'roll_actions', 'streams', 'roll_perks', 'chat_fts', 'knowledge_fts',
-                 'idx_bot_uses_user_time'):
+                 'rewards', 'roll_actions', 'streams', 'roll_perks', 'roll_throws', 'chat_fts',
+                 'knowledge_fts', 'idx_bot_uses_user_time', 'idx_roll_throws_user'):
         assert name in tables
+
+
+async def test_an_old_game_table_is_brought_up_to_date(monkeypatch, tmp_path):
+    """init_db() runs against the live database: rolls from before the status column and
+    no roll_throws table gain both, twice over without harm, and the old rows keep their
+    place. An old rolled_at, to the second, still loses a tie to a newer one with milliseconds."""
+    path = tmp_path / 'old.db'
+    old = sqlite3.connect(path)
+    old.execute('CREATE TABLE rolls (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,'
+                ' username TEXT NOT NULL, roll_value INTEGER NOT NULL,'
+                ' rolled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(session_id, username))')
+    old.execute("INSERT INTO rolls (session_id, username, roll_value) VALUES ('s', 'old', 42)")
+    old.commit()
+    old.close()
+    monkeypatch.setattr(connection, 'DB_PATH', path)
+    try:
+        await init_db()
+        await init_db()
+        db = await database.get_db()
+        async with db.execute('PRAGMA table_info(rolls)') as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        assert {'free_throws', 'free_limit', 'tier', 'curse_ceiling'} <= columns
+        assert {'roll_throws', 'idx_roll_throws_user'} <= await _tables(db)
+        assert await get_session_loser('s') == ('old', 42)
+        await save_roll('s', 'new', 42, free_throw=True)
+        assert await get_session_loser('s') == ('new', 42)
+    finally:
+        await database.close_db()
 
 
 def test_fts_query_is_sanitized():

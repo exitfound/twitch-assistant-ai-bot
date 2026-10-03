@@ -1,15 +1,13 @@
 """Commands that call Gemini."""
-import functools
 import logging
 
 
 from src.core.commands import CommandContext
-from src.core.config import Ask, Gemini, Summary, Who
+from src.core.config import Gemini
 from src.core.content import Content
 from src.core.database import get_last_tagged_interaction
 from src.core.limits import PerStreamLimit
 from src.core.utils import clean_nick, reply, reply_to_bot
-from src.core.viewer import by_tier, tier_of
 from src.gemini import summary, who
 from src.gemini.answer_context import Question, answer
 from src.gemini.client import generate, make_gen_config
@@ -94,30 +92,18 @@ async def handle_summary(ctx: CommandContext) -> None:
             await ctx.refuse()
             await reply(ctx.message, Content.text(empty, user=ctx.user))
             return False
-        return await send_chunked(ctx, result[0], tag)
+        # The summary retells the chat, so a link in it is one a viewer planted there
+        return await send_chunked(ctx, result[0], tag, links=False)
 
     await LIMITS[summary.KIND].run(ctx, run)
 
 
-# Per-stream limits of !ask, !who, !versus and !summary: kind → (follower, VIP, subscriber
-# or moderator), 0 – unlimited. The broadcaster is never limited; a subscribing VIP
-# counts as a subscriber. A follower never reaches !ask: the dispatcher lets in badges only
-def _limit_for(kind: str, chatter) -> int:
-    follower, vip, sub = {
-        ASK_KIND: (Ask.PER_STREAM_VIP, Ask.PER_STREAM_VIP, Ask.PER_STREAM_SUB),
-        who.WHO_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
-        who.VERSUS_KIND: (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB),
-        summary.KIND: (Summary.PER_STREAM_FOLLOWER, Summary.PER_STREAM_VIP, Summary.PER_STREAM_SUB),
-    }[kind]
-    return by_tier(tier_of(chatter), broadcaster=0, sub=sub, vip=vip, regular=follower)
-
-
-# One limit per command. The limit function reads the config on every call
+# One limit per command, all on the same ladder (limit_for() in src/core/limits.py)
 LIMITS = {
-    ASK_KIND: PerStreamLimit(ASK_KIND, functools.partial(_limit_for, ASK_KIND), 'ask_error'),
-    who.WHO_KIND: PerStreamLimit(who.WHO_KIND, functools.partial(_limit_for, who.WHO_KIND), 'gen_failed'),
-    who.VERSUS_KIND: PerStreamLimit(who.VERSUS_KIND, functools.partial(_limit_for, who.VERSUS_KIND), 'gen_failed'),
-    summary.KIND: PerStreamLimit(summary.KIND, functools.partial(_limit_for, summary.KIND), 'summary_error'),
+    ASK_KIND: PerStreamLimit(ASK_KIND, 'ask_error'),
+    who.WHO_KIND: PerStreamLimit(who.WHO_KIND, 'gen_failed'),
+    who.VERSUS_KIND: PerStreamLimit(who.VERSUS_KIND, 'gen_failed'),
+    summary.KIND: PerStreamLimit(summary.KIND, 'summary_error'),
 }
 
 

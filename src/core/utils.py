@@ -63,6 +63,17 @@ def defuse(text: str) -> str:
     return text.lstrip('/.').lstrip()
 
 
+def find_banned(text: str, banned: list[str]) -> str | None:
+    """The first stop-list word found in the text, or None."""
+    if not banned:
+        return None
+    lowered = text.lower()
+    for word in banned:
+        if word.lower() in lowered:
+            return word
+    return None
+
+
 def safe_format(template: str, **values) -> str:
     """Fill a template from the file. A broken template does not crash the handler."""
     try:

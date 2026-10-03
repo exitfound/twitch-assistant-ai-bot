@@ -10,6 +10,16 @@ async def save_bot_interaction(session_id: str, username: str, user_message: str
         )
 
 
+async def was_greeted(username: str) -> bool:
+    """Whether the bot has ever thanked this viewer for a follow."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT 1 FROM bot_interactions WHERE username = ? AND user_message = '[follow]' LIMIT 1",
+        (username,),
+    ) as cursor:
+        return await cursor.fetchone() is not None
+
+
 async def get_last_tagged_interaction(
     username: str, tag: str, window_minutes: int,
 ) -> tuple[str, str] | None:

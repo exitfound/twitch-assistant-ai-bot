@@ -19,7 +19,7 @@ from src.core.stream import StreamTracker, watch_stream
 from src.core.tasks import BackgroundTasks
 from src.core.tokens import (
     OAUTH_SCOPES, OAUTH_SCOPES_FOLLOWS, add_bot_token, add_broadcaster_token, oauth_link, store_tokens,
-    token_problem,
+    token_dead, token_problem,
 )
 from src.core.utils import defuse
 from src.gemini.memory import build as memory
@@ -32,6 +32,10 @@ from src.local.roll.announce import curse_lift_loop
 from src.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
 
 logger = logging.getLogger(__name__)
+
+# Pause before the next attempt to start the rewards after a failure: doubles up to the cap
+REWARDS_RETRY_SECONDS = 60
+REWARDS_RETRY_MAX_SECONDS = 600
 
 
 class Bot(commands.Bot):
@@ -61,7 +65,10 @@ class Bot(commands.Bot):
             self, 'награды', lambda: self._channel_id, eventsub.ChannelPointsRedeemAddSubscription.type,
             frozenset(), self._rewards.resubscribe,
             active=lambda: not self._shutting_down and self._rewards.active,
+            on_failure=self._rewards_failed,
         )
+        # The session whose chat has been told that the rewards are down
+        self._rewards_down_told: str | None = None
         # Set by run_bot(): re-installed after the web adapter has taken the signals
         self.on_shutdown_signal = None
         self._shutting_down = False
@@ -158,6 +165,7 @@ class Bot(commands.Bot):
         """Stream is live: stream session, rewards open, perks from the previous one."""
         await self.stream.online(stream_id, started_at)
         await self._rewards.set_open(True)
+        await self.tell_rewards_down()
         await perks.on_stream_start(self, self.session_id)
 
     async def stream_went_offline(self) -> None:
@@ -231,6 +239,7 @@ class Bot(commands.Bot):
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
         await self._start_rewards()
+        await self.tell_rewards_down()
         if self.stream_live:
             # Perks from the previous stream. What was granted is not granted twice,
             # so a restart or reconnect mid-stream will not duplicate them
@@ -279,8 +288,62 @@ class Bot(commands.Bot):
             return
         try:
             await self._rewards.start(self._channel_id, open_=self.stream_live)
-        except Exception:
+        except Exception as e:
             logger.exception('Награды за баллы канала не запущены')
+            # A Twitch or network failure: without a retry the rewards stay dead until a
+            # restart, and open on Twitch if the last run crashed before pausing them
+            if not await self._rewards_failed(e):
+                self._tasks.start('rewards_retry', self._retry_rewards, once=True)
+
+    async def _retry_rewards(self) -> None:
+        """Start the rewards again until it works, the channel's token dies or the bot stops."""
+        delay = REWARDS_RETRY_SECONDS
+        while True:
+            logger.info('Награды за баллы канала: новая попытка через %d с', delay)
+            await asyncio.sleep(delay)
+            if self._shutting_down or self._rewards.active or not self._broadcaster_token:
+                return
+            try:
+                await self._rewards.start(self._channel_id, open_=self.stream_live)
+                return
+            except Exception as e:
+                if await self._rewards_failed(e):
+                    return
+                logger.warning('Награды за баллы канала снова не запустились: %r', e)
+            delay = min(delay * 2, REWARDS_RETRY_MAX_SECONDS)
+
+    async def _rewards_failed(self, error: Exception) -> bool:
+        """The rewards watch could not resubscribe. True – the channel's token is dead and
+        retrying stops until a new login."""
+        if not token_dead(error):
+            return False
+        self._broadcaster_token = False
+        self._rewards.drop()
+        logger.error(
+            'Twitch отозвал токен канала – награды за баллы выключены: %s\nОткрой в браузере '
+            'и войди под аккаунтом канала %s:\n%s', error, Twitch.CHANNEL, oauth_link(REWARDS_SCOPE),
+        )
+        await self.tell_rewards_down()
+        return True
+
+    async def tell_rewards_down(self) -> None:
+        """Tell the chat, once per stream, that the rewards are off for want of the channel's token.
+
+        The rewards stay open on Twitch: without the token the bot can neither pause them
+        nor see a redemption, and the points spent wait for the refund after a new login.
+        """
+        if not Rewards.ENABLED or self._broadcaster_token or not self._channel_id or not self.stream_live:
+            return
+        session = self.session_id
+        if self._rewards_down_told == session:
+            return
+        self._rewards_down_told = session
+        if not await self.send_chat_message(Content.text('rewards_down', channel=Twitch.CHANNEL)):
+            self._rewards_down_told = None     # not heard: the next check says it again
+
+    async def event_subscription_revoked(self, payload) -> None:
+        # Twitch says why: authorization_revoked, user_removed, … The watch handles the rest
+        logger.warning('Twitch отозвал подписку %s: %s', payload.type, payload.status)
 
     async def event_oauth_authorized(self, payload: twitchio.authentication.UserTokenPayload):
         await self.add_token(payload.access_token, payload.refresh_token)
@@ -305,11 +368,13 @@ class Bot(commands.Bot):
         await super().close(**options)
 
     async def send_chat_message(self, text: str) -> bool:
-        """Send without a reply (HTTP API). True if it went through.
+        """Send without a reply (HTTP API). True if the chat got it.
 
         Every self-initiated line goes through here – proactive remarks, the second and
         later chunks of an answer, emotes, announcements – so this is the single place
-        where a line that would read as a chat command is defused.
+        where a line that would read as a chat command is defused. Twitch answers 200
+        for a line it then drops (AutoMod, a duplicate within 30 s) and says so in
+        is_sent: such a line is not counted, charged or saved as said.
         """
         if not self._channel_id:
             logger.warning('Отправка невозможна: ID канала не получен')
@@ -318,16 +383,21 @@ class Bot(commands.Bot):
         if not text:
             return False
         try:
-            await self._http.post_chat_message(
+            response = await self._http.post_chat_message(
                 broadcaster_id=self._channel_id,
                 sender_id=str(self.bot_id),
                 message=text,
                 token_for=str(self.bot_id),
             )
-            return True
         except Exception:
             logger.exception('Не удалось отправить сообщение в чат')
             return False
+        result = ((response or {}).get('data') or [{}])[0]
+        if result.get('is_sent', True) is False:
+            reason = result.get('drop_reason') or {}
+            logger.warning('Twitch отбросил сообщение (%s): %r', reason.get('code'), text[:80])
+            return False
+        return True
 
     async def create_clip(self, seconds: int, title: str | None) -> str | None:
         """Clip the stream's last seconds as the bot: the link, or None (src/local/clip.py)."""

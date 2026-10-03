@@ -1,6 +1,8 @@
 """The stream tracker: the session is the stream."""
 import asyncio
 import time
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -72,3 +74,67 @@ def test_session_and_memory_key_ignore_the_process_zone(process_in_utc):
     moment = 1789923600.0  # 2026-09-20 17:00 UTC
     assert stream._session_name(moment) == '2026-09-20 20:00'
     assert storage._key(moment) == '2026-09-20 20:00'
+
+
+# --- the watch against Twitch ---------------------------------------------------
+
+LIVE = ('s1', 1000.0)
+
+
+async def _watch(answers: list, stream_id: str | None, monkeypatch) -> SimpleNamespace:
+    """Run watch_stream() over Twitch's scripted answers and return the fake bot.
+
+    An answer that is an exception is raised as a failed request.
+    """
+    monkeypatch.setattr(stream, 'CHECK_SECONDS', 0)
+    answers = list(answers)
+
+    async def fetch():
+        if not answers:
+            raise asyncio.CancelledError     # the script is over: stop the loop
+        answer = answers.pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return answer
+
+    bot = SimpleNamespace(stream=SimpleNamespace(stream_id=stream_id), fetch_live_stream=fetch)
+
+    async def offline():
+        bot.stream.stream_id = None
+
+    async def online(stream_id, started_at):
+        bot.stream.stream_id = stream_id
+    bot.stream_went_offline = AsyncMock(side_effect=offline)
+    bot.stream_went_online = AsyncMock(side_effect=online)
+    with pytest.raises(asyncio.CancelledError):
+        await stream.watch_stream(bot)
+    return bot
+
+
+async def test_one_empty_answer_does_not_end_the_stream(monkeypatch):
+    """Twitch's list lags at a stream's edges: one miss would end the session, close the
+    game and pause the rewards in the middle of a stream."""
+    misses = [None] * (stream.CONFIRMATIONS - 1)
+    bot = await _watch([*misses, LIVE, *misses, LIVE], 's1', monkeypatch)
+    bot.stream_went_offline.assert_not_awaited()
+
+
+async def test_a_confirmed_end_closes_the_stream_once(monkeypatch):
+    bot = await _watch([None] * (stream.CONFIRMATIONS * 3), 's1', monkeypatch)
+    bot.stream_went_offline.assert_awaited_once()
+
+
+async def test_answers_that_disagree_with_each_other_change_nothing(monkeypatch):
+    bot = await _watch([None, ('s2', 2000.0)] * stream.CONFIRMATIONS, 's1', monkeypatch)
+    bot.stream_went_offline.assert_not_awaited()
+    bot.stream_went_online.assert_not_awaited()
+
+
+async def test_a_missed_start_is_opened_once(monkeypatch):
+    bot = await _watch([LIVE] * (stream.CONFIRMATIONS * 3), None, monkeypatch)
+    bot.stream_went_online.assert_awaited_once_with(*LIVE)
+
+
+async def test_a_failed_request_is_not_an_answer(monkeypatch):
+    bot = await _watch([RuntimeError('helix down')] * (stream.CONFIRMATIONS * 2), 's1', monkeypatch)
+    bot.stream_went_offline.assert_not_awaited()

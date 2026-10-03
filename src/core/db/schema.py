@@ -118,7 +118,7 @@ async def _bot_uses(db: aiosqlite.Connection) -> None:
 
 async def _rolls(db: aiosqlite.Connection) -> None:
     """Rolls and its added columns."""
-    # Tables of the !roll game: rolls, rewards, roll_actions, roll_perks. Schema and migrations
+    # Tables of the !roll game: rolls, rewards, roll_actions, roll_throws, roll_perks. Schema and migrations
     # live here with all the others, their queries – in src/local/roll/storage.py
     await db.execute('''
         CREATE TABLE IF NOT EXISTS rolls (
@@ -171,6 +171,23 @@ async def _roll_actions(db: aiosqlite.Connection) -> None:
     ''')
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_roll_actions_target ON roll_actions(session_id, target, action)'
+    )
+
+
+async def _roll_throws(db: aiosqlite.Connection) -> None:
+    """Roll_throws: when each player threw by their own hand."""
+    # A free !roll and a paid extra roll each leave a row: the spam brake counts the
+    # player's last throws, and rolls keeps only the latest one
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS roll_throws (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            thrown_at  REAL NOT NULL
+        )
+    ''')
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_roll_throws_user ON roll_throws(session_id, username, thrown_at)'
     )
 
 
@@ -321,6 +338,7 @@ STEPS = [
     ('indexes', _indexes),
     ('legacy', _legacy),
     ('fts', _fts),
+    ('roll_throws', _roll_throws),
 ]
 SCHEMA_VERSION = len(STEPS)
 
@@ -339,6 +357,9 @@ _ROLLS_COLUMNS = {
     # How many free throws this player is entitled to in this session: it depends
     # on their status, and a channel-points redemption carries no badges in the event
     'free_limit': 'INTEGER',
+    # The player's status by their last !roll (viewer.Tier): the rerolls they may buy
+    # depend on it, for the same reason
+    'tier': 'TEXT',
 }
 
 

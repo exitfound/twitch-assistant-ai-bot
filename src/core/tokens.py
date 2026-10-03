@@ -38,6 +38,23 @@ def token_problem(error: Exception) -> bool:
     return not isinstance(error, (OSError, aiohttp.ClientError))
 
 
+def token_dead(error: Exception) -> bool:
+    """Whether a Twitch error means the user's authorization is gone and only a new login helps.
+
+    A refresh token Twitch refuses (400 from id.twitch.tv), a token twitchio could not
+    validate, a 401 or 403 left after twitchio's own refresh. A network error or a 5xx is
+    not: retrying those is right, retrying a revoked token hammers Twitch for nothing.
+    """
+    if isinstance(error, twitchio.InvalidTokenException):
+        return True
+    if not isinstance(error, twitchio.HTTPException):
+        return False
+    if error.status in (401, 403):
+        return True
+    # use_id: a request to id.twitch.tv, where the refresh and the validation go
+    return error.status == 400 and error.route is not None and error.route.use_id
+
+
 async def add_bot_token(bot: commands.Bot) -> None:
     """Add the bot's token from .env unless twitchio already loaded one from .tio.tokens.json.
 

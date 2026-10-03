@@ -23,11 +23,6 @@ class Kind(StrEnum):
     GEMINI = 'gemini'
 
 
-class Role(StrEnum):
-    # From the subscriber badge up: VIP, moderator and broadcaster pass too (!ask, !ascii, !clip)
-    SUB_VIP_MOD_BROADCASTER = 'sub_vip_mod_broadcaster'
-
-
 @dataclasses.dataclass
 class CommandContext:
     message: twitchio.ChatMessage
@@ -81,7 +76,6 @@ class CommandEntry:
     trigger: str
     handler: Handler
     prefix: bool
-    role: Role | None           # None = everyone, otherwise the badges it needs
     kind: Kind                  # Kind.LOCAL | Kind.GEMINI
 
     def match(self, prompt: str) -> bool:
@@ -105,13 +99,11 @@ class CommandRegistry:
 
     def add(self, trigger: str, handler: Handler, *,
             prefix: bool = False,
-            role: Role | None = None,
             kind: Kind = Kind.LOCAL) -> None:
         self._entries.append(CommandEntry(
             trigger=trigger,
             handler=handler,
             prefix=prefix,
-            role=role,
             kind=kind,
         ))
 

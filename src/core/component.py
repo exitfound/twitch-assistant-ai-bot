@@ -12,7 +12,7 @@ import twitchio
 from twitchio.ext import commands
 
 from src.core.commands import (
-    CommandContext, CommandEntry, CommandRegistry, Kind, Role,
+    CommandContext, CommandEntry, CommandRegistry, Kind,
 )
 from src.core.config import Clip, Cooldown, Follow, Picture, Quota
 from src.core.content import Content
@@ -21,9 +21,10 @@ from src.core.database import (
     save_chat_message,
 )
 from src.core.followers import FollowerCache
+from src.core.limits import deny
 from src.core.port import BotPort
 from src.core.utils import SOSUR_RE, SOSUR_VARIANTS, reply, reply_to_bot  # noqa: F401  (SOSUR_VARIANTS – the public place to edit the list)
-from src.core.viewer import Tier, by_tier, tier_of
+from src.core.viewer import Tier, by_tier, sub_hint, tier_of
 from src.gemini.commands import (
     handle_ask, handle_default, handle_summary, handle_versus, handle_who,
 )
@@ -51,12 +52,6 @@ CLIP_TRIGGER = '!clip'
 # on every message of a non-following viewer
 FOLLOW_HINT_SCOPE = 'follow_hint'
 
-# Same for refusals by role and by exhausted quota: the fact does not change between
-# repeats, and a viewer without badges has no cooldown of their own, so without this
-# brake every one of their messages gets a refusal
-DENY_SCOPE = 'deny'
-DENY_REPEAT_SECONDS = 30
-
 # EventSub may deliver a message more than once, and a second chat subscription doubles
 # everything: ids of this many recent messages are remembered to drop the repeat
 SEEN_MESSAGES = 500
@@ -70,26 +65,6 @@ def _quota_per_hour(tier: Tier) -> int:
     constant draining: the cooldown holds the pace, the quota holds the volume.
     """
     return by_tier(tier, broadcaster=0, sub=0, vip=Quota.VIP_PER_HOUR, regular=Quota.FOLLOWER_PER_HOUR)
-
-
-# Which refusal to show when the badge is not enough
-ROLE_DENIED_TEXTS = {
-    Role.SUB_VIP_MOD_BROADCASTER: 'role_denied_sub',
-}
-
-
-def _has_role(role: Role | None, chatter: twitchio.Chatter) -> bool:
-    """Whether the badges are enough for the command.
-
-    Badges are checked directly, not through tier_of(): that one folds
-    subscriber and VIP into one status for the cooldown, and a subscribing VIP
-    would otherwise be refused where VIPs are let in.
-    """
-    if role is None:
-        return True
-    # The one role there is: from the subscriber badge up
-    return bool(chatter.broadcaster or chatter.moderator or chatter.vip
-                or chatter.subscriber or chatter.founder)
 
 
 def _cooldown_seconds(tier: Tier) -> int:
@@ -156,15 +131,13 @@ class ChatComponent(commands.Component):
         add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=Kind.GEMINI)
         add(WHO_TRIGGER,       handle_who,       prefix=True, kind=Kind.GEMINI)
         add(VERSUS_TRIGGER,    handle_versus,    prefix=True, kind=Kind.GEMINI)
-        add(ASK_TRIGGER,       handle_ask,       prefix=True, kind=Kind.GEMINI,
-            role=Role.SUB_VIP_MOD_BROADCASTER)
+        add(ASK_TRIGGER,       handle_ask,       prefix=True, kind=Kind.GEMINI)
         if Picture.ENABLED:
             # A disabled feature must not linger as a command that silently
             # does nothing: it simply does not exist
-            add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI,
-                role=Role.SUB_VIP_MOD_BROADCASTER)
+            add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI)
         if Clip.ENABLED:
-            add(CLIP_TRIGGER,  handle_clip,  prefix=True, role=Role.SUB_VIP_MOD_BROADCASTER)
+            add(CLIP_TRIGGER,  handle_clip,  prefix=True)
 
     def _repeated(self, message_id: str) -> bool:
         """True for a message already seen; no await, so two deliveries cannot both pass."""
@@ -233,7 +206,7 @@ class ChatComponent(commands.Component):
 
     async def _gate(self, message: twitchio.ChatMessage, user: str, entry: CommandEntry | None,
                     kind: Kind) -> bool:
-        """Whether to serve the viewer: follow, cooldown, role, quota. False – already answered.
+        """Whether to serve the viewer: follow, cooldown, quota. False – already answered.
 
         On success the cooldown is taken, in the scope of the command's class.
         """
@@ -251,10 +224,6 @@ class ChatComponent(commands.Component):
                 key = 'cooldown_gemini' if kind == Kind.GEMINI else 'cooldown_local'
                 await reply(message, Content.text(key, user=user, seconds=int(remaining) + 1))
                 return False
-
-        if entry is not None and not _has_role(entry.role, message.chatter):
-            await self._deny(message, user, ROLE_DENIED_TEXTS[entry.role], command=entry.trigger)
-            return False
 
         # The cooldown is taken right after its check, with no await in between: twitchio
         # runs every event in its own task, and two quick messages would both pass it
@@ -292,18 +261,6 @@ class ChatComponent(commands.Component):
             await reply(message, Content.text('follow_required', user=user, command=HELP_TRIGGER))
         return False
 
-    async def _deny(self, message: twitchio.ChatMessage, user: str, key: str, **values) -> None:
-        """Refuse, but at most once per DENY_REPEAT_SECONDS per viewer.
-
-        Refusals by role and by quota do not change from one repeat to the next,
-        and a viewer without badges has no cooldown of their own – without a brake
-        the bot would answer every one of their messages with a refusal.
-        """
-        if self.bot.cooldown_remaining(user, DENY_SCOPE):
-            return
-        self.bot.set_cooldown(user, DENY_REPEAT_SECONDS, DENY_SCOPE)
-        await reply(message, Content.text(key, user=user, **values))
-
     async def _within_channel_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:
         """Whether the channel as a whole is within its window. False – already refused.
 
@@ -321,7 +278,7 @@ class ChatComponent(commands.Component):
             'Потолок канала исчерпан: %d запросов за %d мин (лимит %d) – платные команды закрыты',
             used, Quota.WINDOW_MINUTES, Quota.CHANNEL_PER_HOUR,
         )
-        await self._deny(message, user, 'quota_channel', window=Quota.WINDOW_MINUTES)
+        await deny(self.bot, message, user, Content.text('quota_channel', user=user, window=Quota.WINDOW_MINUTES))
         return False
 
     async def _within_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:
@@ -335,8 +292,9 @@ class ChatComponent(commands.Component):
         # A slot frees up when the earliest request drops out of the window
         age = await oldest_bot_use_age(user, Kind.GEMINI, Quota.WINDOW_MINUTES) or 0
         minutes = max(1, math.ceil((Quota.WINDOW_MINUTES * 60 - age) / 60))
-        await self._deny(message, user, 'quota_exceeded',
-                         limit=limit, minutes=minutes, window=Quota.WINDOW_MINUTES)
+        text = Content.text('quota_exceeded', user=user, limit=limit, minutes=minutes,
+                            window=Quota.WINDOW_MINUTES)
+        await deny(self.bot, message, user, text + sub_hint(message.chatter))
         return False
 
     def _route(self, message: twitchio.ChatMessage) -> tuple[CommandEntry | None, str | None, bool]:

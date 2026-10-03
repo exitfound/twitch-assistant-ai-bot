@@ -11,6 +11,9 @@ from src.core.logging_setup import setup_logging
 from src.core.utils import local_time
 from src.cli import memory, probe
 
+# --limit when it is not given: chronicles and profiles shown, or addressings probed
+LIMIT = 3
+
 
 def _with_db(command):
     """Open the database for a command and close it after, whatever happens.
@@ -20,8 +23,10 @@ def _with_db(command):
     """
     @functools.wraps(command)
     async def run(*args, **kwargs):
-        await init_db()
+        # init_db() inside the try: a migration that fails or a lock held past the busy
+        # timeout has already opened the connection
         try:
+            await init_db()
             return await command(*args, **kwargs)
         finally:
             await close_db()
@@ -206,8 +211,9 @@ def _check_combination(parser: argparse.ArgumentParser, args: argparse.Namespace
     modifiers = [(name, readers) for name, given, readers in (
         ('--dry-run', args.dry_run, {'--build-memory', '--clear-memory', '--sync-emotes', lore}),
         ('--source', args.source is not None, {lore}),
+        ('--all', args.all, {lore}),
         ('--format', args.format != 'lines', {lore}),
-        ('--limit', args.limit != parser.get_default('limit'), {'--build-memory', '--probe-context'}),
+        ('--limit', args.limit is not None, {'--build-memory', '--probe-context'}),
         ('--samples', args.samples != parser.get_default('samples'), {'--probe-context'}),
         ('--replace-emotes', args.replace_emotes, {'--sync-emotes'}),
     ) if given]
@@ -217,6 +223,17 @@ def _check_combination(parser: argparse.ArgumentParser, args: argparse.Namespace
     stray = [name for name, readers in modifiers if actions[0] not in readers]
     if stray:
         parser.error(f'{", ".join(stray)} не относится к {actions[0]}')
+    # knowledge is the bot's language and there are no automatic backups: wiping all of
+    # it takes a word of its own, not a --source left out of a re-import
+    if args.clear_lore and args.source is None and not args.all:
+        parser.error('--clear-lore без --source стирает всю базу знаний, в том числе записи без '
+                     'источника: укажи --source ИМЯ, а если стереть всё и задумано – --all')
+    if args.all and (not args.clear_lore or args.source is not None):
+        parser.error('--all – только с --clear-lore и без --source')
+    # --limit trims only the preview: a real build takes the whole history and pays for it
+    if args.build_memory and not args.dry_run and args.limit is not None:
+        parser.error('--limit у --build-memory работает только с --dry-run: без него память '
+                     'строится по всей истории, и это стоит денег')
 
 
 def main(argv: list[str] | None = None) -> bool:
@@ -229,7 +246,11 @@ def main(argv: list[str] | None = None) -> bool:
     parser.add_argument(
         '--clear-lore', action='store_true',
         help='Очистить базу знаний (с --upload-lore: перед импортом, без: только очистка). '
-             'С --source – только этот источник',
+             'Нужен --source (только этот источник) или --all (всё)',
+    )
+    parser.add_argument(
+        '--all', action='store_true',
+        help='С --clear-lore: стереть всю базу знаний, включая записи без источника',
     )
     parser.add_argument(
         '--format', choices=FORMATS, default='lines',
@@ -271,8 +292,9 @@ def main(argv: list[str] | None = None) -> bool:
         '--samples', type=int, default=1, metavar='N',
         help='С --probe-context: сколько ответов на каждый вариант (температура высокая)',
     )
+    # No default in argparse: a --limit equal to it must still be seen by _check_combination()
     parser.add_argument(
-        '--limit', type=int, default=3, metavar='N',
+        '--limit', type=int, metavar='N',
         help='С --build-memory --dry-run: сколько хроник и профилей показать; '
              'с --probe-context: сколько последних обращений взять (по умолчанию 3)',
     )
@@ -309,9 +331,9 @@ def _command(args: argparse.Namespace):
     if args.list_facts:
         return list_facts()
     if args.probe_context is not None:
-        return probe_context(args.probe_context, max(1, args.limit), max(1, args.samples))
+        return probe_context(args.probe_context, max(1, args.limit or LIMIT), max(1, args.samples))
     if args.build_memory:
-        return build_memory(args.dry_run, max(1, args.limit), args.clear_memory)
+        return build_memory(args.dry_run, max(1, args.limit or LIMIT), args.clear_memory)
     if args.clear_memory:
         return clear_memory(args.dry_run)
     if args.backup is not None:

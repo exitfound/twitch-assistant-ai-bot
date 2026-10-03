@@ -15,15 +15,16 @@ class BackgroundTasks:
         task = self._tasks.get(name)
         return task is not None and not task.done()
 
-    def start(self, name: str, loop: Callable[[], Coroutine]) -> bool:
+    def start(self, name: str, loop: Callable[[], Coroutine], *, once: bool = False) -> bool:
         """Start the loop unless it is already running. True – started now.
 
-        A second copy of a loop would double every announcement.
+        A second copy of a loop would double every announcement. once – a task that is
+        meant to finish (a retry): only its failure is logged.
         """
         if self.running(name):
             return False
         task = asyncio.create_task(loop(), name=name)
-        task.add_done_callback(_ended)
+        task.add_done_callback(_failed if once else _ended)
         self._tasks[name] = task
         return True
 
@@ -55,3 +56,8 @@ def _ended(task: asyncio.Task) -> None:
         logger.error('Фоновая задача %s упала и больше не работает', task.get_name(), exc_info=error)
     else:
         logger.warning('Фоновая задача %s завершилась и больше не работает', task.get_name())
+
+
+def _failed(task: asyncio.Task) -> None:
+    if not task.cancelled() and task.exception() is not None:
+        logger.error('Фоновая задача %s упала', task.get_name(), exc_info=task.exception())

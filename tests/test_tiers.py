@@ -7,12 +7,9 @@ import pytest
 
 from fakes import make_chatter
 from src.core import component
-from src.core.commands import Role
-from src.core.config import Cooldown, Picture, Quota, Roll, Summary, Who
-from src.core.viewer import Tier, tier_of
-from src.gemini import commands as gemini_commands
-from src.gemini import summary, who
-from src.gemini.picture import command as picture_command
+from src.core.config import Cooldown, PerStream, Quota, Roll
+from src.core.limits import limit_for
+from src.core.viewer import Tier, sub_hint, tier_of
 from src.local.roll.command import free_limit_for
 
 BADGES = {
@@ -54,21 +51,6 @@ def test_cooldown_and_quota(who_, cooldown, quota):
     assert component._quota_per_hour(tier) == quota
 
 
-@pytest.mark.parametrize(('who_', 'sub_role'), [
-    ('broadcaster', True),
-    ('moderator', True),
-    ('vip', True),
-    ('subscriber', True),
-    ('founder', True),
-    ('sub_vip', True),
-    ('regular', False),
-])
-def test_roles_look_at_badges(who_, sub_role):
-    chatter = make_chatter(**BADGES[who_])
-    assert component._has_role(None, chatter)
-    assert component._has_role(Role.SUB_VIP_MOD_BROADCASTER, chatter) is sub_role
-
-
 @pytest.mark.parametrize(('who_', 'limit'), [
     ('broadcaster', Roll.FREE_PER_SESSION),
     ('moderator', Roll.FREE_SUB),
@@ -82,23 +64,27 @@ def test_free_throws(who_, limit):
     assert free_limit_for(make_chatter(**BADGES[who_])) == limit
 
 
-@pytest.mark.parametrize(('kind', 'limits'), [
-    (who.WHO_KIND, (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB)),
-    (who.VERSUS_KIND, (Who.PER_STREAM_FOLLOWER, Who.PER_STREAM_VIP, Who.PER_STREAM_SUB)),
-    (summary.KIND, (Summary.PER_STREAM_FOLLOWER, Summary.PER_STREAM_VIP, Summary.PER_STREAM_SUB)),
+@pytest.mark.parametrize(('who_', 'limit'), [
+    ('broadcaster', 0),
+    ('moderator', PerStream.SUB),
+    ('subscriber', PerStream.SUB),
+    ('founder', PerStream.SUB),
+    ('sub_vip', PerStream.SUB),
+    ('vip', PerStream.VIP),
+    ('regular', PerStream.FOLLOWER),
 ])
-def test_per_stream_limits(kind, limits):
-    follower, vip, sub = limits
-    limit = gemini_commands._limit_for
-    assert limit(kind, make_chatter(broadcaster=True)) == 0
-    assert limit(kind, make_chatter(moderator=True)) == sub
-    assert limit(kind, make_chatter(subscriber=True, vip=True)) == sub
-    assert limit(kind, make_chatter(vip=True)) == vip
-    assert limit(kind, make_chatter()) == follower
+def test_per_stream_limits(who_, limit):
+    assert limit_for(make_chatter(**BADGES[who_])) == limit
 
 
-def test_picture_limits():
-    limit = picture_command._limit_for
-    assert limit(make_chatter(broadcaster=True)) == 0
-    assert limit(make_chatter(founder=True)) == Picture.PER_STREAM_SUB
-    assert limit(make_chatter(vip=True)) == Picture.PER_STREAM_VIP
+@pytest.mark.parametrize(('who_', 'hinted'), [
+    ('broadcaster', False),
+    ('moderator', False),
+    ('subscriber', False),
+    ('founder', False),
+    ('sub_vip', False),
+    ('vip', True),
+    ('regular', True),
+])
+def test_sub_hint_only_where_a_subscription_helps(who_, hinted):
+    assert bool(sub_hint(make_chatter(**BADGES[who_]))) is hinted

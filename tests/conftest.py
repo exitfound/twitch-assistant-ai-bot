@@ -41,6 +41,8 @@ from src.gemini import client, commands
 from src.gemini.memory import build
 from src.gemini.picture import command as picture_command
 from src.local import clip, follow, help_announce
+from src.local.medoed import feed as medoed_feed
+from src.local.medoed import mood as medoed_mood
 from src.local.roll import game, perks
 
 def content_text() -> str:
@@ -84,6 +86,9 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(follow, '_sent_at', collections.deque(maxlen=follow.GREETINGS_PER_MINUTE))
     monkeypatch.setattr(follow, '_greeted', set())
     monkeypatch.setattr(client, 'usage', {'prompt': 0, 'cached': 0, 'output': 0})
+    monkeypatch.setattr(medoed_mood, 'tracker', medoed_mood.MoodTracker())
+    monkeypatch.setattr(medoed_feed, 'tracker', medoed_mood.tracker)
+    monkeypatch.setattr(medoed_feed, '_clients', set())
 
     def no_gemini():
         raise AssertionError('A test reached the real Gemini client: patch generate() where it is used')

@@ -426,3 +426,27 @@ class Emote:
     SPAM_ENABLED: bool = _env_bool('EMOTE_SPAM_ENABLED', False)
     SPAM_INTERVAL_MIN_MINUTES, SPAM_INTERVAL_MAX_MINUTES = _interval_range('EMOTE_SPAM_INTERVAL', 5, 20)
     SPAM_MIN, SPAM_MAX = _emote_spam_range()
+
+
+def _medoed_thresholds() -> tuple[int, int, int]:
+    sit = _env_int('MEDOED_SIT', 3, 1, 1000)
+    stand = _env_int('MEDOED_STAND', 6, 1, 1000)
+    dance = _env_int('MEDOED_DANCE', 10, 1, 1000)
+    if not sit < stand < dance:
+        logger.warning('MEDOED_SIT=%s, MEDOED_STAND=%s, MEDOED_DANCE=%s должны расти – используются 3, 6, 10',
+                       sit, stand, dance)
+        return 3, 6, 10
+    return sit, stand, dance
+
+
+class Medoed:
+    ENABLED: bool = _env_bool('MEDOED_ENABLED', False)
+    # Inside the container the feed listens on every interface; docker-compose decides
+    # which host address it is published on
+    HOST: str = _env_raw('MEDOED_HOST') or '0.0.0.0'
+    PORT: int = _env_int('MEDOED_PORT', 8787, 1, 65535)
+    WINDOW_SECONDS: int = _env_int('MEDOED_WINDOW_SECONDS', 300, 10, 3600)
+    # Distinct chatters over the window from which the medoed sits, stands up, dances
+    SIT, STAND, DANCE = _medoed_thresholds()
+    STEP_DOWN_SECONDS: int = _env_int('MEDOED_STEP_DOWN_SECONDS', 60, 0, 3600)
+    MAX_RATE: float = _env_float('MEDOED_MAX_RATE', 1.5, 1.0, 2.0)

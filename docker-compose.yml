@@ -11,6 +11,10 @@ services:
     env_file: .env
     environment:
       BOT_DB_PATH: /data/chat_history.db
+    # SSE feed of the medoed overlay; MEDOED_PUBLISH (from .env) is the host address,
+    # 127.0.0.1 unless set, so nothing is reachable from outside by default
+    ports:
+      - "${MEDOED_PUBLISH:-127.0.0.1}:${MEDOED_PORT:-8787}:${MEDOED_PORT:-8787}"
     volumes:
       - ./:/app:ro
       - ./data:/data

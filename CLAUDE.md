@@ -105,7 +105,7 @@ Entry point is thin; all logic lives in `src/`, split into packages by purpose.
 |---|---|---|
 | `src/core/` | skeleton: config, texts, DB, logging, utils, command registry, chat dispatcher | nothing feature-specific. Features depend on core, never the reverse – the one exception is `component.py`, which registers every feature's commands |
 | `src/gemini/` | everything that costs a Gemini call (incl. `picture/` – `!ascii`) | a command that generates text (`kind=Kind.GEMINI`), anything that builds prompts |
-| `src/local/` | сосурян's own features without Gemini: simple commands, follow replies, emote spam, the periodic command reminder, and the `roll/` game | a small command or event reply served from SQLite + `CONTENT.md` |
+| `src/local/` | сосурян's own features without Gemini: simple commands, follow replies, emote spam, the periodic command reminder, the `roll/` game and the `medoed/` OBS overlay feed | a small command or event reply served from SQLite + `CONTENT.md` |
 | `src/local/roll/` | the «залупа стрима» game: throws, channel-points rewards, perks, curse-lift announcements. A local feature that grew big enough for its own subpackage | anything about `!roll` |
 | `src/cli/` | `bot.py --…` commands; the bot does not start | a maintenance command |
 
@@ -164,6 +164,10 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `emote_spam.py` – `emote_spam_loop()`
 - `help_announce.py` – `help_loop()`, `note_help_shown()`
 
+**local/medoed** – the OBS overlay's mood from chat activity (BOT.md «Медоед: оверлей по настроению чата»)
+- `mood.py` – `target()` (chatters → mood and dance rate), `MoodTracker` (window, up at once, down a level per step), the module-level `tracker`
+- `feed.py` – `on_chat()` (called first in `event_message`), the aiohttp SSE app (`make_app()`), `medoed_loop()`
+
 **local/roll** – the «залупа стрима» game (BOT.md «Шаг 7а», «Награды за баллы канала»)
 - `rules.py` – the rules as pure functions of `now`
 - `game.py` – the only code that mutates `rolls`, under one lock: `free_throw()`, `redeem()`, `lift_expired_curses()`, `status()`, perks
@@ -201,11 +205,11 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 - **Follow gate.** `bool(await followers.followers)` – the iterator itself is always truthy. The cache fails open
 - **Case.** Free text keeps its case; FTS queries are lowercased (uppercase `AND`/`OR`/`NOT` are operators); Cyrillic facts are matched with `casefold()` in Python, since SQLite folds only ASCII
 - **Tests** (`tests/`, `make test`) clear every variable of `.env.example` and set the environment in `conftest.py` before anything from `src` is imported, recreate module-level asyncio primitives per test, and replace `CONTENT.md` with one whose values are the key names. `client.get_client()` raises: a Gemini stub is patched where it is used (`ladder`, `commands`, `proactive`, `picture.command`, `memory.build`). A new module-level lock, semaphore or cache is added to `_isolation` in `conftest.py`
-- **Deployment.** The tree is mounted read-only at `/app`, dependencies live in `/deps`, the image is distroless (no shell), no port is published, new tokens come from `make oauth`, logs go to stdout. Both tokens are read from `.tio.tokens.json` first; the `.env` values are only a fallback, since adding them on top would undo a new login. Session ids, memory keys and log times use `BOT_TIMEZONE`, not the process zone; `TZ` is not set anywhere. README «Эксплуатация»
+- **Deployment.** The tree is mounted read-only at `/app`, dependencies live in `/deps`, the image is distroless (no shell), one port is published – the medoed SSE feed, on `MEDOED_PUBLISH` (127.0.0.1 unless set), never the OAuth one; new tokens come from `make oauth`, logs go to stdout. Both tokens are read from `.tio.tokens.json` first; the `.env` values are only a fallback, since adding them on top would undo a new login. Session ids, memory keys and log times use `BOT_TIMEZONE`, not the process zone; `TZ` is not set anywhere. README «Эксплуатация»
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (113 variables, grouped by section, each commented) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (123 variables, grouped by section, each commented; `MEDOED_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 

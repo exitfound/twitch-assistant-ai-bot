@@ -297,10 +297,26 @@ def live_bot(monkeypatch):
     monkeypatch.setattr(bot_module.Rewards, 'ENABLED', True)
     monkeypatch.setattr(bot_module.Bot, 'stream_live', True)
     monkeypatch.setattr(bot_module.Bot, 'session_id', '2026-09-30 20:05')
+    # the bot has created its rewards before: a dead token leaves them open on Twitch
+    monkeypatch.setattr(bot_module, 'get_reward_ids', AsyncMock(return_value={'extra': 'reward-1'}))
     bot = bot_module.Bot()
     bot._channel_id = '458646238'
     bot.send_chat_message = AsyncMock(return_value=True)
     return bot
+
+
+async def test_a_channel_that_never_had_rewards_hears_nothing(live_bot, monkeypatch):
+    """No channel token ever: the bot created no rewards, there is nothing to warn about."""
+    monkeypatch.setattr(bot_module, 'get_reward_ids', AsyncMock(return_value={}))
+    await live_bot.tell_rewards_down()
+    live_bot.send_chat_message.assert_not_awaited()
+
+
+async def test_an_unreadable_rewards_table_still_warns(live_bot, monkeypatch, caplog):
+    """Unsure whether the rewards exist: a needless warning beats points spent for nothing."""
+    monkeypatch.setattr(bot_module, 'get_reward_ids', AsyncMock(side_effect=RuntimeError('db')))
+    await live_bot.tell_rewards_down()
+    live_bot.send_chat_message.assert_awaited_once_with('texts.rewards_down')
 
 
 async def test_a_revoked_channel_token_stops_the_rewards_and_tells_the_chat_once(live_bot):

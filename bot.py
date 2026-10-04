@@ -31,6 +31,7 @@ from src.local.medoed.feed import medoed_loop
 from src.local.roll import perks
 from src.local.roll.announce import curse_lift_loop
 from src.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
+from src.local.roll.storage import get_reward_ids
 
 logger = logging.getLogger(__name__)
 
@@ -338,6 +339,7 @@ class Bot(commands.Bot):
 
         The rewards stay open on Twitch: without the token the bot can neither pause them
         nor see a redemption, and the points spent wait for the refund after a new login.
+        A channel that never gave the token has no rewards of the bot to warn about.
         """
         if not Rewards.ENABLED or self._broadcaster_token or not self._channel_id or not self.stream_live:
             return
@@ -345,6 +347,13 @@ class Bot(commands.Bot):
         if self._rewards_down_told == session:
             return
         self._rewards_down_told = session
+        try:
+            created = bool(await get_reward_ids())
+        except Exception:
+            logger.exception('Не удалось проверить, созданы ли награды')
+            created = True          # unsure: warning for nothing beats points spent for nothing
+        if not created:
+            return
         if not await self.send_chat_message(Content.text('rewards_down', channel=Twitch.CHANNEL)):
             self._rewards_down_told = None     # not heard: the next check says it again
 

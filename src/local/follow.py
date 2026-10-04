@@ -36,18 +36,22 @@ async def handle_follow(bot: BotPort, payload: twitchio.ChannelFollow) -> None:
         user = payload.user.name
         if not user or user.lower() in _greeted:
             return
-        # Checked and taken with no await in between: every event runs in its own task
-        now = time.monotonic()
-        if len(_sent_at) == GREETINGS_PER_MINUTE and now - _sent_at[0] < 60:
-            logger.warning('Фолов больше %d в минуту – %s без приветствия', GREETINGS_PER_MINUTE, user)
-            return
+        # Claimed before any await: every event runs in its own task, and a second delivery
+        # of the same follow stops at the check above
         _greeted.add(user.lower())
-        _sent_at.append(now)
         if find_banned(user, Content.items('banned')):
             logger.warning('Ник фоловера %s в стоп-листе – без приветствия', user)
             return
         if await was_greeted(user):
             return
+        # A slot of the per-minute cap goes only to a greeting about to be sent; checked and
+        # taken with no await in between
+        now = time.monotonic()
+        if len(_sent_at) == GREETINGS_PER_MINUTE and now - _sent_at[0] < 60:
+            _greeted.discard(user.lower())      # not thanked: a later follow still may be
+            logger.warning('Фолов больше %d в минуту – %s без приветствия', GREETINGS_PER_MINUTE, user)
+            return
+        _sent_at.append(now)
         text = safe_format(random.choice(messages), user=user)
         if await bot.send_chat_message(text):
             await save_bot_interaction(bot.session_id, user, '[follow]', text)

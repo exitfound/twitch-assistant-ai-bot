@@ -758,3 +758,16 @@ async def test_the_status_of_a_chat_roll_reaches_the_reroll_limit(db):
     *done, last = await _rerolls('buyer', Rewards.LIMIT_SUB + 1)
     assert all(outcome.ok for outcome in done)
     assert last.status == game.Status.REROLL_LIMIT
+
+
+async def test_a_zero_reward_limit_means_no_limit(db, monkeypatch):
+    """0 is «no limit», as for every other limit of the bot, not a fallback to the default."""
+    monkeypatch.setattr(Rewards, 'LIMIT_FOLLOWER', 0)
+    assert all(outcome.ok for outcome in await _rerolls('buyer', 12))
+    for _ in range(12):
+        assert (await redeem(game.Action.SHIELD, 'buyer')).ok
+        await _expire_shields()
+
+
+def test_a_burst_pause_is_one_minute_by_default():
+    assert Roll.BURST_PAUSE_MINUTES == 1

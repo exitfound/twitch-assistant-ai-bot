@@ -57,3 +57,28 @@ async def test_a_stop_listed_login_is_not_said_in_chat(db):
     bot = FakeBot()
     await follow.handle_follow(bot, _follow('Real_Nazi_1488'))
     bot.send_chat_message.assert_not_awaited()
+
+
+async def test_followers_the_bot_will_not_thank_leave_the_cap_alone(db):
+    """Already thanked viewers and stop-listed logins take no slot of the per-minute cap:
+    a real new follower in the same minute still gets the thanks."""
+    path = Path(content.CONTENT_PATH)
+    path.write_text(path.read_text(encoding='utf-8').replace('### banned\n', '### banned\nnazi\n'),
+                    encoding='utf-8')
+    for name in ('old1', 'old2', 'old3'):
+        await save_bot_interaction('2026-09-01 20:00', name, '[follow]', f'follow {name}')
+    bot = FakeBot()
+    for name in ('old1', 'old2', 'old3', 'nazi_1', 'nazi_2', 'newcomer'):
+        await follow.handle_follow(bot, _follow(name))
+    bot.send_chat_message.assert_awaited_once_with('follow newcomer')
+
+
+async def test_a_follower_left_out_by_the_cap_is_thanked_on_a_later_follow(db, monkeypatch):
+    bot = FakeBot()
+    for i in range(follow.GREETINGS_PER_MINUTE):
+        await follow.handle_follow(bot, _follow(f'bot{i}'))
+    await follow.handle_follow(bot, _follow('late'))
+    assert bot.send_chat_message.await_count == follow.GREETINGS_PER_MINUTE
+    follow._sent_at.clear()                 # the minute is over
+    await follow.handle_follow(bot, _follow('late'))
+    bot.send_chat_message.assert_awaited_with('follow late')

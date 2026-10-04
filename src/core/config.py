@@ -294,7 +294,7 @@ class Roll:
     # the last of them. The broadcaster is not held
     BURST_THROWS: int = _env_int('ROLL_BURST_THROWS', 5, 2, 1000)
     BURST_SECONDS: int = _env_int('ROLL_BURST_SECONDS', 60, 1, 3600)
-    BURST_PAUSE_MINUTES: int = _env_int('ROLL_BURST_PAUSE_MINUTES', 3, 1, 1440)
+    BURST_PAUSE_MINUTES: int = _env_int('ROLL_BURST_PAUSE_MINUTES', 1, 1, 1440)
 
 
 def _curse_range() -> tuple[int, int]:
@@ -336,9 +336,10 @@ class Rewards:
     # last !roll stored (a redemption carries no badges): rerolls per window of
     # REROLL_WINDOW_MINUTES, opened by the first successful one, the rest per stream.
     # The broadcaster is not limited
-    LIMIT_FOLLOWER: int = _env_int('REWARD_LIMIT_FOLLOWER', 3, 1, 1000)
-    LIMIT_VIP: int = _env_int('REWARD_LIMIT_VIP', 5, 1, 1000)
-    LIMIT_SUB: int = _env_int('REWARD_LIMIT_SUB', 10, 1, 1000)
+    # 0 – no limit, like every other limit of the bot
+    LIMIT_FOLLOWER: int = _env_int('REWARD_LIMIT_FOLLOWER', 3, 0, 1000)
+    LIMIT_VIP: int = _env_int('REWARD_LIMIT_VIP', 5, 0, 1000)
+    LIMIT_SUB: int = _env_int('REWARD_LIMIT_SUB', 10, 0, 1000)
     REROLL_WINDOW_MINUTES: int = _env_int('REWARD_REROLL_WINDOW_MINUTES', 30, 1, 1440)
     # How long a bought shield holds off rerolls, counted from the purchase
     SHIELD_MINUTES: int = _env_int('REWARD_SHIELD_MINUTES', 30, 1, 1440)

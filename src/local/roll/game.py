@@ -475,7 +475,7 @@ async def _stream_limit_reached(session_id: str, actor: str, action: str) -> int
 
 async def _buyer_limit(session_id: str, actor: str) -> int | None:
     """How many rerolls per window, or shields, curses and cleanses per stream, the buyer
-    may make, None – no limit (the broadcaster).
+    may make, None – no limit (the broadcaster, or a REWARD_LIMIT_* of 0).
 
     A redemption carries no badges: the status is the one their last !roll stored, and
     a buyer who has not rolled this session counts as a follower.
@@ -483,8 +483,9 @@ async def _buyer_limit(session_id: str, actor: str) -> int | None:
     if actor == (Twitch.CHANNEL or '').lower():
         return None
     tier = await get_tier(session_id, actor) or Tier.REGULAR
-    return by_tier(Tier(tier), sub=Rewards.LIMIT_SUB, vip=Rewards.LIMIT_VIP,
-                   regular=Rewards.LIMIT_FOLLOWER, broadcaster=None)
+    limit = by_tier(Tier(tier), sub=Rewards.LIMIT_SUB, vip=Rewards.LIMIT_VIP,
+                    regular=Rewards.LIMIT_FOLLOWER, broadcaster=None)
+    return limit or None
 
 
 async def _curse(session_id: str, actor: str, user_input: str) -> Outcome:

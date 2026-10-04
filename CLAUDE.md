@@ -34,7 +34,7 @@ docker compose restart bot
 # tree (read-only), /data holds the database and the tokens
 docker compose run --rm bot /app/bot.py --backup /data/copy.db
 
-# New Twitch tokens (bot or channel account): the container publishes no port
+# New Twitch tokens (bot or channel account): the container publishes no OAuth port
 make oauth
 
 # Run without a container (debugging). Always use venv python, not system python;
@@ -120,7 +120,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 **core**
 - `component.py` – `ChatComponent`: the registry of all commands, `event_message`, the pure `route()` and the gate `_gate()` (follow, cooldown, quota), `event_follow`. BOT.md «Обработка сообщений»
 - `commands.py` – `CommandContext`, `CommandEntry`, `CommandRegistry`, `Kind` (`StrEnum`: its values are the plain strings stored in cooldown keys and `bot_uses.kind`)
-- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`
+- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`, `Medoed`
 - `paths.py` – `DB_PATH`, `CONTENT_PATH`: `chat_history.db` in the repository root and `docs/CONTENT.md`, or `BOT_DB_PATH` / `BOT_CONTENT_PATH`
 - `content.py` – `CONTENT.md` access (`Content.prompt/label/text/items`), mtime cache, `REQUIRED`, `validate_content()`
 - `database.py` – facade re-exporting `src/core/db/`: callers import every query from here

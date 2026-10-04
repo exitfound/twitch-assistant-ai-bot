@@ -237,9 +237,7 @@ class Bot(commands.Bot):
                     'под аккаунтом бота:\n%s', oauth_link(OAUTH_SCOPES),
                 )
         self._start_background_tasks()
-        # The overlay feed needs no channel id: it only counts chat and serves the mood
-        if Medoed.ENABLED:
-            self._tasks.start('medoed', medoed_loop)
+        self._start_medoed()
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
         await self._start_rewards()
@@ -248,6 +246,11 @@ class Bot(commands.Bot):
             # Perks from the previous stream. What was granted is not granted twice,
             # so a restart or reconnect mid-stream will not duplicate them
             await perks.on_stream_start(self, self.session_id)
+
+    def _start_medoed(self) -> None:
+        # The overlay feed needs no channel id: it only counts chat and serves the mood
+        if Medoed.ENABLED:
+            self._tasks.start('medoed', medoed_loop)
 
     def _start_background_tasks(self) -> None:
         if not self._channel_id:

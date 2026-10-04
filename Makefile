@@ -41,7 +41,7 @@ logs:
 backup:
 	docker compose run --rm bot /app/bot.py --backup /data/chat_history.backup-$$(date +%F-%H%M).db
 
-# New Twitch tokens. The container publishes no port – twitchio's OAuth adapter listens on
+# New Twitch tokens. The container publishes no OAuth port – twitchio's OAuth adapter listens on
 # localhost inside it – so the bot runs on the host for the login, from data/, where the
 # container keeps .tio.tokens.json and the database (named explicitly: the default is the
 # repository root). The shell catches Ctrl+C for itself, so the container comes back up

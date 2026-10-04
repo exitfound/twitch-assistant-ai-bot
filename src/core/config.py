@@ -441,9 +441,9 @@ def _medoed_thresholds() -> tuple[int, int, int]:
 
 class Medoed:
     ENABLED: bool = _env_bool('MEDOED_ENABLED', False)
-    # Inside the container the feed listens on every interface; docker-compose decides
-    # which host address it is published on
-    HOST: str = _env_raw('MEDOED_HOST') or '0.0.0.0'
+    # Local only by default (a bot run from the host for make oauth or debugging); compose
+    # sets 0.0.0.0 inside the container and decides itself which host address publishes it
+    HOST: str = _env_raw('MEDOED_HOST') or '127.0.0.1'
     PORT: int = _env_int('MEDOED_PORT', 8787, 1, 65535)
     WINDOW_SECONDS: int = _env_int('MEDOED_WINDOW_SECONDS', 300, 10, 3600)
     # Distinct chatters over the window from which the medoed sits, stands up, dances

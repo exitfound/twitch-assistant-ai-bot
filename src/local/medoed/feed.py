@@ -1,7 +1,8 @@
 """SSE feed of the medoed mood: the OBS page listens, the bot pushes every change.
 
 GET /medoed/events – text/event-stream, event `mood`, data {"mood", "rate", "chatters"};
-the current state goes out on connect, so a reloaded overlay picks up where it was.
+the current state goes out on connect, so a reloaded overlay picks up where it was, and
+event `ping` every PING_SECONDS of silence, so the overlay can tell a dead connection.
 GET /medoed/state – the same JSON once, for a quick look from a browser.
 """
 import asyncio
@@ -16,8 +17,12 @@ from src.local.medoed.mood import tracker
 logger = logging.getLogger(__name__)
 
 TICK_SECONDS = 5        # how often the mood is recounted without new messages (the walk down)
-PING_SECONDS = 15       # a comment line keeps idle connections and proxies from timing out
+PING_SECONDS = 15       # keeps idle connections alive; the overlay reconnects after a longer silence
 QUEUE_SIZE = 16         # a stuck client loses old states, never blocks the others
+# A stream never ends by itself: without a stop signal the server's shutdown waits for every
+# open overlay (60 s by default), longer than the 30 s docker gives the whole bot to stop
+STOP = None
+SHUTDOWN_SECONDS = 2
 
 _clients: set[asyncio.Queue] = set()
 
@@ -32,12 +37,15 @@ def on_chat(nick: str) -> None:
 
 
 def _publish() -> None:
-    data = json.dumps(tracker.state())
     logger.info('Медоед: %s (пишущих за окно: %d, скорость %.1f)', tracker.mood, tracker.chatters, tracker.rate)
+    _broadcast(json.dumps(tracker.state()))
+
+
+def _broadcast(item: str | None) -> None:
     for queue in _clients:
         if queue.full():
             queue.get_nowait()
-        queue.put_nowait(data)
+        queue.put_nowait(item)
 
 
 async def _events(request: web.Request) -> web.StreamResponse:
@@ -56,8 +64,10 @@ async def _events(request: web.Request) -> web.StreamResponse:
             try:
                 data = await asyncio.wait_for(queue.get(), PING_SECONDS)
             except TimeoutError:
-                await response.write(b': ping\n\n')
+                await response.write(b'event: ping\ndata: {}\n\n')
                 continue
+            if data is STOP:
+                break
             await _send(response, data)
     except ConnectionResetError:
         pass
@@ -83,12 +93,12 @@ def make_app() -> web.Application:
 
 async def medoed_loop() -> None:
     """Serve the feed and recount the mood until cancelled."""
-    runner = web.AppRunner(make_app(), access_log=None)
+    runner = web.AppRunner(make_app(), access_log=None, shutdown_timeout=SHUTDOWN_SECONDS)
     await runner.setup()
     try:
         await web.TCPSite(runner, Medoed.HOST, Medoed.PORT).start()
-    except OSError:
-        logger.exception('Медоед: порт %s:%d не открылся – оверлей не получит настроение', Medoed.HOST, Medoed.PORT)
+    except OSError as e:
+        logger.error('Медоед: порт %s:%d не открылся (%s) – оверлей не получит настроение', Medoed.HOST, Medoed.PORT, e)
         await runner.cleanup()
         return
     logger.info('Медоед: настроение для оверлея на http://%s:%d/medoed/events', Medoed.HOST, Medoed.PORT)
@@ -98,4 +108,6 @@ async def medoed_loop() -> None:
             if tracker.update():
                 _publish()
     finally:
+        # open overlays end their streams first, then the server stops at once
+        _broadcast(STOP)
         await runner.cleanup()

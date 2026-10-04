@@ -2,10 +2,15 @@
 the OBS page."""
 import asyncio
 import json
+import socket
 
+import aiohttp
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
+import bot as bot_module
+from fakes import FakeBot, make_chatter, make_message
+from src.core.component import ChatComponent
 from src.core.config import Medoed
 from src.local.medoed import feed, mood
 from src.local.medoed.mood import MoodTracker, target
@@ -167,3 +172,162 @@ async def _event(response) -> dict:
         lines.append(line)
     assert lines[0] == 'event: mood'
     return json.loads(lines[1].removeprefix('data: '))
+
+
+def test_the_window_is_strict_a_chatter_leaves_exactly_at_its_end():
+    tracker = MoodTracker()
+    _chat(tracker, 3, at=0)
+    tracker.update(now=299.999)
+    assert tracker.chatters == 3
+    tracker.update(now=300)
+    assert tracker.chatters == 0
+
+
+def test_a_level_that_comes_back_restarts_the_wait():
+    """The chat dips below the current level and recovers: the next dip waits a full step."""
+    tracker = MoodTracker()
+    _chat(tracker, 6, at=0)
+    tracker.update(now=0)
+    _chat(tracker, 3, at=250)            # three of the six stay; the others leave at 300
+    tracker.update(now=300)
+    assert tracker.mood == 'idle'
+    _chat(tracker, 3, at=330, prefix='back')
+    tracker.update(now=330)              # six again: the wait from 300 is void
+    tracker.update(now=365)
+    assert tracker.mood == 'idle'
+    # the three regulars leave at 550, the returners at 630: three stay until then
+    tracker.update(now=550)
+    tracker.update(now=609)
+    assert tracker.mood == 'idle'
+    tracker.update(now=610)
+    assert tracker.mood == 'bored'
+
+
+def test_a_new_target_during_the_wait_does_not_restart_it():
+    """The chat drops in two steps 10 s apart: the first step down still comes 60 s after
+    the first drop, the walk does not start over."""
+    tracker = MoodTracker()
+    _chat(tracker, 10, at=0)
+    _chat(tracker, 4, at=10)             # four of the ten write again
+    tracker.update(now=0)
+    tracker.update(now=300)              # six leave: four are left, sitting is asked for
+    tracker.update(now=310)              # the four leave: lying is asked for
+    tracker.update(now=359)
+    assert tracker.mood == 'dance'
+    tracker.update(now=360)
+    assert tracker.mood == 'idle'
+
+
+def test_every_listener_gets_the_change(monkeypatch):
+    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    first, second = asyncio.Queue(feed.QUEUE_SIZE), asyncio.Queue(feed.QUEUE_SIZE)
+    feed._clients.update({first, second})
+    for nick in ('a', 'b', 'c'):
+        feed.on_chat(nick)
+    assert json.loads(first.get_nowait())['mood'] == json.loads(second.get_nowait())['mood'] == 'bored'
+
+
+def test_a_stuck_listener_keeps_only_the_newest_states():
+    """A listener that stopped reading loses the oldest states and never blocks the rest."""
+    queue = asyncio.Queue(feed.QUEUE_SIZE)
+    feed._clients.add(queue)
+    for i in range(feed.QUEUE_SIZE + 5):
+        feed._broadcast(str(i))
+    kept = [queue.get_nowait() for _ in range(queue.qsize())]
+    assert kept == [str(i) for i in range(5, feed.QUEUE_SIZE + 5)]
+
+
+async def test_a_silent_feed_sends_pings(monkeypatch):
+    """The overlay reconnects after a long silence, so a quiet chat must not look dead."""
+    monkeypatch.setattr(feed, 'PING_SECONDS', 0.05)
+    async with TestClient(TestServer(feed.make_app())) as client:
+        response = await client.get('/medoed/events')
+        await _event(response)
+        assert (await _raw_event(response))[0] == 'event: ping'
+        response.close()
+
+
+def _free_port() -> int:
+    with socket.socket() as s:
+        s.bind(('127.0.0.1', 0))
+        return s.getsockname()[1]
+
+
+async def test_the_bot_stops_at_once_with_an_overlay_connected(monkeypatch):
+    """A stream never ends by itself: the server's shutdown would wait for it longer than
+    docker gives the whole bot to stop, and the rewards would stay open."""
+    monkeypatch.setattr(Medoed, 'HOST', '127.0.0.1')
+    monkeypatch.setattr(Medoed, 'PORT', _free_port())
+    task = asyncio.create_task(feed.medoed_loop())
+    async with aiohttp.ClientSession() as session:
+        for _ in range(50):
+            try:
+                response = await session.get(f'http://127.0.0.1:{Medoed.PORT}/medoed/events')
+                break
+            except aiohttp.ClientConnectionError:
+                await asyncio.sleep(0.02)
+        await _event(response)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 3)
+        assert await asyncio.wait_for(response.content.read(), 3) == b''
+
+
+async def test_a_busy_port_leaves_the_rest_of_the_bot_alone(monkeypatch, caplog):
+    with socket.socket() as taken:
+        taken.bind(('127.0.0.1', 0))
+        taken.listen()
+        monkeypatch.setattr(Medoed, 'HOST', '127.0.0.1')
+        monkeypatch.setattr(Medoed, 'PORT', taken.getsockname()[1])
+        await asyncio.wait_for(feed.medoed_loop(), 3)
+    assert 'не открылся' in caplog.text
+    assert 'Traceback' not in caplog.text
+
+
+async def test_the_bots_own_message_is_counted(monkeypatch):
+    """Every chatter counts, the bot itself included: the filter that drops its own lines
+    for everything else comes after the count."""
+    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    bot = FakeBot()
+    itself = make_chatter('securityexpert')
+    itself.id = bot.bot_id
+    await ChatComponent(bot).event_message(make_message('hi', itself))
+    mood.tracker.update()
+    assert mood.tracker.chatters == 1
+
+
+async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
+    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    component = ChatComponent(FakeBot())
+    message = make_message('привет', make_chatter('gop'))
+    await component.event_message(message)
+    await component.event_message(message)
+    mood.tracker.update()
+    assert mood.tracker.chatters == 1
+
+
+@pytest.mark.parametrize('enabled', [True, False])
+async def test_the_feed_starts_only_when_enabled(monkeypatch, enabled):
+    monkeypatch.setattr(Medoed, 'ENABLED', enabled)
+    started = asyncio.Event()
+
+    async def loop():
+        started.set()
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(bot_module, 'medoed_loop', loop)
+    bot = bot_module.Bot()
+    bot._start_medoed()
+    assert bot._tasks.running('medoed') is enabled
+    await bot.stop_background_tasks()
+
+
+async def _raw_event(response) -> list[str]:
+    lines = []
+    while True:
+        line = (await asyncio.wait_for(response.content.readline(), 2)).decode().strip()
+        if not line:
+            if lines:
+                return lines
+            continue
+        lines.append(line)

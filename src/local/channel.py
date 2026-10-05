@@ -9,6 +9,7 @@ import functools
 from src.core.commands import CommandContext, CommandEntry, Kind
 from src.core.content import Content
 from src.core.utils import reply, safe_format
+from src.local import help_announce
 
 
 def resolve(prompt: str) -> CommandEntry | None:
@@ -24,6 +25,7 @@ def resolve(prompt: str) -> CommandEntry | None:
 
 async def handle_help_channel(ctx: CommandContext) -> None:
     """!help-channel – the list of the channel's own commands, without their replies."""
+    help_announce.note_help_shown()
     commands = Content.channel_commands()
     if not commands:
         await reply(ctx.message, Content.text('help_channel_empty', user=ctx.user))

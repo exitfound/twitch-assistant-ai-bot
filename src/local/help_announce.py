@@ -1,4 +1,4 @@
-"""Command reminder: once per interval the bot tells chat what it can do on its own.
+"""Command reminder: once per interval the bot points chat at !help-bot and !help-channel.
 
 A viewer who joins mid-stream has nowhere to learn about !roll and the rest:
 they would first have to think of asking for help. So the bot reminds on its own.
@@ -16,13 +16,13 @@ from src.core.port import BotPort
 
 logger = logging.getLogger(__name__)
 
-# When the bot last posted the command list in reply to !help-bot (time.monotonic()).
-# The command itself is not written to the DB, so it marks itself here
+# When the bot last posted a command list in reply to !help-bot or !help-channel
+# (time.monotonic()). Commands are not written to the DB, so they mark themselves here
 _help_shown_at = 0.0
 
 
 def note_help_shown() -> None:
-    """The command list has just gone to chat via !help-bot."""
+    """A command list has just gone to chat via !help-bot or !help-channel."""
     global _help_shown_at
     _help_shown_at = time.monotonic()
 
@@ -54,7 +54,7 @@ async def _announce(bot: BotPort, watch: ChatWatch, since: float) -> float:
     if not await watch.new_messages(bot.session_id):
         return since
     now = time.monotonic()
-    # The command list was already in chat in reply to !help-bot: no need to repeat
+    # A help command was answered in chat: whoever needed the pointer has used it
     if _help_shown_at > since:
         return now
     text = Content.text('help_announce')

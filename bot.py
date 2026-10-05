@@ -10,7 +10,7 @@ from twitchio.ext import commands
 from src.core import stream as twitch_stream
 from src.core.chat_socket import SocketWatch, check_private_api, keep_migrated_sockets
 from src.core.component import ChatComponent
-from src.core.config import Emote, Help, Medoed, Memory, Proactive, Rewards, Roll, Twitch, validate_config
+from src.core.config import Emote, Help, Mascot, Memory, Proactive, Rewards, Roll, Twitch, validate_config
 from src.core.content import Content, validate_content
 from src.core.cooldowns import Cooldowns
 from src.core.database import close_db, init_db
@@ -27,7 +27,7 @@ from src.gemini.proactive import proactive_loop
 from src.local.emote_spam import emote_spam_loop
 from src.local import clip
 from src.local.help_announce import help_loop
-from src.local.medoed.feed import medoed_loop
+from src.local.mascot.feed import mascot_loop
 from src.local.roll import perks
 from src.local.roll.announce import curse_lift_loop
 from src.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
@@ -238,7 +238,7 @@ class Bot(commands.Bot):
                     'под аккаунтом бота:\n%s', oauth_link(OAUTH_SCOPES),
                 )
         self._start_background_tasks()
-        self._start_medoed()
+        self._start_mascot()
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
         await self._start_rewards()
@@ -248,10 +248,10 @@ class Bot(commands.Bot):
             # so a restart or reconnect mid-stream will not duplicate them
             await perks.on_stream_start(self, self.session_id)
 
-    def _start_medoed(self) -> None:
+    def _start_mascot(self) -> None:
         # The overlay feed needs no channel id: it only counts chat and serves the mood
-        if Medoed.ENABLED:
-            self._tasks.start('medoed', medoed_loop)
+        if Mascot.ENABLED:
+            self._tasks.start('mascot', mascot_loop)
 
     def _start_background_tasks(self) -> None:
         if not self._channel_id:

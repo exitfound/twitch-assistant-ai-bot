@@ -32,7 +32,7 @@ from src.gemini.picture.command import handle_ascii
 from src.local.clip import handle_clip
 from src.local.commands import handle_help, handle_stats
 from src.local.follow import handle_follow
-from src.local.medoed import feed as medoed
+from src.local.mascot import feed as mascot
 from src.local.roll.command import handle_roll, handle_rollstat
 from src.local.roll.perks import on_chat as roll_perks_on_chat
 
@@ -152,8 +152,8 @@ class ChatComponent(commands.Component):
 
     @commands.Component.listener()
     async def event_message(self, message: twitchio.ChatMessage) -> None:
-        # The medoed overlay counts everyone who writes, the bot and the streamer included
-        medoed.on_chat(message.chatter.name)
+        # The mascot overlay counts everyone who writes, the bot and the streamer included
+        mascot.on_chat(message.chatter.name)
         if str(message.chatter.id) == str(self.bot.bot_id):
             return
         if not self.bot.bot_name:

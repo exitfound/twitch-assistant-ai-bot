@@ -1,4 +1,4 @@
-"""The medoed overlay: distinct chatters over five minutes decide the pose, the feed tells
+"""The mascot overlay: distinct chatters over five minutes decide the pose, the feed tells
 the OBS page."""
 import asyncio
 import json
@@ -11,9 +11,9 @@ from aiohttp.test_utils import TestClient, TestServer
 import bot as bot_module
 from fakes import FakeBot, make_chatter, make_message
 from src.core.component import ChatComponent
-from src.core.config import Medoed
-from src.local.medoed import feed, mood
-from src.local.medoed.mood import MoodTracker, target
+from src.core.config import Mascot
+from src.local.mascot import feed, mood
+from src.local.mascot.mood import MoodTracker, target
 
 
 def _chat(tracker: MoodTracker, count: int, at: float, prefix: str = 'viewer') -> None:
@@ -33,7 +33,7 @@ def test_the_dance_speeds_up_by_a_tenth_per_chatter_up_to_the_cap(chatters, rate
     assert target(chatters)[1] == rate
 
 
-def test_the_medoed_lies_until_someone_writes():
+def test_the_mascot_lies_until_someone_writes():
     tracker = MoodTracker()
     assert tracker.update(now=0) is False
     assert tracker.mood == 'sad'
@@ -67,7 +67,7 @@ def test_writing_once_in_five_minutes_keeps_a_chatter_counted():
     assert tracker.mood == 'bored'
 
 
-def test_an_emptied_chat_walks_the_medoed_down_one_pose_a_minute():
+def test_an_emptied_chat_walks_the_mascot_down_one_pose_a_minute():
     tracker = MoodTracker()
     _chat(tracker, 10, at=0)
     tracker.update(now=0)
@@ -80,7 +80,7 @@ def test_an_emptied_chat_walks_the_medoed_down_one_pose_a_minute():
 
 
 def test_a_partial_drop_stops_at_the_pose_the_chat_still_asks_for():
-    """Three regulars keep writing after a crowd leaves: the medoed walks down to sitting
+    """Three regulars keep writing after a crowd leaves: the mascot walks down to sitting
     and stays there."""
     tracker = MoodTracker()
     _chat(tracker, 10, at=0)
@@ -123,14 +123,14 @@ def test_a_new_speed_counts_as_a_change():
 
 
 def test_chat_is_not_counted_while_the_overlay_is_off(monkeypatch):
-    monkeypatch.setattr(Medoed, 'ENABLED', False)
+    monkeypatch.setattr(Mascot, 'ENABLED', False)
     feed.on_chat('gop')
     assert mood.tracker.update() is False
     assert mood.tracker.chatters == 0
 
 
 def test_a_change_goes_to_every_listener(monkeypatch):
-    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    monkeypatch.setattr(Mascot, 'ENABLED', True)
     queue = asyncio.Queue(feed.QUEUE_SIZE)
     feed._clients.add(queue)
     for nick in ('a', 'b', 'c'):
@@ -140,9 +140,9 @@ def test_a_change_goes_to_every_listener(monkeypatch):
 
 
 async def test_the_feed_sends_the_current_mood_on_connect_and_every_change(monkeypatch):
-    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    monkeypatch.setattr(Mascot, 'ENABLED', True)
     async with TestClient(TestServer(feed.make_app())) as client:
-        response = await client.get('/medoed/events')
+        response = await client.get('/mascot/events')
         assert response.headers['Content-Type'] == 'text/event-stream'
         # the overlay is a local file in OBS: a cross-origin listener
         assert response.headers['Access-Control-Allow-Origin'] == '*'
@@ -155,9 +155,9 @@ async def test_the_feed_sends_the_current_mood_on_connect_and_every_change(monke
 
 
 async def test_the_state_endpoint_answers_once_with_json(monkeypatch):
-    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    monkeypatch.setattr(Mascot, 'ENABLED', True)
     async with TestClient(TestServer(feed.make_app())) as client:
-        response = await client.get('/medoed/state')
+        response = await client.get('/mascot/state')
         assert await response.json() == {'mood': 'sad', 'rate': 1.0, 'chatters': 0}
 
 
@@ -219,7 +219,7 @@ def test_a_new_target_during_the_wait_does_not_restart_it():
 
 
 def test_every_listener_gets_the_change(monkeypatch):
-    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    monkeypatch.setattr(Mascot, 'ENABLED', True)
     first, second = asyncio.Queue(feed.QUEUE_SIZE), asyncio.Queue(feed.QUEUE_SIZE)
     feed._clients.update({first, second})
     for nick in ('a', 'b', 'c'):
@@ -241,7 +241,7 @@ async def test_a_silent_feed_sends_pings(monkeypatch):
     """The overlay reconnects after a long silence, so a quiet chat must not look dead."""
     monkeypatch.setattr(feed, 'PING_SECONDS', 0.05)
     async with TestClient(TestServer(feed.make_app())) as client:
-        response = await client.get('/medoed/events')
+        response = await client.get('/mascot/events')
         await _event(response)
         assert (await _raw_event(response))[0] == 'event: ping'
         response.close()
@@ -256,13 +256,13 @@ def _free_port() -> int:
 async def test_the_bot_stops_at_once_with_an_overlay_connected(monkeypatch):
     """A stream never ends by itself: the server's shutdown would wait for it longer than
     docker gives the whole bot to stop, and the rewards would stay open."""
-    monkeypatch.setattr(Medoed, 'HOST', '127.0.0.1')
-    monkeypatch.setattr(Medoed, 'PORT', _free_port())
-    task = asyncio.create_task(feed.medoed_loop())
+    monkeypatch.setattr(Mascot, 'HOST', '127.0.0.1')
+    monkeypatch.setattr(Mascot, 'PORT', _free_port())
+    task = asyncio.create_task(feed.mascot_loop())
     async with aiohttp.ClientSession() as session:
         for _ in range(50):
             try:
-                response = await session.get(f'http://127.0.0.1:{Medoed.PORT}/medoed/events')
+                response = await session.get(f'http://127.0.0.1:{Mascot.PORT}/mascot/events')
                 break
             except aiohttp.ClientConnectionError:
                 await asyncio.sleep(0.02)
@@ -277,9 +277,9 @@ async def test_a_busy_port_leaves_the_rest_of_the_bot_alone(monkeypatch, caplog)
     with socket.socket() as taken:
         taken.bind(('127.0.0.1', 0))
         taken.listen()
-        monkeypatch.setattr(Medoed, 'HOST', '127.0.0.1')
-        monkeypatch.setattr(Medoed, 'PORT', taken.getsockname()[1])
-        await asyncio.wait_for(feed.medoed_loop(), 3)
+        monkeypatch.setattr(Mascot, 'HOST', '127.0.0.1')
+        monkeypatch.setattr(Mascot, 'PORT', taken.getsockname()[1])
+        await asyncio.wait_for(feed.mascot_loop(), 3)
     assert 'не открылся' in caplog.text
     assert 'Traceback' not in caplog.text
 
@@ -287,7 +287,7 @@ async def test_a_busy_port_leaves_the_rest_of_the_bot_alone(monkeypatch, caplog)
 async def test_the_bots_own_message_is_counted(monkeypatch):
     """Every chatter counts, the bot itself included: the filter that drops its own lines
     for everything else comes after the count."""
-    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    monkeypatch.setattr(Mascot, 'ENABLED', True)
     bot = FakeBot()
     itself = make_chatter('securityexpert')
     itself.id = bot.bot_id
@@ -297,7 +297,7 @@ async def test_the_bots_own_message_is_counted(monkeypatch):
 
 
 async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
-    monkeypatch.setattr(Medoed, 'ENABLED', True)
+    monkeypatch.setattr(Mascot, 'ENABLED', True)
     component = ChatComponent(FakeBot())
     message = make_message('привет', make_chatter('gop'))
     await component.event_message(message)
@@ -308,17 +308,17 @@ async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
 
 @pytest.mark.parametrize('enabled', [True, False])
 async def test_the_feed_starts_only_when_enabled(monkeypatch, enabled):
-    monkeypatch.setattr(Medoed, 'ENABLED', enabled)
+    monkeypatch.setattr(Mascot, 'ENABLED', enabled)
     started = asyncio.Event()
 
     async def loop():
         started.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(bot_module, 'medoed_loop', loop)
+    monkeypatch.setattr(bot_module, 'mascot_loop', loop)
     bot = bot_module.Bot()
-    bot._start_medoed()
-    assert bot._tasks.running('medoed') is enabled
+    bot._start_mascot()
+    assert bot._tasks.running('mascot') is enabled
     await bot.stop_background_tasks()
 
 

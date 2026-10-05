@@ -429,25 +429,25 @@ class Emote:
     SPAM_MIN, SPAM_MAX = _emote_spam_range()
 
 
-def _medoed_thresholds() -> tuple[int, int, int]:
-    sit = _env_int('MEDOED_SIT', 3, 1, 1000)
-    stand = _env_int('MEDOED_STAND', 5, 1, 1000)
-    dance = _env_int('MEDOED_DANCE', 8, 1, 1000)
+def _mascot_thresholds() -> tuple[int, int, int]:
+    sit = _env_int('MASCOT_SIT', 3, 1, 1000)
+    stand = _env_int('MASCOT_STAND', 5, 1, 1000)
+    dance = _env_int('MASCOT_DANCE', 8, 1, 1000)
     if not sit < stand < dance:
-        logger.warning('MEDOED_SIT=%s, MEDOED_STAND=%s, MEDOED_DANCE=%s должны расти – используются 3, 5, 8',
+        logger.warning('MASCOT_SIT=%s, MASCOT_STAND=%s, MASCOT_DANCE=%s должны расти – используются 3, 5, 8',
                        sit, stand, dance)
         return 3, 5, 8
     return sit, stand, dance
 
 
-class Medoed:
-    ENABLED: bool = _env_bool('MEDOED_ENABLED', False)
+class Mascot:
+    ENABLED: bool = _env_bool('MASCOT_ENABLED', False)
     # Local only by default (a bot run from the host for make oauth or debugging); compose
     # sets 0.0.0.0 inside the container and decides itself which host address publishes it
-    HOST: str = _env_raw('MEDOED_HOST') or '127.0.0.1'
-    PORT: int = _env_int('MEDOED_PORT', 8787, 1, 65535)
-    WINDOW_SECONDS: int = _env_int('MEDOED_WINDOW_SECONDS', 300, 10, 3600)
-    # Distinct chatters over the window from which the medoed sits, stands up, dances
-    SIT, STAND, DANCE = _medoed_thresholds()
-    STEP_DOWN_SECONDS: int = _env_int('MEDOED_STEP_DOWN_SECONDS', 60, 0, 3600)
-    MAX_RATE: float = _env_float('MEDOED_MAX_RATE', 1.5, 1.0, 2.0)
+    HOST: str = _env_raw('MASCOT_HOST') or '127.0.0.1'
+    PORT: int = _env_int('MASCOT_PORT', 8787, 1, 65535)
+    WINDOW_SECONDS: int = _env_int('MASCOT_WINDOW_SECONDS', 300, 10, 3600)
+    # Distinct chatters over the window from which the mascot sits, stands up, dances
+    SIT, STAND, DANCE = _mascot_thresholds()
+    STEP_DOWN_SECONDS: int = _env_int('MASCOT_STEP_DOWN_SECONDS', 60, 0, 3600)
+    MAX_RATE: float = _env_float('MASCOT_MAX_RATE', 1.5, 1.0, 2.0)

@@ -1,9 +1,9 @@
-"""SSE feed of the medoed mood: the OBS page listens, the bot pushes every change.
+"""SSE feed of the mascot mood: the OBS page listens, the bot pushes every change.
 
-GET /medoed/events – text/event-stream, event `mood`, data {"mood", "rate", "chatters"};
+GET /mascot/events – text/event-stream, event `mood`, data {"mood", "rate", "chatters"};
 the current state goes out on connect, so a reloaded overlay picks up where it was, and
 event `ping` every PING_SECONDS of silence, so the overlay can tell a dead connection.
-GET /medoed/state – the same JSON once, for a quick look from a browser.
+GET /mascot/state – the same JSON once, for a quick look from a browser.
 """
 import asyncio
 import json
@@ -11,8 +11,8 @@ import logging
 
 from aiohttp import web
 
-from src.core.config import Medoed
-from src.local.medoed.mood import tracker
+from src.core.config import Mascot
+from src.local.mascot.mood import tracker
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ _clients: set[asyncio.Queue] = set()
 
 def on_chat(nick: str) -> None:
     """A chat message from anyone, the streamer and the bot included."""
-    if not Medoed.ENABLED:
+    if not Mascot.ENABLED:
         return
     tracker.saw(nick)
     if tracker.update():
@@ -37,7 +37,7 @@ def on_chat(nick: str) -> None:
 
 
 def _publish() -> None:
-    logger.info('Медоед: %s (пишущих за окно: %d, скорость %.1f)', tracker.mood, tracker.chatters, tracker.rate)
+    logger.info('Маскот: %s (пишущих за окно: %d, скорость %.1f)', tracker.mood, tracker.chatters, tracker.rate)
     _broadcast(json.dumps(tracker.state()))
 
 
@@ -86,22 +86,22 @@ async def _state(_request: web.Request) -> web.Response:
 
 def make_app() -> web.Application:
     app = web.Application()
-    app.router.add_get('/medoed/events', _events)
-    app.router.add_get('/medoed/state', _state)
+    app.router.add_get('/mascot/events', _events)
+    app.router.add_get('/mascot/state', _state)
     return app
 
 
-async def medoed_loop() -> None:
+async def mascot_loop() -> None:
     """Serve the feed and recount the mood until cancelled."""
     runner = web.AppRunner(make_app(), access_log=None, shutdown_timeout=SHUTDOWN_SECONDS)
     await runner.setup()
     try:
-        await web.TCPSite(runner, Medoed.HOST, Medoed.PORT).start()
+        await web.TCPSite(runner, Mascot.HOST, Mascot.PORT).start()
     except OSError as e:
-        logger.error('Медоед: порт %s:%d не открылся (%s) – оверлей не получит настроение', Medoed.HOST, Medoed.PORT, e)
+        logger.error('Маскот: порт %s:%d не открылся (%s) – оверлей не получит настроение', Mascot.HOST, Mascot.PORT, e)
         await runner.cleanup()
         return
-    logger.info('Медоед: настроение для оверлея на http://%s:%d/medoed/events', Medoed.HOST, Medoed.PORT)
+    logger.info('Маскот: настроение для оверлея на http://%s:%d/mascot/events', Mascot.HOST, Mascot.PORT)
     try:
         while True:
             await asyncio.sleep(TICK_SECONDS)

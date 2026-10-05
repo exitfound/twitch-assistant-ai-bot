@@ -113,7 +113,7 @@ def test_the_section_is_known_and_a_key_without_the_mark_warns(caplog):
 async def test_help_channel_lists_the_commands_in_file_order(db, component):
     _channel('### !tg', 'телега', '### !donate', 'донат')
     component.bot.follows = False
-    message = make_message('!help-channel', make_chatter('gop'))
+    message = make_message('!channel', make_chatter('gop'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.help_channel')
 
@@ -123,12 +123,12 @@ async def test_help_channel_fills_the_list(db, component):
     path.write_text(path.read_text(encoding='utf-8').replace(
         '### help_channel\ntexts.help_channel', '### help_channel\n@{user} – {commands}'), encoding='utf-8')
     _channel('### !tg', 'телега', '### !donate', 'донат')
-    message = make_message('!help-channel', make_chatter('gop'))
+    message = make_message('!channel', make_chatter('gop'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('@gop – !tg | !donate')
 
 
 async def test_help_channel_without_commands(db, component):
-    message = make_message('!help-channel', make_chatter('gop'))
+    message = make_message('!channel', make_chatter('gop'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.help_channel_empty')

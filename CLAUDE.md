@@ -158,7 +158,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `picture/fetch.py`, `picture/render.py`, `picture/command.py` – `!ascii`: safe download, braille rendering, the handler with its cache. BOT.md «Шаг 7ж»
 
 **local**
-- `commands.py` – `handle_help`, `handle_stats`
+- `commands.py` – `handle_help_index` (`!help`), `handle_help` (`!bot`), `handle_stats`
 - `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`: `resolve()`, the registry's fallback; `handle_help_channel`. BOT.md «Шаг 7а4»
 - `clip.py` – `!clip`: `parse()`, `default_title()`, `handle_clip`, `make_clip()` (create the clip as the bot, wait until Twitch lists it). BOT.md «Шаг 7з»
 - `follow.py` – `handle_follow()`: a thank-you once per viewer, a few a minute

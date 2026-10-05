@@ -12,7 +12,7 @@ from src.core.config import Follow, Quota
 from src.core.database import count_bot_uses, record_bot_use
 from src.gemini.commands import handle_who
 from src.local.channel import handle_help_channel
-from src.local.commands import handle_help, handle_stats
+from src.local.commands import handle_help, handle_help_index, handle_stats
 from src.local.roll.command import handle_roll, handle_rollstat
 
 
@@ -116,15 +116,16 @@ async def test_badges_and_help_skip_the_follow_check(db, gated, monkeypatch):
     await component.event_message(make_message('!stat', make_chatter('vip', vip=True)))
     handler.assert_awaited_once()
     help_handler = AsyncMock()
-    monkeypatch.setattr(component._registry.resolve('!help-bot'), 'handler', help_handler)
-    await component.event_message(make_message('!help-bot', make_chatter('gop')))
+    monkeypatch.setattr(component._registry.resolve('!bot'), 'handler', help_handler)
+    await component.event_message(make_message('!bot', make_chatter('gop')))
     help_handler.assert_awaited_once()
     assert bot.follow_checks == 0
 
 
 @pytest.mark.parametrize(('text', 'handler'), [
-    ('!help-bot', handle_help),
-    ('!help-channel', handle_help_channel),
+    ('!help', handle_help_index),
+    ('!bot', handle_help),
+    ('!channel', handle_help_channel),
     ('!stat', handle_stats),
     ('!stat nick', handle_stats),
     ('!rollstat', handle_rollstat),

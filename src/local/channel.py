@@ -2,7 +2,7 @@
 
 Nothing about the bot itself: links and the like, the way other chat bots serve them.
 The list is the `channel` section of CONTENT.md, re-read live, so a command added there
-works without a restart and shows up in !help-channel.
+works without a restart and shows up in !channel.
 """
 import functools
 
@@ -24,7 +24,7 @@ def resolve(prompt: str) -> CommandEntry | None:
 
 
 async def handle_help_channel(ctx: CommandContext) -> None:
-    """!help-channel – the list of the channel's own commands, without their replies."""
+    """!channel – the list of the channel's own commands, without their replies."""
     help_announce.note_help_shown()
     commands = Content.channel_commands()
     if not commands:

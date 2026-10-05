@@ -1,4 +1,4 @@
-"""The reminder: a pointer to !help-bot and !help-channel, only into a live conversation."""
+"""The reminder: a pointer to !bot and !channel, only into a live conversation."""
 import time
 
 import pytest
@@ -6,6 +6,7 @@ import pytest
 from fakes import FakeBot, make_chatter, make_message
 from src.core.activity import ChatWatch
 from src.core.component import ChatComponent
+from src.core.config import Follow
 from src.core.database import save_chat_message
 from src.local import help_announce
 
@@ -31,7 +32,7 @@ async def test_silent_chat_or_no_stream_gets_nothing(db):
     offline.send_chat_message.assert_not_awaited()
 
 
-@pytest.mark.parametrize('command', ['!help-bot', '!help-channel'])
+@pytest.mark.parametrize('command', ['!help', '!bot', '!channel'])
 async def test_either_help_command_skips_the_next_pointer(db, command):
     bot = FakeBot()
     since = time.monotonic()
@@ -39,3 +40,13 @@ async def test_either_help_command_skips_the_next_pointer(db, command):
     await _talk(bot)
     await help_announce._announce(bot, ChatWatch(), since)
     bot.send_chat_message.assert_not_awaited()
+
+
+async def test_help_answers_with_the_reminder_text_to_anyone(db, monkeypatch):
+    monkeypatch.setattr(Follow, 'REQUIRED', True)
+    bot = FakeBot()
+    bot.follows = False
+    message = make_message('!help', make_chatter('gop'))
+    await ChatComponent(bot).event_message(message)
+    message.respond.assert_awaited_once_with('texts.help_announce')
+    assert bot.follow_checks == 0

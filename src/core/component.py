@@ -32,7 +32,7 @@ from src.gemini.picture.command import handle_ascii
 from src.local import channel
 from src.local.channel import handle_help_channel
 from src.local.clip import handle_clip
-from src.local.commands import handle_help, handle_stats
+from src.local.commands import handle_help, handle_help_index, handle_stats
 from src.local.follow import handle_follow
 from src.local.mascot import feed as mascot
 from src.local.roll.command import handle_roll, handle_rollstat
@@ -41,8 +41,9 @@ from src.local.roll.perks import on_chat as roll_perks_on_chat
 logger = logging.getLogger(__name__)
 
 STATS_TRIGGER = '!stat'
-HELP_TRIGGER = '!help-bot'
-HELP_CHANNEL_TRIGGER = '!help-channel'
+HELP_INDEX_TRIGGER = '!help'
+HELP_TRIGGER = '!bot'
+HELP_CHANNEL_TRIGGER = '!channel'
 ASK_TRIGGER = '!ask'
 SUMMARY_TRIGGER = '!summary'
 WHO_TRIGGER = '!who'
@@ -126,6 +127,7 @@ class ChatComponent(commands.Component):
         add = self._registry.add
         # All commands work as bare text, without addressing the bot.
         # Order matters: longer triggers are registered first.
+        add(HELP_INDEX_TRIGGER, handle_help_index, public=True)
         add(HELP_TRIGGER,      handle_help,      public=True)
         add(HELP_CHANNEL_TRIGGER, handle_help_channel, public=True)
         add(STATS_TRIGGER,     handle_stats,     prefix=True)
@@ -271,7 +273,7 @@ class ChatComponent(commands.Component):
         # spam would turn into refusal spam
         if not self.bot.cooldown_remaining(user, FOLLOW_HINT_SCOPE):
             self.bot.set_cooldown(user, Follow.HINT_MINUTES * 60, FOLLOW_HINT_SCOPE)
-            await reply(message, Content.text('follow_required', user=user, command=HELP_TRIGGER))
+            await reply(message, Content.text('follow_required', user=user, command=HELP_INDEX_TRIGGER))
         return False
 
     async def _within_channel_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:

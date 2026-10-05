@@ -402,7 +402,7 @@ class Help:
     # if somebody has written in chat: an empty chat has nothing to be reminded of.
     # The interval is fixed: this is help, people expect it predictably
     ANNOUNCE_ENABLED: bool = _env_bool('HELP_ANNOUNCE_ENABLED', True)
-    ANNOUNCE_INTERVAL_MINUTES: int = _env_int('HELP_ANNOUNCE_INTERVAL_MINUTES', 30, 1, 1440)
+    ANNOUNCE_INTERVAL_MINUTES: int = _env_int('HELP_ANNOUNCE_INTERVAL_MINUTES', 20, 1, 1440)
 
 
 class Proactive:

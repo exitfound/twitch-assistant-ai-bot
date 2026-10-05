@@ -77,6 +77,9 @@ class CommandEntry:
     handler: Handler
     prefix: bool
     kind: Kind                  # Kind.LOCAL | Kind.GEMINI
+    # Served without the follow check: help and the channel's own commands are how a
+    # newcomer learns about the channel in the first place
+    public: bool = False
 
     def match(self, prompt: str) -> bool:
         if not self.prefix:
@@ -96,19 +99,34 @@ class CommandEntry:
 class CommandRegistry:
     def __init__(self) -> None:
         self._entries: list[CommandEntry] = []
+        self._fallback: Callable[[str], CommandEntry | None] | None = None
 
     def add(self, trigger: str, handler: Handler, *,
             prefix: bool = False,
-            kind: Kind = Kind.LOCAL) -> None:
+            kind: Kind = Kind.LOCAL,
+            public: bool = False) -> None:
         self._entries.append(CommandEntry(
             trigger=trigger,
             handler=handler,
             prefix=prefix,
             kind=kind,
+            public=public,
         ))
 
-    def resolve(self, prompt: str) -> CommandEntry | None:
+    def set_fallback(self, resolve: Callable[[str], CommandEntry | None]) -> None:
+        """Commands not known at startup, looked up after the registered ones."""
+        self._fallback = resolve
+
+    def resolve_own(self, prompt: str) -> CommandEntry | None:
+        """A registered command only, without the fallback."""
         for entry in self._entries:
             if entry.match(prompt):
                 return entry
         return None
+
+    def resolve(self, prompt: str) -> CommandEntry | None:
+        # Registered commands first: a fallback command of the same name never shadows them
+        entry = self.resolve_own(prompt)
+        if entry is None and self._fallback is not None:
+            entry = self._fallback(prompt)
+        return entry

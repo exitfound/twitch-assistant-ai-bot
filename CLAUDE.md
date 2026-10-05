@@ -119,7 +119,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **core**
 - `component.py` – `ChatComponent`: the registry of all commands, `event_message`, the pure `route()` and the gate `_gate()` (follow, cooldown, quota), `event_follow`. BOT.md «Обработка сообщений»
-- `commands.py` – `CommandContext`, `CommandEntry`, `CommandRegistry`, `Kind` (`StrEnum`: its values are the plain strings stored in cooldown keys and `bot_uses.kind`)
+- `commands.py` – `CommandContext`, `CommandEntry` (`public` – served without the follow check), `CommandRegistry` (`set_fallback()` – commands looked up after the registered ones), `Kind` (`StrEnum`: its values are the plain strings stored in cooldown keys and `bot_uses.kind`)
 - `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`, `Mascot`
 - `paths.py` – `DB_PATH`, `CONTENT_PATH`: `chat_history.db` in the repository root and `docs/CONTENT.md`, or `BOT_DB_PATH` / `BOT_CONTENT_PATH`
 - `content.py` – `CONTENT.md` access (`Content.prompt/label/text/items`), mtime cache, `REQUIRED`, `validate_content()`
@@ -159,6 +159,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **local**
 - `commands.py` – `handle_help`, `handle_stats`
+- `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`: `resolve()`, the registry's fallback. BOT.md «Шаг 7а4»
 - `clip.py` – `!clip`: `parse()`, `default_title()`, `handle_clip`, `make_clip()` (create the clip as the bot, wait until Twitch lists it). BOT.md «Шаг 7з»
 - `follow.py` – `handle_follow()`: a thank-you once per viewer, a few a minute
 - `emote_spam.py` – `emote_spam_loop()`
@@ -188,7 +189,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 ### `CONTENT.md` – everything the bot says
 
-One Markdown file: `## section` → `### key` → the value until the next heading. Sections `prompts` (`Content.prompt()`), `labels` (context headings the model sees; `prompts.system` names them, so they stay in sync), `texts` (every reply in chat), `lists` (`emotes`, `follow`, `banned`, one entry per line). Re-read when its mtime changes, no restart. `.env` holds secrets, numbers and flags; `CONTENT.md` holds text – nothing the chat sees is hardcoded. Placeholders go through `safe_format()`. `<!-- … -->` and prose before the first `###` are notes. A duplicate key logs an error; a file that parses to nothing or lacks a `REQUIRED` key keeps the previous version; `validate_content()` stops the start on a missing key. BOT.md «CONTENT.md – тексты бота»
+One Markdown file: `## section` → `### key` → the value until the next heading. Sections `prompts` (`Content.prompt()`), `labels` (context headings the model sees; `prompts.system` names them, so they stay in sync), `texts` (every reply in chat), `lists` (`emotes`, `follow`, `banned`, one entry per line), `channel` (the channel's own commands: `### !tg` and its reply; keys are free, not in `REQUIRED`). Re-read when its mtime changes, no restart. `.env` holds secrets, numbers and flags; `CONTENT.md` holds text – nothing the chat sees is hardcoded. Placeholders go through `safe_format()`. `<!-- … -->` and prose before the first `###` are notes. A duplicate key logs an error; a file that parses to nothing or lacks a `REQUIRED` key keeps the previous version; `validate_content()` stops the start on a missing key. BOT.md «CONTENT.md – тексты бота»
 
 ## Invariants that are easy to break
 
@@ -222,6 +223,7 @@ Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_C
   - Rewrite instead of deleting: `# The owner asked on 2026-09-15 to lower this from 5 to 3, because…` becomes `# Three throws: beyond that the points economy takes over`.
   - Rationale that is genuinely long belongs in `BOT.md` as a statement of how the thing works, still without the history of how it got there.
 - **Docs are part of the change, not a follow-up.** Every change to behaviour, config, schema or layout updates the affected docs in the *same* turn, before reporting the work as done. A change that is only documented in the commit message is unfinished. Each fact lives in one document (see "Documentation"): how a mechanic works – `BOT.md`; what the bot can do, installation, operations, the command and variable tables – `README.md`; layout, module map and these rules – `CLAUDE.md`; plus `.env.example` and the `<!-- … -->` notes in `CONTENT.md`. Do not retell a mechanic in a second document – link to it
+- Adding a channel command (a link, an info line): only `### !name` and its reply in `## channel` of `CONTENT.md`, no code and no restart
 - Adding a command: one `add()` line in `ChatComponent.__init__` + a handler in the right package (see "Where code goes") + its texts in `## texts` of `CONTENT.md` and in `REQUIRED` (`src/core/content.py`). Then: `README.md` (command table), `BOT.md` (registry table and its own «Шаг 7…» section), `CLAUDE.md` only if a module was added
 - Adding config: `src/core/config.py` (with a validated `_env_*` helper) + `.env.example` + README env table. If it is a *text*, it is not config – put it in `CONTENT.md`
 - Adding a text: `CONTENT.md` + `REQUIRED` in `src/core/content.py`. Never inline a chat-visible string in a handler

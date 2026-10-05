@@ -29,6 +29,7 @@ from src.gemini.commands import (
     handle_ask, handle_default, handle_summary, handle_versus, handle_who,
 )
 from src.gemini.picture.command import handle_ascii
+from src.local import channel
 from src.local.clip import handle_clip
 from src.local.commands import handle_help, handle_stats
 from src.local.follow import handle_follow
@@ -123,7 +124,7 @@ class ChatComponent(commands.Component):
         add = self._registry.add
         # All commands work as bare text, without addressing the bot.
         # Order matters: longer triggers are registered first.
-        add(HELP_TRIGGER,      handle_help)
+        add(HELP_TRIGGER,      handle_help,      public=True)
         add(STATS_TRIGGER,     handle_stats,     prefix=True)
         # Longer trigger first, by the rule above. !roll takes a prefix only to answer
         # «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out
@@ -139,6 +140,12 @@ class ChatComponent(commands.Component):
             add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI)
         if Clip.ENABLED:
             add(CLIP_TRIGGER,  handle_clip,  prefix=True)
+        # The channel's own commands come from CONTENT.md and change while the bot runs
+        self._registry.set_fallback(channel.resolve)
+        shadowed = [t for t in Content.channel_commands() if self._registry.resolve_own(t)]
+        if shadowed:
+            logger.error('CONTENT.md: команды канала %s совпадают с командами бота и не сработают',
+                         ', '.join(shadowed))
 
     def _repeated(self, message_id: str) -> bool:
         """True for a message already seen; no await, so two deliveries cannot both pass."""
@@ -216,8 +223,8 @@ class ChatComponent(commands.Component):
         tier = tier_of(message.chatter)
         seconds = _cooldown_seconds(tier)
 
-        # Without a follow the bot does not answer: the exception is help, which
-        # is how a viewer learns what following is for
+        # Without a follow the bot does not answer: the exception is help and the
+        # channel's own commands, which is how a viewer learns about the channel
         if tier == Tier.REGULAR and not await self._allowed_without_follow(message, user, entry):
             return False
 
@@ -253,7 +260,7 @@ class ChatComponent(commands.Component):
         """Whether to let a non-following viewer in. False – they have already been refused."""
         if not Follow.REQUIRED:
             return True
-        if entry is not None and entry.trigger == HELP_TRIGGER:
+        if entry is not None and entry.public:
             return True
         if await self._followers.is_follower(self.bot, message.chatter.id):
             return True

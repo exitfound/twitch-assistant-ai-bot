@@ -92,7 +92,8 @@ def test_the_real_content_file_is_complete(monkeypatch):
     monkeypatch.setattr(content, '_content', content._ContentFile(real))
     validate_content()
     data = content._content.get()
-    unknown = [f'{s}.{k}' for s, keys in data.items() for k in keys if k not in content.REQUIRED.get(s, ())]
+    unknown = [f'{s}.{k}' for s, keys in data.items() for k in keys
+               if s != content.CHANNEL_SECTION and k not in content.REQUIRED.get(s, ())]
     assert unknown == []
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from src.core import content
 from src.core.content import Content, parse, validate_content
+from src.local.roll import game, redemption, rewards
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -93,3 +94,47 @@ def test_the_real_content_file_is_complete(monkeypatch):
     data = content._content.get()
     unknown = [f'{s}.{k}' for s, keys in data.items() for k in keys if k not in content.REQUIRED.get(s, ())]
     assert unknown == []
+
+
+@pytest.fixture
+def real_content(monkeypatch):
+    """The real CONTENT.md: the stand-in one holds key names and has no placeholders."""
+    real = ROOT / 'docs' / 'CONTENT.md'
+    monkeypatch.setattr(content, 'CONTENT_PATH', real)
+    monkeypatch.setattr(content, '_content', content._ContentFile(real))
+
+
+def test_reward_titles_and_descriptions_fit_twitch(real_content, monkeypatch):
+    """Twitch takes a title up to 45 characters and a description up to 200, and the bot
+    cuts anything longer mid-word: the check runs on the uncut text."""
+    title_max, prompt_max = rewards.TITLE_MAX, rewards.PROMPT_MAX
+    monkeypatch.setattr(rewards, 'TITLE_MAX', 10_000)
+    monkeypatch.setattr(rewards, 'PROMPT_MAX', 10_000)
+    for spec in rewards._specs():
+        assert 0 < len(spec.title) <= title_max, spec.action
+        assert len(spec.prompt) <= prompt_max, (spec.action, len(spec.prompt))
+        assert '{' not in spec.prompt, spec.prompt
+
+
+_FULL = {'target': 'victim', 'old_value': 10, 'value': 20, 'free_left': 2, 'loser': ('loser', 3),
+         'champion': ('champ', 99), 'ceiling': 75, 'next_ceiling': 65, 'curse_minutes_left': 12,
+         'protect_minutes_left': 7, 'limit': 5}
+
+
+@pytest.mark.parametrize('action', list(game.Action))
+def test_every_reward_outcome_fills_its_template(real_content, action):
+    """A placeholder the call does not pass sends the raw template to chat, and the tests
+    on the stand-in CONTENT.md cannot see it. Every success variant and every refusal."""
+    outcomes = [game.Outcome(game.Status.OK, **{**_FULL, **change})
+                for change in ({}, {'ceiling': None}, {'old_value': None}, {'target': 'gop'})]
+    outcomes += [game.Outcome(status, **_FULL) for status in redemption._REFUND]
+    for outcome in outcomes:
+        text = redemption._render(action, 'gop', 'victim', outcome)
+        assert text and '{' not in text, (outcome.status, text)
+    for key in ('reward_refund_offline', 'reward_error'):
+        assert '{' not in Content.text(key, user='gop', reward=rewards.reward_title(action))
+
+
+def test_the_chill_text_fills_its_template(real_content):
+    text = Content.text('roll_too_fast', user='gop', minutes=3)
+    assert '3' in text and '{' not in text

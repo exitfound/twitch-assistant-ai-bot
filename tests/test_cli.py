@@ -3,6 +3,8 @@ import json
 import shutil
 from pathlib import Path
 
+from unittest.mock import AsyncMock
+
 import pytest
 
 from src.cli import emotes, knowledge, main, probe
@@ -161,6 +163,62 @@ def test_cli_refuses_a_modifier_of_another_command(argv):
     would still pay for Gemini: a modifier the command ignores is refused."""
     with pytest.raises(SystemExit):
         main.main(argv)
+
+
+@pytest.mark.parametrize('argv', [
+    ['--clear-lore'],
+    ['--clear-lore', '--dry-run'],
+    ['--upload-lore', 'lore.txt', '--clear-lore'],
+    ['--clear-lore', '--all', '--source', 'x.txt'],
+    ['--upload-lore', 'lore.txt', '--all'],
+    ['--vacuum', '--all'],
+])
+def test_wiping_all_knowledge_takes_all(argv):
+    """All 96 thousand rows have no source: a re-import with --clear-lore but no
+    --source would take them all with it."""
+    with pytest.raises(SystemExit):
+        main.main(argv)
+
+
+@pytest.mark.parametrize(('argv', 'source'), [
+    (['--clear-lore', '--all'], None),
+    (['--clear-lore', '--source', 'article.md'], 'article.md'),
+])
+def test_clear_lore_with_its_scope_named(argv, source, monkeypatch):
+    seen = {}
+
+    async def clear(source, dry_run):
+        seen['source'] = source
+    monkeypatch.setattr(main, 'clear_lore', clear)
+    assert main.main(argv)
+    assert seen == {'source': source}
+
+
+def test_build_memory_limit_is_only_for_the_preview(monkeypatch):
+    """--limit trims the dry-run preview only: without --dry-run it ran the full paid build."""
+    with pytest.raises(SystemExit):
+        main.main(['--build-memory', '--limit', '3'])
+    with pytest.raises(SystemExit):
+        main.main(['--build-memory', '--clear-memory', '--limit', '3'])
+    seen = {}
+
+    async def build(dry_run, limit, clear):
+        seen.update(dry_run=dry_run, limit=limit)
+    monkeypatch.setattr(main, 'build_memory', build)
+    assert main.main(['--build-memory', '--dry-run', '--limit', '3'])
+    assert seen == {'dry_run': True, 'limit': 3}
+
+
+async def test_a_failed_migration_still_closes_the_database(monkeypatch):
+    """The aiosqlite thread is not a daemon: left open, the command never exits."""
+    async def broken():
+        raise RuntimeError('database is locked')
+    closed = AsyncMock()
+    monkeypatch.setattr(main, 'init_db', broken)
+    monkeypatch.setattr(main, 'close_db', closed)
+    with pytest.raises(RuntimeError):
+        await main.vacuum()
+    closed.assert_awaited_once()
 
 
 def test_no_arguments_mean_run_the_bot():

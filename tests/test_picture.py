@@ -2,8 +2,7 @@
 pictures built in memory."""
 import asyncio
 import io
-from types import SimpleNamespace
-
+import ipaddress
 import pytest
 from google.genai import types
 from PIL import Image, ImageDraw
@@ -20,7 +19,7 @@ BRAILLE = {chr(c) for c in range(0x2800, 0x2900)}
 
 
 # --- SSRF -------------------------------------------------------------------
-# Numeric hosts resolve without DNS, so these run offline
+# Numeric hosts and localhost resolve without DNS, so these run offline
 
 @pytest.mark.parametrize('url', [
     'http://127.0.0.1/a.png',
@@ -29,6 +28,7 @@ BRAILLE = {chr(c) for c in range(0x2800, 0x2900)}
     'http://192.168.1.1/a.png',
     'http://169.254.169.254/latest/meta-data',
     'http://[::1]/a.png',
+    'http://[::ffff:127.0.0.1]/a.png',
     'http://0.0.0.0/a.png',
     'http://93.184.216.34:99999/a.png',
     'file:///etc/passwd',
@@ -37,43 +37,113 @@ BRAILLE = {chr(c) for c in range(0x2800, 0x2900)}
 ])
 async def test_private_or_malformed_urls_are_refused(url):
     with pytest.raises(PictureError) as error:
-        await fetch._check_url(url)
+        await fetch.fetch(url)
     assert error.value.code == BAD_URL
 
 
-async def test_public_address_passes():
-    await fetch._check_url('https://93.184.216.34/picture.png')
-
-
-def _response(peer):
-    stream = SimpleNamespace(get_extra_info=lambda key: peer)
-    return SimpleNamespace(extensions={'network_stream': stream})
-
-
-def test_connection_to_a_private_address_is_refused():
-    """DNS rebinding: the name checked out, the connection went elsewhere."""
-    with pytest.raises(PictureError):
-        fetch._check_peer(_response(('10.0.0.5', 443)))
-
-
-def test_connection_to_a_public_address_passes():
-    fetch._check_peer(_response(('93.184.216.34', 443)))
-
-
-@pytest.mark.parametrize('response', [
-    SimpleNamespace(extensions={}),
-    _response(None),
+@pytest.mark.parametrize('address', [
+    '::ffff:127.0.0.1',     # IPv4-mapped
+    '64:ff9b::7f00:1',      # NAT64 – ipaddress itself calls it global
+    '2002:7f00:1::',        # 6to4
+    '::127.0.0.1',          # IPv4-compatible
 ])
-def test_unknown_peer_is_refused(response):
-    """The last line against DNS rebinding must not be skipped when it cannot look."""
-    with pytest.raises(PictureError):
-        fetch._check_peer(response)
+def test_ipv6_carrying_a_local_ipv4_is_not_public(address):
+    assert not fetch._is_public(ipaddress.ip_address(address))
+
+
+def test_public_addresses_pass():
+    for address in ('93.184.216.34', '2606:4700::1111', '64:ff9b::808:808'):
+        assert fetch._is_public(ipaddress.ip_address(address))
+
+
+class _Server:
+    """A local HTTP server answering from a table of raw responses; records every
+    request line it receives."""
+
+    def __init__(self, routes: dict[str, bytes]) -> None:
+        self.routes = routes
+        self.requests: list[str] = []
+
+    async def __aenter__(self):
+        self._server = await asyncio.start_server(self._handle, '127.0.0.1', 0)
+        self.port = self._server.sockets[0].getsockname()[1]
+        return self
+
+    async def __aexit__(self, *exc):
+        self._server.close()
+        await self._server.wait_closed()
+
+    async def _handle(self, reader, writer):
+        head = await reader.readuntil(b'\r\n\r\n')
+        path = head.split(b' ')[1].decode()
+        self.requests.append(path)
+        writer.write(self.routes.get(path, b'HTTP/1.1 404 Not Found\r\ncontent-length: 0\r\n\r\n'))
+        await writer.drain()
+        writer.close()
+
+
+def _ok(body: bytes, mime: str = 'image/png', length: bool = True) -> bytes:
+    size = f'content-length: {len(body)}\r\n' if length else ''
+    return f'HTTP/1.1 200 OK\r\ncontent-type: {mime}\r\n{size}connection: close\r\n\r\n'.encode() + body
+
+
+def _redirect(location: str) -> bytes:
+    return f'HTTP/1.1 302 Found\r\nlocation: {location}\r\ncontent-length: 0\r\n\r\n'.encode()
+
+
+@pytest.fixture
+def loopback_is_public(monkeypatch):
+    """Let 127.0.0.1 through the address check, so a local server can stand in for the
+    internet; every other non-public address stays refused."""
+    real = fetch._is_public
+    monkeypatch.setattr(fetch, '_is_public', lambda a: str(a) == '127.0.0.1' or real(a))
+
+
+async def test_a_local_address_gets_no_connection_at_all():
+    """The check happens before the socket opens: a request sent first and judged by
+    its peer afterwards would already have reached the internal service."""
+    async with _Server({'/a.png': _ok(b'png')}) as server:
+        with pytest.raises(PictureError) as error:
+            await fetch.fetch(f'http://localhost:{server.port}/a.png')
+    assert error.value.code == BAD_URL
+    assert server.requests == []
+
+
+async def test_download_goes_through_the_checked_connection(loopback_is_public):
+    """The pool swapped into httpx's transport is the one that reaches the socket."""
+    async with _Server({'/a': _redirect('/b.png'), '/b.png': _ok(b'png')}) as server:
+        assert await fetch.fetch(f'http://127.0.0.1:{server.port}/a') == (b'png', 'image/png')
+    assert server.requests == ['/a', '/b.png']
+
+
+async def test_a_redirect_to_a_local_address_is_refused(loopback_is_public):
+    async with _Server({'/a.png': _redirect('http://127.0.0.2/b.png')}) as server:
+        with pytest.raises(PictureError) as error:
+            await fetch.fetch(f'http://127.0.0.1:{server.port}/a.png')
+    assert error.value.code == BAD_URL
+    assert server.requests == ['/a.png']
+
+
+async def test_a_body_past_the_cap_is_cut_by_counted_bytes(loopback_is_public, monkeypatch):
+    """No content-length to trust: the bytes themselves are counted."""
+    monkeypatch.setattr(fetch.Picture, 'MAX_BYTES', 1000)
+    async with _Server({'/a.png': _ok(b'x' * 5000, length=False)}) as server:
+        with pytest.raises(PictureError) as error:
+            await fetch.fetch(f'http://127.0.0.1:{server.port}/a.png')
+    assert error.value.code == fetch.TOO_BIG
+
+
+async def test_not_a_picture_is_refused(loopback_is_public):
+    async with _Server({'/a.png': _ok(b'<html>', mime='text/html')}) as server:
+        with pytest.raises(PictureError) as error:
+            await fetch.fetch(f'http://127.0.0.1:{server.port}/a.png')
+    assert error.value.code == fetch.FAILED
 
 
 async def test_whole_download_has_a_deadline(monkeypatch):
     """httpx's timeout is per operation: a server dripping a byte every few seconds would
     otherwise hold the viewer's slot and a socket for as long as it likes."""
-    async def ok(url):
+    def ok(url):
         pass
 
     async def drip(client, url):
@@ -89,7 +159,7 @@ async def test_whole_download_has_a_deadline(monkeypatch):
 
 
 async def test_client_ignores_proxy_env_and_compression(monkeypatch):
-    """A proxy would make the peer check look at the proxy; a compressed body would be
+    """A proxy would make the address check look at the proxy; a compressed body would be
     decoded past the size cap one chunk at a time."""
     seen = {}
     real = fetch.httpx.AsyncClient
@@ -98,7 +168,7 @@ async def test_client_ignores_proxy_env_and_compression(monkeypatch):
         seen.update(kwargs)
         return real(**kwargs)
 
-    async def ok(url):
+    def ok(url):
         pass
 
     async def done(client, url):

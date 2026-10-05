@@ -12,6 +12,7 @@ from src.core.db.chat import (
 from src.core.db.connection import BUSY_TIMEOUT, DB_PATH, backup_db, close_db, get_db, transaction, vacuum_db
 from src.core.db.interactions import (
     get_last_tagged_interaction, get_tagged_answers, get_user_interactions, save_bot_interaction,
+    was_greeted,
 )
 from src.core.db.knowledge import (
     KNOWLEDGE_IDS_TTL, get_all_facts, get_random_knowledge, get_relevant_facts,
@@ -38,5 +39,5 @@ __all__ = [
     'get_tagged_answers', 'get_total_stats', 'get_user_interactions', 'get_user_messages',
     'get_user_stats', 'has_chatted', 'init_db', 'invalidate_knowledge_cache', 'last_chat_time',
     'oldest_bot_use_age', 'record_bot_use', 'reopen_stream', 'save_bot_interaction',
-    'save_chat_message', 'save_stream', 'search_context', 'transaction', 'vacuum_db',
+    'save_chat_message', 'save_stream', 'search_context', 'transaction', 'vacuum_db', 'was_greeted',
 ]

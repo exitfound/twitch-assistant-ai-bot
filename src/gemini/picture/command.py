@@ -17,7 +17,6 @@ from src.core.commands import CommandContext
 from src.core.config import Picture
 from src.core.content import Content
 from src.core.database import save_bot_interaction
-from src.core.viewer import by_tier, tier_of
 from src.core.utils import reply
 from src.gemini.client import SAFETY_CHECK, generate, make_gen_config
 from src.core.limits import PerStreamLimit
@@ -171,18 +170,7 @@ async def _draw(ctx: CommandContext, url: str) -> tuple[str, str | None] | None:
     return art, verdict
 
 
-def _limit_for(chatter) -> int:
-    """How many pictures a viewer gets per stream. 0 – unlimited.
-
-    Only those the dispatcher let in get this far: the command is open from the
-    subscriber badge up, and is not available at all to a follower or a
-    non-follower, so a regular viewer never gets here.
-    """
-    return by_tier(tier_of(chatter), broadcaster=0, sub=Picture.PER_STREAM_SUB,
-                   vip=Picture.PER_STREAM_VIP, regular=Picture.PER_STREAM_VIP)
-
-
-LIMIT = PerStreamLimit(USE_KIND, _limit_for, 'ascii_failed')
+LIMIT = PerStreamLimit(USE_KIND, 'ascii_failed')
 
 
 def _find_url(ctx: CommandContext) -> str | None:

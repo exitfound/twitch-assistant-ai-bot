@@ -11,6 +11,7 @@ from src.core.database import get_db, transaction
 
 async def save_roll(
     session_id: str, username: str, value: int, *, free_throw: bool, limit: int | None = None,
+    tier: str | None = None,
 ) -> None:
     """Save a roll. free_throw=True – the throw counts against the free ones.
 
@@ -19,17 +20,58 @@ async def save_roll(
 
     limit – how many free throws the player gets by their status. It is known only
     when the person rolls from chat: a reward redemption event carries no badges,
-    so the limit is stored in the row.
+    so the limit is stored in the row. tier – the player's status, stored for the same
+    reason. rolled_at is written to the millisecond: on equal rolls the latest throw
+    takes the title, and two throws often land within one second.
     """
     async with transaction() as db:
         await db.execute(
-            'INSERT INTO rolls (session_id, username, roll_value, free_throws, free_limit)'
-            ' VALUES (?, ?, ?, ?, ?)'
+            'INSERT INTO rolls (session_id, username, roll_value, free_throws, free_limit, tier, rolled_at)'
+            " VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))"
             ' ON CONFLICT(session_id, username) DO UPDATE SET roll_value = excluded.roll_value,'
-            ' rolled_at = CURRENT_TIMESTAMP, free_throws = free_throws + excluded.free_throws,'
-            ' free_limit = COALESCE(excluded.free_limit, free_limit)',
-            (session_id, username, value, int(free_throw), limit),
+            ' rolled_at = excluded.rolled_at, free_throws = free_throws + excluded.free_throws,'
+            ' free_limit = COALESCE(excluded.free_limit, free_limit), tier = COALESCE(excluded.tier, tier)',
+            (session_id, username, value, int(free_throw), limit, tier),
         )
+
+
+async def set_tier(session_id: str, username: str, tier: str) -> None:
+    """Refresh the status in an existing row: a !roll refused still shows the badges."""
+    async with transaction() as db:
+        await db.execute(
+            'UPDATE rolls SET tier = ? WHERE session_id = ? AND username = ?', (tier, session_id, username),
+        )
+
+
+async def get_tier(session_id: str, username: str) -> str | None:
+    """The player's status by their last !roll this session, None – they have not rolled."""
+    db = await get_db()
+    async with db.execute(
+        'SELECT tier FROM rolls WHERE session_id = ? AND username = ?', (session_id, username),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def count_actions(session_id: str, actor: str, action: str) -> int:
+    """How many successful purchases of this action the buyer made this session."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT COUNT(*) FROM roll_actions WHERE session_id = ? AND actor = ? AND action = ? AND status = 'ok'",
+        (session_id, actor, action),
+    ) as cursor:
+        return (await cursor.fetchone())[0]
+
+
+async def reroll_times(session_id: str, actor: str) -> list[int]:
+    """When the buyer's successful rerolls of this session were made, in epoch seconds, oldest first."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT CAST(strftime('%s', created_at) AS INTEGER) FROM roll_actions"
+        " WHERE session_id = ? AND actor = ? AND action = 'reroll' AND status = 'ok' ORDER BY id",
+        (session_id, actor),
+    ) as cursor:
+        return [seconds for (seconds,) in await cursor.fetchall()]
 
 
 class RollRow(NamedTuple):
@@ -108,18 +150,24 @@ async def get_action_status(redemption_id: str) -> str | None:
     return row[0] if row else None
 
 
-async def seconds_since_actions(
-    session_id: str, action: str, target: str, status: str, limit: int,
-) -> list[int]:
-    """Seconds since each of the last `limit` such actions on the target, newest first."""
+async def save_throw(session_id: str, username: str, thrown_at: float) -> None:
+    """A throw the player made by their own hand: a free !roll or a paid extra roll."""
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO roll_throws (session_id, username, thrown_at) VALUES (?, ?, ?)',
+            (session_id, username, thrown_at),
+        )
+
+
+async def last_throws(session_id: str, username: str, limit: int) -> list[float]:
+    """When the player's last `limit` own throws were made, newest first."""
     db = await get_db()
     async with db.execute(
-        "SELECT CAST(strftime('%s', 'now') - strftime('%s', created_at) AS INTEGER)"
-        ' FROM roll_actions WHERE session_id = ? AND action = ? AND target = ? AND status = ?'
-        ' ORDER BY id DESC LIMIT ?',
-        (session_id, action, target, status, limit),
+        'SELECT thrown_at FROM roll_throws WHERE session_id = ? AND username = ?'
+        ' ORDER BY thrown_at DESC LIMIT ?',
+        (session_id, username, limit),
     ) as cursor:
-        return [seconds for (seconds,) in await cursor.fetchall()]
+        return [thrown_at for (thrown_at,) in await cursor.fetchall()]
 
 
 async def seconds_since_action(session_id: str, action: str, target: str, status: str) -> int | None:
@@ -153,14 +201,14 @@ async def save_action(
 async def get_session_loser(session_id: str) -> tuple[str, int] | None:
     """Returns (username, roll_value) of the current session залупа (minimum roll).
 
-    On equal minimums whoever rolled earlier wins. rolled_at has one-second
-    precision, so the final tie-break is by id: otherwise two equal rolls in
-    the same second would give a different answer from query to query.
+    On equal minimums the latest throw takes the title: matching the loser makes you
+    the loser. Rows written before rolled_at had milliseconds compare correctly with
+    newer ones; id only settles what is left, so the answer never changes between queries.
     """
     db = await get_db()
     async with db.execute(
         'SELECT username, roll_value FROM rolls WHERE session_id = ?'
-        ' ORDER BY roll_value ASC, rolled_at ASC, id ASC LIMIT 1',
+        ' ORDER BY roll_value ASC, rolled_at DESC, id DESC LIMIT 1',
         (session_id,),
     ) as cursor:
         row = await cursor.fetchone()
@@ -170,13 +218,12 @@ async def get_session_loser(session_id: str) -> tuple[str, int] | None:
 async def get_session_champion(session_id: str) -> tuple[str, int] | None:
     """(username, roll_value) of the session китежанин (champion) – the highest roll.
 
-    Mirror of get_session_loser(): on equal maximums the title goes to whoever
-    threw earlier, the final tie-break is by id.
+    Mirror of get_session_loser(): on equal maximums the latest throw takes the title.
     """
     db = await get_db()
     async with db.execute(
         'SELECT username, roll_value FROM rolls WHERE session_id = ?'
-        ' ORDER BY roll_value DESC, rolled_at ASC, id ASC LIMIT 1',
+        ' ORDER BY roll_value DESC, rolled_at DESC, id DESC LIMIT 1',
         (session_id,),
     ) as cursor:
         row = await cursor.fetchone()
@@ -228,17 +275,22 @@ async def get_perk(session_id: str, username: str, perk: str) -> PerkRow | None:
 
 
 async def activate_perks(session_id: str, username: str, now: float, until: float) -> list[str]:
-    """Start the countdown of the player's not yet started perks. Returns which were started."""
+    """Start the countdown of the player's not yet started perks. Returns which were started.
+
+    A perk consumed before it started (the loser curse lifted by a cleanse) stays as it
+    is: started, it would be announced as laid.
+    """
     async with transaction() as db:
         async with db.execute(
-            'SELECT perk FROM roll_perks WHERE session_id = ? AND username = ? AND active_from IS NULL',
+            'SELECT perk FROM roll_perks'
+            ' WHERE session_id = ? AND username = ? AND active_from IS NULL AND consumed = 0',
             (session_id, username),
         ) as cursor:
             perks = [perk for (perk,) in await cursor.fetchall()]
         if perks:
             await db.execute(
                 'UPDATE roll_perks SET active_from = ?, active_until = ?'
-                ' WHERE session_id = ? AND username = ? AND active_from IS NULL',
+                ' WHERE session_id = ? AND username = ? AND active_from IS NULL AND consumed = 0',
                 (now, until, session_id, username),
             )
     return perks
@@ -256,7 +308,8 @@ async def get_pending_perk_users(session_id: str) -> set[str]:
     """Who got a perk this session but has not shown up yet."""
     db = await get_db()
     async with db.execute(
-        'SELECT DISTINCT username FROM roll_perks WHERE session_id = ? AND active_from IS NULL',
+        'SELECT DISTINCT username FROM roll_perks'
+        ' WHERE session_id = ? AND active_from IS NULL AND consumed = 0',
         (session_id,),
     ) as cursor:
         return {username for (username,) in await cursor.fetchall()}

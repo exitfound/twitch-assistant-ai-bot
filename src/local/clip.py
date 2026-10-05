@@ -85,12 +85,7 @@ async def default_title(user: str) -> str:
     return Content.text('clip_title', number=number, user=user, date=date)[:TITLE_MAX]
 
 
-def _limit_for(chatter) -> int:
-    """Clips per stream. Only badge holders get this far; the broadcaster is unlimited."""
-    return 0 if chatter.broadcaster else Clip.PER_STREAM
-
-
-LIMIT = PerStreamLimit(KIND, _limit_for, 'clip_failed')
+LIMIT = PerStreamLimit(KIND, 'clip_failed')
 
 
 async def handle_clip(ctx: CommandContext) -> None:

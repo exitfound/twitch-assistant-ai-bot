@@ -2,10 +2,11 @@
 
 The link comes from a random viewer, so there are more checks than code. A link to an
 internal address would turn the bot into a way of knocking on the host's local network
-(SSRF), so every IP the name resolves to is checked, redirects are followed by hand –
-automatic following would reach a private address after the check – and the address of
-the established connection is checked as well, because httpx resolves the name a second
-time and a zero-TTL record could swap it in between.
+(SSRF). The name is resolved once, inside the connection, and the socket is opened to
+an address that has just been checked: a check before the request would let httpx
+resolve the name again (a zero-TTL record swaps it in between) or encode it otherwise
+(IDNA 2003 vs 2008), and a check after it would come when the request is already sent.
+Redirects are followed by hand, each through the same connection.
 
 Also: http/https only, image/* only, a timeout and a size cap.
 """
@@ -13,8 +14,8 @@ import asyncio
 import ipaddress
 import logging
 import socket
-from urllib.parse import urlparse
 
+import httpcore
 import httpx
 
 from src.core.config import Picture
@@ -29,6 +30,9 @@ MAX_REDIRECTS = 3
 
 # The whole download, redirects included, in units of PICTURE_TIMEOUT
 DEADLINE_FACTOR = 2
+
+# NAT64 addresses carry an IPv4 one in the low 32 bits
+NAT64 = ipaddress.ip_network('64:ff9b::/96')
 
 # Error codes – these are also key names in CONTENT.md
 BAD_URL = 'ascii_bad_url'
@@ -49,20 +53,21 @@ async def fetch(url: str) -> tuple[bytes, str]:
 
     httpx's timeout applies to each connect and read separately, so a server dripping
     a byte at a time never trips it: the whole download, redirects included, gets a
-    deadline of its own. The environment's proxy settings are ignored – behind a proxy
-    the peer check would see the proxy, not the host – and the body is asked for
+    deadline of its own. The environment's proxy settings are ignored – through a proxy
+    the address check would see the proxy, not the host – and the body is asked for
     uncompressed, since a compressed one is decoded past the size cap chunk by chunk.
     """
     try:
         async with asyncio.timeout(Picture.TIMEOUT * DEADLINE_FACTOR):
             async with httpx.AsyncClient(
+                transport=_transport(),
                 follow_redirects=False,
                 timeout=Picture.TIMEOUT,
                 trust_env=False,
                 headers={'User-Agent': USER_AGENT, 'Accept-Encoding': 'identity'},
             ) as client:
                 for _ in range(MAX_REDIRECTS + 1):
-                    await _check_url(url)
+                    _check_url(url)
                     result, url = await _get(client, url)
                     if result is not None:
                         return result
@@ -77,7 +82,6 @@ async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] |
     """One request. Either (data, mime) or the address of the next redirect."""
     try:
         async with client.stream('GET', url) as response:
-            _check_peer(response)
             if response.is_redirect:
                 location = response.headers.get('location')
                 if not location:
@@ -106,54 +110,105 @@ async def _get(client: httpx.AsyncClient, url: str) -> tuple[tuple[bytes, str] |
                     raise PictureError(TOO_BIG)
                 chunks.append(chunk)
             return (b''.join(chunks), mime), url
+    except httpx.InvalidURL:
+        raise PictureError(BAD_URL) from None
     except httpx.HTTPError as e:
         logger.info('!ascii: не скачалось (%s): %s', type(e).__name__, e)
         raise PictureError(FAILED) from None
 
 
-def _check_peer(response: httpx.Response) -> None:
-    """Check the address the connection was actually established with.
-
-    Checking the name alone is not enough: httpx resolves it a second time, and a
-    zero-TTL record can hand out a public address for the check and a local one for the
-    download (DNS rebinding). The established connection has nothing left to swap.
-    """
-    stream = response.extensions.get('network_stream')
-    peer = stream.get_extra_info('server_addr') if stream is not None else None
+def _check_url(url: str) -> None:
+    """Scheme, host and port, parsed the way httpx will parse them. Raises PictureError."""
     try:
-        address = ipaddress.ip_address(peer[0]) if peer else None
-    except ValueError:
-        address = None
-    if address is None:
-        # Nothing to check means nothing proves the address is public
-        logger.warning('!ascii: не удалось узнать адрес соединения – отказ')
-        raise PictureError(BAD_URL)
-    if not address.is_global:
-        logger.warning('!ascii: соединение ушло на непубличный адрес %s', address)
-        raise PictureError(BAD_URL)
-
-
-async def _check_url(url: str) -> None:
-    """Scheme, host and all of its addresses. Raises PictureError."""
-    parsed = urlparse(url)
-    if parsed.scheme not in ('http', 'https') or not parsed.hostname:
-        raise PictureError(BAD_URL)
-    try:
-        port = parsed.port or (443 if parsed.scheme == 'https' else 80)
-    except ValueError:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL:
         raise PictureError(BAD_URL) from None
-    loop = asyncio.get_running_loop()
+    if parsed.scheme not in ('http', 'https') or not parsed.host:
+        raise PictureError(BAD_URL)
+    # httpx accepts any number here and fails only when it connects
+    if parsed.port is not None and not 0 < parsed.port < 65536:
+        raise PictureError(BAD_URL)
+
+
+def _transport() -> httpx.AsyncHTTPTransport:
+    """httpx's transport with a connection pool that connects through _PublicOnly.
+
+    httpx takes no network backend of its own, so the pool it built is replaced before
+    any connection exists; test_picture.py checks the swap still reaches the socket.
+    """
+    transport = httpx.AsyncHTTPTransport(trust_env=False)
+    transport._pool = httpcore.AsyncConnectionPool(
+        ssl_context=httpx.create_ssl_context(trust_env=False),
+        network_backend=_PublicOnly(),
+    )
+    return transport
+
+
+class _PublicOnly(httpcore.AsyncNetworkBackend):
+    """Resolves the host itself and opens the socket only to an address it checked.
+
+    TLS verifies the certificate against the name, not the address: httpcore passes the
+    host from the URL to the handshake.
+    """
+
+    def __init__(self) -> None:
+        self._backend = httpcore.AnyIOBackend()
+
+    # httpcore's own signature: its pool passes the connect timeout by this name
+    async def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):  # noqa: ASYNC109
+        error: Exception | None = None
+        for address in await _public_addresses(host, port):
+            try:
+                return await self._backend.connect_tcp(
+                    address, port, timeout=timeout,
+                    local_address=local_address, socket_options=socket_options,
+                )
+            except (httpcore.ConnectError, httpcore.ConnectTimeout) as e:
+                error = e
+        raise error or httpcore.ConnectError(f'{host}: нет адресов')
+
+    async def sleep(self, seconds: float) -> None:
+        await self._backend.sleep(seconds)
+
+
+async def _public_addresses(host: str, port: int) -> list[str]:
+    """Every address the host resolves to, or PictureError if any of them is not public.
+
+    A host that resolves to both a public and a local address is refused: which one the
+    connection takes is not up to the bot.
+    """
     try:
-        infos = await loop.getaddrinfo(parsed.hostname, port, proto=socket.IPPROTO_TCP)
+        infos = await asyncio.get_running_loop().getaddrinfo(
+            host, port, type=socket.SOCK_STREAM, proto=socket.IPPROTO_TCP,
+        )
     except (socket.gaierror, UnicodeError, OSError):
         raise PictureError(BAD_URL) from None
-    # Check every address: a host may resolve to both a public and a local
-    # one – a single public address is not enough to consider the link safe
+    addresses = []
     for info in infos:
         try:
             address = ipaddress.ip_address(info[4][0])
         except ValueError:
             raise PictureError(BAD_URL) from None
-        if not address.is_global:
+        if not _is_public(address):
             logger.warning('!ascii: ссылка ведёт на непубличный адрес %s', address)
             raise PictureError(BAD_URL)
+        if str(address) not in addresses:
+            addresses.append(str(address))
+    if not addresses:
+        raise PictureError(BAD_URL)
+    return addresses
+
+
+def _is_public(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    """A global address. An IPv6 one that carries an IPv4 address (mapped, 6to4, NAT64,
+    the old compatible form) counts only if that one is global too: ipaddress calls
+    64:ff9b::7f00:1 global, yet a NAT64 gateway delivers it to 127.0.0.1."""
+    if not address.is_global:
+        return False
+    if address.version == 6:
+        inner = address.ipv4_mapped or address.sixtofour
+        if inner is None and (address in NAT64 or int(address) < 2 ** 32):
+            inner = ipaddress.IPv4Address(int(address) & 0xFFFFFFFF)
+        if inner is not None and not inner.is_global:
+            return False
+    return True

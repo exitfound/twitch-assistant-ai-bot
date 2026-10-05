@@ -7,9 +7,13 @@ import time
 
 import pytest
 
-from src.core.config import Rewards, Roll
+from fakes import FakeBot, make_chatter, make_message
+from src.core.commands import CommandContext
+from src.core.config import Rewards, Roll, Twitch
+from src.core.viewer import Tier
 from src.core.database import get_db, save_chat_message, save_stream
 from src.local.roll import game, rules
+from src.local.roll.command import handle_roll, handle_rollstat
 from src.local.roll.storage import (
     RollRow, add_perk, get_pending_perk_users, get_perk, get_roll, get_session_champion,
     get_session_loser, save_roll, set_curse,
@@ -69,31 +73,61 @@ async def test_extra_uses_the_limit_stored_by_the_chat_throw(db):
     assert outcome.free_left == Roll.FREE_SUB - 1
 
 
-async def test_extra_rolls_pause_after_a_full_series(db):
-    for _ in range(3):
-        await game.free_throw(S, 'gop', limit=3)
-    for _ in range(Rewards.EXTRA_SERIES):
-        assert (await redeem(game.Action.EXTRA, 'gop')).ok
-    paused = await redeem(game.Action.EXTRA, 'gop')
-    assert paused.status == game.Status.EXTRA_PAUSE
-    assert paused.protect_minutes_left == Rewards.EXTRA_PAUSE_MINUTES
+async def _age_throws(seconds: float) -> None:
+    """Move every recorded throw `seconds` into the past."""
     db_ = await get_db()
-    await db_.execute(
-        "UPDATE roll_actions SET created_at = datetime('now', ?) WHERE action = 'extra'",
-        (f'-{Rewards.EXTRA_PAUSE_MINUTES} minutes',),
-    )
+    await db_.execute('UPDATE roll_throws SET thrown_at = thrown_at - ?', (seconds,))
     await db_.commit()
-    assert (await redeem(game.Action.EXTRA, 'gop')).ok
 
 
-@pytest.mark.parametrize(('ages', 'left'), [
-    ([10, 20, 30, 40], None),               # not a full series yet
-    ([10, 20, 30, 40, 50], 290),            # a series: the pause runs from the latest
-    ([10, 20, 30, 40, 400], None),          # a pause inside it broke the series
-    ([300, 310, 320, 330, 340], None),      # the pause has passed
+async def test_free_and_extra_throws_count_together_in_a_burst(db):
+    """Three free !roll and two extra rolls within a minute: the next one waits."""
+    for _ in range(3):
+        assert (await game.free_throw(S, 'gop', limit=3)).ok
+    for _ in range(Roll.BURST_THROWS - 3):
+        assert (await redeem(game.Action.EXTRA, 'gop')).ok
+    refused = await redeem(game.Action.EXTRA, 'gop')
+    assert refused.status == game.Status.TOO_FAST
+    assert refused.protect_minutes_left == Roll.BURST_PAUSE_MINUTES
+
+
+async def test_a_burst_of_free_throws_waits_and_keeps_the_throw(db):
+    """A subscriber has no cooldown and ten free throws: five in a row, then a pause."""
+    for _ in range(Roll.BURST_THROWS):
+        assert (await game.free_throw(S, 'sub', limit=Roll.FREE_SUB)).ok
+    refused = await game.free_throw(S, 'sub', limit=Roll.FREE_SUB)
+    assert refused.status == game.Status.TOO_FAST
+    assert (await get_roll(S, 'sub')).free_throws == Roll.BURST_THROWS
+    # The pause runs from the last throw: once it has passed, the game is open again
+    await _age_throws(Roll.BURST_PAUSE_MINUTES * 60)
+    assert (await game.free_throw(S, 'sub', limit=Roll.FREE_SUB)).ok
+
+
+async def test_throws_spread_over_more_than_the_window_are_not_a_burst(db):
+    for _ in range(Roll.BURST_THROWS):
+        assert (await game.free_throw(S, 'sub', limit=Roll.FREE_SUB)).ok
+        await _age_throws(Roll.BURST_SECONDS / (Roll.BURST_THROWS - 1) + 1)
+    assert (await game.free_throw(S, 'sub', limit=Roll.FREE_SUB)).ok
+
+
+async def test_the_broadcaster_is_not_held(db):
+    """!roll knows the broadcaster by the badge, a redemption by the channel's login."""
+    streamer = Twitch.CHANNEL.lower()
+    for _ in range(Roll.BURST_THROWS + 1):
+        assert (await game.free_throw(S, streamer, limit=3, unlimited=True)).ok
+    for _ in range(Roll.BURST_THROWS):
+        assert (await redeem(game.Action.EXTRA, streamer)).ok
+
+
+@pytest.mark.parametrize(('times', 'now', 'left'), [
+    ([40, 30, 20, 10], 45, None),               # four throws are not a burst yet
+    ([40, 30, 20, 10, 0], 50, 170),             # five within the window: the pause runs from the newest
+    ([60, 45, 30, 15, 0], 70, 170),             # exactly the window still counts
+    ([61, 45, 30, 15, 0], 70, None),            # spread wider than the window
+    ([40, 30, 20, 10, 0], 220, None),           # the pause has passed
 ])
-def test_series_pause(ages, left):
-    assert rules.series_pause_left(ages, 5, 300) == left
+def test_burst_pause(times, now, left):
+    assert rules.burst_pause_left(times, now, 5, 60, 180) == left
 
 
 async def test_extra_after_free_throws_does_not_spend_them(db):
@@ -120,11 +154,26 @@ async def test_single_player_is_not_their_own_champion(db):
     assert outcome.champion is None
 
 
-async def test_equal_rolls_go_to_whoever_threw_first(db):
-    await save_roll(S, 'first', 50, free_throw=True)
-    await save_roll(S, 'second', 50, free_throw=True)
-    assert await get_session_loser(S) == ('first', 50)
-    assert await get_session_champion(S) == ('first', 50)
+async def test_equal_rolls_go_to_whoever_threw_last(db, fixed):
+    """Matching the loser makes you the loser, matching the best makes you the best."""
+    fixed += [9, 9, 90, 90]
+    await game.free_throw(S, 'a', limit=3)
+    outcome = await game.free_throw(S, 'b', limit=3)
+    assert outcome.loser == ('b', 9)
+    await game.free_throw(S, 'c', limit=3)
+    outcome = await game.free_throw(S, 'd', limit=3)
+    assert outcome.champion == ('d', 90)
+
+
+async def test_the_last_throw_wins_a_tie_within_one_second(db):
+    """rolled_at keeps milliseconds: to the second, «last» would fall back to the row id,
+    which is whoever joined the game later, not whoever threw later."""
+    await save_roll(S, 'early', 50, free_throw=True)
+    await save_roll(S, 'late', 50, free_throw=True)
+    await asyncio.sleep(0.01)
+    await save_roll(S, 'early', 50, free_throw=True)
+    assert await get_session_loser(S) == ('early', 50)
+    assert await get_session_champion(S) == ('early', 50)
 
 
 # --- curse -------------------------------------------------------------------
@@ -200,6 +249,81 @@ async def test_curse_pierces_every_protection(db):
 
 # --- reroll ------------------------------------------------------------------
 
+async def _targets(count: int) -> list[str]:
+    """Players to reroll: a different one each time, past the target's own protection."""
+    names = [f'target{i}' for i in range(count)]
+    for name in names:
+        await save_roll(S, name, 50, free_throw=True)
+    return names
+
+
+async def _rerolls(actor: str, count: int) -> list[game.Outcome]:
+    return [await redeem(game.Action.REROLL, actor, target) for target in await _targets(count)]
+
+
+@pytest.mark.parametrize(('tier', 'limit'), [
+    (None, Rewards.LIMIT_FOLLOWER),            # never rolled this session: a follower
+    (Tier.REGULAR, Rewards.LIMIT_FOLLOWER),
+    (Tier.VIP, Rewards.LIMIT_VIP),
+    (Tier.SUB, Rewards.LIMIT_SUB),
+    (Tier.MODERATOR, Rewards.LIMIT_SUB),
+])
+async def test_rerolls_per_window_follow_the_status_of_the_last_roll(db, tier, limit):
+    if tier is not None:
+        await game.free_throw(S, 'buyer', limit=3, tier=tier)
+    *done, refused = await _rerolls('buyer', limit + 1)
+    assert all(outcome.ok for outcome in done)
+    assert refused.status == game.Status.REROLL_LIMIT
+    assert refused.limit == limit
+    assert refused.protect_minutes_left == Rewards.REROLL_WINDOW_MINUTES
+
+
+async def test_a_new_window_opens_when_the_first_one_ends(db):
+    await _rerolls('buyer', Rewards.LIMIT_FOLLOWER)
+    db_ = await get_db()
+    await db_.execute("UPDATE roll_actions SET created_at = datetime('now', ?)",
+                      (f'-{Rewards.REROLL_WINDOW_MINUTES} minutes',))
+    await db_.commit()
+    assert all(outcome.ok for outcome in await _rerolls('buyer', Rewards.LIMIT_FOLLOWER))
+
+
+async def test_a_refused_reroll_does_not_use_up_the_window(db):
+    """A shield or a typo gives the points back: no reroll happened, none is counted."""
+    await save_roll(S, 'guarded', 50, free_throw=True)
+    await redeem(game.Action.SHIELD, 'guarded')
+    for _ in range(Rewards.LIMIT_FOLLOWER):
+        assert (await redeem(game.Action.REROLL, 'buyer', 'guarded')).status == game.Status.SHIELDED
+    assert all(outcome.ok for outcome in await _rerolls('buyer', Rewards.LIMIT_FOLLOWER))
+
+
+async def test_a_status_gained_mid_stream_counts_from_the_next_roll(db):
+    """Even a refused !roll refreshes the status: the badges came with it."""
+    for _ in range(3):
+        await game.free_throw(S, 'buyer', limit=3, tier=Tier.REGULAR)
+    refused = await game.free_throw(S, 'buyer', limit=3, tier=Tier.SUB)
+    assert refused.status == game.Status.NO_FREE_LEFT
+    *done, last = await _rerolls('buyer', Rewards.LIMIT_SUB + 1)
+    assert all(outcome.ok for outcome in done)
+    assert last.status == game.Status.REROLL_LIMIT
+
+
+async def test_the_broadcaster_rerolls_without_a_window(db):
+    outcomes = await _rerolls(Twitch.CHANNEL.lower(), Rewards.LIMIT_SUB + 2)
+    assert all(outcome.ok for outcome in outcomes)
+
+
+@pytest.mark.parametrize(('times', 'now', 'left'), [
+    ([], 0, None),
+    ([0, 100], 200, None),                      # two of three
+    ([0, 100, 200], 300, 1500),                 # the window opened at 0 is full
+    ([0, 100, 200], 1800, None),                # it has ended
+    ([0, 100, 200, 1800, 1900], 2000, None),    # a new window, two of three
+    ([0, 100, 200, 1800, 1900, 2000], 2100, 1500),
+])
+def test_reroll_window(times, now, left):
+    assert rules.window_left(times, now, 3, 1800) == left
+
+
 async def test_reroll_replaces_the_target_roll_without_spending_free_throws(db, fixed):
     await save_roll(S, 'victim', 90, free_throw=True)
     fixed.append(5)
@@ -246,6 +370,120 @@ async def test_bought_shield_runs_out_and_can_be_bought_again(db):
     assert (await redeem(game.Action.REROLL, 'actor', 'victim')).ok
     assert (await redeem(game.Action.SHIELD, 'victim')).ok
     assert (await game.status(S, 'victim', limit=3)).shield_left == Rewards.SHIELD_MINUTES
+
+
+async def _expire_shields() -> None:
+    db_ = await get_db()
+    await db_.execute("UPDATE roll_actions SET created_at = datetime('now', ?) WHERE action = 'shield'",
+                      (f'-{Rewards.SHIELD_MINUTES} minutes',))
+    await db_.commit()
+
+
+@pytest.mark.parametrize(('tier', 'limit'), [
+    (None, Rewards.LIMIT_FOLLOWER),
+    (Tier.VIP, Rewards.LIMIT_VIP),
+    (Tier.SUB, Rewards.LIMIT_SUB),
+])
+async def test_shields_per_stream_follow_the_status_of_the_last_roll(db, tier, limit):
+    """The limit is per stream: once used up, an expired shield cannot be bought again."""
+    if tier is not None:
+        await game.free_throw(S, 'buyer', limit=3, tier=tier)
+    for _ in range(limit):
+        assert (await redeem(game.Action.SHIELD, 'buyer')).ok
+        await _expire_shields()
+    refused = await redeem(game.Action.SHIELD, 'buyer')
+    assert refused.status == game.Status.SHIELD_LIMIT
+    assert refused.limit == limit
+
+
+async def test_a_refused_shield_does_not_use_up_the_limit(db):
+    assert (await redeem(game.Action.SHIELD, 'buyer')).ok
+    for _ in range(Rewards.LIMIT_FOLLOWER):
+        assert (await redeem(game.Action.SHIELD, 'buyer')).status == game.Status.ALREADY_SHIELDED
+    for _ in range(Rewards.LIMIT_FOLLOWER - 1):
+        await _expire_shields()
+        assert (await redeem(game.Action.SHIELD, 'buyer')).ok
+
+
+async def test_the_broadcaster_buys_shields_without_a_limit(db):
+    for _ in range(Rewards.LIMIT_SUB + 1):
+        assert (await redeem(game.Action.SHIELD, Twitch.CHANNEL.lower())).ok
+        await _expire_shields()
+
+
+async def test_the_champions_shield_counts_as_a_shield(db):
+    """A bought shield on top of the champion's adds nothing: the points come back."""
+    await _previous_stream({'champ': 95, 'loser': 3})
+    await game.grant_perks(S)
+    refused = await redeem(game.Action.SHIELD, 'champ')
+    assert refused.status == game.Status.ALREADY_SHIELDED
+    assert refused.protect_minutes_left == Roll.PERK_MINUTES
+
+
+async def _curses(actor: str, count: int) -> list[game.Outcome]:
+    return [await redeem(game.Action.CURSE, actor, target) for target in await _targets(count)]
+
+
+@pytest.mark.parametrize(('tier', 'limit'), [
+    (None, Rewards.LIMIT_FOLLOWER),
+    (Tier.VIP, Rewards.LIMIT_VIP),
+    (Tier.SUB, Rewards.LIMIT_SUB),
+])
+async def test_curses_per_stream_follow_the_status_of_the_last_roll(db, tier, limit):
+    if tier is not None:
+        await game.free_throw(S, 'buyer', limit=3, tier=tier)
+    *done, refused = await _curses('buyer', limit + 1)
+    assert all(outcome.ok for outcome in done)
+    assert refused.status == game.Status.CURSE_LIMIT
+    assert refused.limit == limit
+
+
+async def test_a_refused_curse_does_not_use_up_the_limit(db):
+    """Cursing someone already cursed gives the points back: no curse, none counted."""
+    await save_roll(S, 'victim', 50, free_throw=True)
+    assert (await redeem(game.Action.CURSE, 'other', 'victim')).ok
+    for _ in range(Rewards.LIMIT_FOLLOWER):
+        assert (await redeem(game.Action.CURSE, 'buyer', 'victim')).status == game.Status.ALREADY_CURSED
+    assert all(outcome.ok for outcome in await _curses('buyer', Rewards.LIMIT_FOLLOWER))
+
+
+async def test_the_broadcaster_curses_without_a_limit(db):
+    assert all(outcome.ok for outcome in await _curses(Twitch.CHANNEL.lower(), Rewards.LIMIT_SUB + 1))
+
+
+async def _cleanses(actor: str, count: int) -> list[game.Outcome]:
+    """Cleanse `count` players, each cursed first by the broadcaster, who has no limit."""
+    outcomes = []
+    for target in await _targets(count):
+        assert (await redeem(game.Action.CURSE, Twitch.CHANNEL.lower(), target)).ok
+        outcomes.append(await redeem(game.Action.CLEANSE, actor, target))
+    return outcomes
+
+
+@pytest.mark.parametrize(('tier', 'limit'), [
+    (None, Rewards.LIMIT_FOLLOWER),
+    (Tier.VIP, Rewards.LIMIT_VIP),
+    (Tier.SUB, Rewards.LIMIT_SUB),
+])
+async def test_cleanses_per_stream_follow_the_status_of_the_last_roll(db, tier, limit):
+    if tier is not None:
+        await game.free_throw(S, 'buyer', limit=3, tier=tier)
+    *done, refused = await _cleanses('buyer', limit + 1)
+    assert all(outcome.ok for outcome in done)
+    assert refused.status == game.Status.CLEANSE_LIMIT
+    assert refused.limit == limit
+
+
+async def test_a_refused_cleanse_does_not_use_up_the_limit(db):
+    """Cleansing someone with no curse gives the points back: nothing lifted, none counted."""
+    await save_roll(S, 'clean', 50, free_throw=True)
+    for _ in range(Rewards.LIMIT_FOLLOWER):
+        assert (await redeem(game.Action.CLEANSE, 'buyer', 'clean')).status == game.Status.NOT_CURSED
+    assert all(outcome.ok for outcome in await _cleanses('buyer', Rewards.LIMIT_FOLLOWER))
+
+
+async def test_the_broadcaster_cleanses_without_a_limit(db):
+    assert all(outcome.ok for outcome in await _cleanses(Twitch.CHANNEL.lower(), Rewards.LIMIT_SUB + 1))
 
 
 async def test_perk_shield_blocks_rerolls_with_minutes(db):
@@ -312,6 +550,16 @@ async def test_cleanse_cancels_the_loser_curse_still_waiting(db):
     assert (await game.free_throw(S, 'loser', limit=3)).ceiling is None
 
 
+async def test_a_loser_curse_cleansed_before_the_first_message_is_not_announced(db):
+    """The cleanse consumed the waiting curse: started anyway, the loser's first message
+    would announce «проклятие залупы на 30 мин» for a curse that is never laid."""
+    await _previous_stream({'champ': 95, 'loser': 3})
+    await game.grant_perks(S)
+    assert (await redeem(game.Action.CLEANSE, 'friend', 'loser')).ok
+    assert await game.appear(S, 'loser') == []
+    assert 'loser' not in await get_pending_perk_users(S)
+
+
 async def test_a_cleansed_player_cannot_be_cursed_for_a_while(db):
     await save_roll(S, 'victim', 90, free_throw=True)
     assert (await redeem(game.Action.CURSE, 'a', 'victim')).ok
@@ -368,6 +616,18 @@ async def test_status_reads_without_starting_a_perk(db):
     assert standing.free_left == 2
     assert standing.shield_minutes_left is None
     assert 'champ' in await get_pending_perk_users(S)
+
+
+async def test_rollstat_shows_the_champions_shield_once_it_runs(db):
+    """The champion who has shown up sees how long the previous stream's shield still holds."""
+    await _previous_stream({'champ': 95, 'loser': 3})
+    await game.grant_perks(S)
+    await game.appear(S, 'champ')
+    message = make_message('!rollstat', make_chatter('champ'))
+    await handle_rollstat(CommandContext(message=message, user='champ', prompt='!rollstat',
+                                         original_text='!rollstat', session_id=S, bot=FakeBot(session_id=S)))
+    assert (await game.status(S, 'champ', limit=3)).shield_minutes_left == Roll.PERK_MINUTES
+    assert 'texts.rollstat_perk_shield' in message.respond.await_args.args[0]
 
 
 async def _previous_stream(rolls: dict[str, int]) -> None:
@@ -469,3 +729,45 @@ async def test_a_redemption_that_fails_to_journal_leaves_the_roll_as_it_was(db, 
     with pytest.raises(RuntimeError):
         await game.redeem(game.Action.REROLL, S, 'gop', 'victim', 'r1')
     assert (await get_roll(S, 'victim')).value == 90
+
+
+# --- !roll in chat -----------------------------------------------------------------
+
+async def test_roll_after_a_burst_says_chill_once(db):
+    """A subscriber has no cooldown: without the brake every further !roll would get
+    its own «зачилься»."""
+    bot = FakeBot(session_id=S)
+    chatter = make_chatter('sub', subscriber=True)
+    messages = []
+    for _ in range(Roll.BURST_THROWS + 3):
+        message = make_message('!roll', chatter)
+        messages.append(message)
+        await handle_roll(CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
+                                         session_id=S, bot=bot))
+    refusals = [m.respond.await_args.args[0] for m in messages[Roll.BURST_THROWS:] if m.respond.await_args]
+    assert refusals == ['texts.roll_too_fast']
+    assert (await get_roll(S, 'sub')).free_throws == Roll.BURST_THROWS
+
+
+async def test_the_status_of_a_chat_roll_reaches_the_reroll_limit(db):
+    """Only a !roll from chat sees badges: if the handler stopped passing them, every
+    buyer would count as a follower."""
+    chatter = make_chatter('buyer', subscriber=True)
+    await handle_roll(CommandContext(message=make_message('!roll', chatter), user='buyer', prompt='!roll',
+                                     original_text='!roll', session_id=S, bot=FakeBot(session_id=S)))
+    *done, last = await _rerolls('buyer', Rewards.LIMIT_SUB + 1)
+    assert all(outcome.ok for outcome in done)
+    assert last.status == game.Status.REROLL_LIMIT
+
+
+async def test_a_zero_reward_limit_means_no_limit(db, monkeypatch):
+    """0 is «no limit», as for every other limit of the bot, not a fallback to the default."""
+    monkeypatch.setattr(Rewards, 'LIMIT_FOLLOWER', 0)
+    assert all(outcome.ok for outcome in await _rerolls('buyer', 12))
+    for _ in range(12):
+        assert (await redeem(game.Action.SHIELD, 'buyer')).ok
+        await _expire_shields()
+
+
+def test_a_burst_pause_is_one_minute_by_default():
+    assert Roll.BURST_PAUSE_MINUTES == 1

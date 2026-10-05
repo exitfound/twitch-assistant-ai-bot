@@ -8,9 +8,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from src.core import logging_setup
-from src.core.utils import NICK_MAX, clean_nick, defuse, gather_cancelling, reply, reply_to_bot, safe_format
+from src.core.utils import (
+    NICK_MAX, clean_nick, defuse, find_banned, gather_cancelling, reply, reply_to_bot, safe_format,
+)
 from src.gemini.output import (
-    EM_DASH, EN_DASH, cleanup_response, find_banned, fix_dashes, split_into_chunks, strip_links, strip_markdown,
+    EM_DASH, EN_DASH, cleanup_response, fix_dashes, split_into_chunks, strip_links, strip_markdown,
     strip_pings, trim_to_sentence,
 )
 
@@ -61,7 +63,29 @@ class TestCleanupResponse:
 
 
 def test_strip_markdown_keeps_underscores_in_nicks():
-    assert strip_markdown('**m1ndsh1ft_** и ## limbo___') == 'm1ndsh1ft_ и limbo___'
+    assert strip_markdown('**m1ndsh1ft_** и limbo___') == 'm1ndsh1ft_ и limbo___'
+
+
+@pytest.mark.parametrize(('raw', 'clean'), [
+    ('## Итоги\n- первое\n- второе', 'Итоги первое второе'),
+    ('1. раз\n2) два', 'раз два'),
+    ('> цитата\n>> вложенная', 'цитата вложенная'),
+    ('| ник | бросок |\n|---|:---:|\n| gop | 69 |', 'ник бросок gop 69'),
+    ('~~было~~ стало, `код`', 'было стало, код'),
+])
+def test_strip_markdown_drops_markup(raw, clean):
+    assert strip_markdown(raw) == clean
+
+
+@pytest.mark.parametrize('text', [
+    'C# или F#, а #тег – нет',
+    'если x > 5, то a->b',
+    'ждать ~10 минут, выбор a|b',
+    '2019. Вышел релиз',
+])
+def test_strip_markdown_leaves_text_that_only_looks_like_it(text):
+    """!ask is the factual command: «C# или F#» came out as «Cили F»."""
+    assert strip_markdown(text) == text
 
 
 def test_split_into_chunks_keeps_every_word():

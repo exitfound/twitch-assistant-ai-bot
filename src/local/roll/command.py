@@ -4,7 +4,8 @@ import logging
 from src.core.commands import CommandContext
 from src.core.config import Roll
 from src.core.content import Content
-from src.core.viewer import by_tier, tier_of
+from src.core.limits import deny
+from src.core.viewer import by_tier, sub_hint, tier_of
 from src.core.utils import reply
 from src.local.roll import game
 from src.local.roll.texts import champion_note, curse_note, input_preview, reward_title
@@ -42,6 +43,7 @@ async def handle_roll(ctx: CommandContext) -> None:
     limit = free_limit_for(ctx.message.chatter)
     result = await game.free_throw(
         ctx.session_id, ctx.user, limit=limit, unlimited=ctx.message.chatter.broadcaster,
+        tier=tier_of(ctx.message.chatter),
     )
     if result.status == game.Status.NO_FREE_LEFT:
         if ctx.bot.rewards_active:
@@ -51,7 +53,15 @@ async def handle_roll(ctx: CommandContext) -> None:
             )
         else:
             text = Content.text('roll_no_free', user=ctx.user, limit=limit)
-        await reply(ctx.message, text)
+        await reply(ctx.message, text + sub_hint(ctx.message.chatter))
+        return
+    if result.status == game.Status.TOO_FAST:
+        # Nothing was thrown, so nothing to wait off; the refusal itself is braked, or
+        # a subscriber with no cooldown would get one for every message
+        ctx.clear_cooldown()
+        await deny(ctx.bot, ctx.message, ctx.user, Content.text(
+            'roll_too_fast', user=ctx.user, minutes=result.protect_minutes_left,
+        ))
         return
     if result.loser is None:
         logger.error('Ролл сохранён, но лузер сессии %s не найден', ctx.session_id)

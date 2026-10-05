@@ -1,5 +1,6 @@
 import logging
 import logging.handlers
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -9,11 +10,28 @@ LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 
 _configured = False
 
+# twitchio puts request URLs and tokens into its error texts: a refused refresh carries the
+# client secret and the refresh token, and docker logs keep them on disk
+_SECRET_RE = re.compile(
+    r"""((?:client_secret|refresh_token|access_token|refresh|token)(?:=|': '|": "|: ")|[?&]code=)[^&\s'"]+"""
+)
+
+
+def redact(text: str) -> str:
+    """The text with every secret value replaced by ***."""
+    return _SECRET_RE.sub(r'\1***', text)
+
+
+class _RedactingFormatter(logging.Formatter):
+
+    def format(self, record: logging.LogRecord) -> str:
+        return redact(super().format(record))
+
 
 def make_formatter() -> logging.Formatter:
-    """LOG_FORMAT with times in BOT_TIMEZONE: the container runs in UTC, and the log must
-    match the times in chat and in session ids."""
-    formatter = logging.Formatter(LOG_FORMAT)
+    """LOG_FORMAT with times in BOT_TIMEZONE and secrets hidden: the container runs in UTC,
+    and the log must match the times in chat and in session ids."""
+    formatter = _RedactingFormatter(LOG_FORMAT)
     formatter.converter = lambda seconds: datetime.fromtimestamp(seconds, Clock.ZONE).timetuple()
     return formatter
 

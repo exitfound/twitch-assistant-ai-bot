@@ -37,14 +37,28 @@ def caps_preserve_mentions(text: str) -> str:
     return ''.join(result)
 
 
+# The row under a table header: |---|:---:|
+_TABLE_RULE = re.compile(r'^[ \t]*\|?[ \t]*:?-{3,}:?[ \t]*(?:\|[ \t]*:?-{3,}:?[ \t]*)*\|?[ \t]*$', re.MULTILINE)
+
+
 def strip_markdown(text: str) -> str:
+    """Drop markdown the model emits, and nothing else.
+
+    Headings, quotes, list markers and table pipes are markup only at the start of a
+    line: «C# или F#», «x > 5», «a->b», «~10 минут» and «2019. Вышел…» are text. No
+    `_` here: it is part of nicks (m1ndsh1ft_, limbo_______), and stripping it makes
+    the bot mention people who do not exist.
+    """
     text = re.sub(r'\*+', '', text)
-    text = re.sub(r'#+\s*', '', text)
-    # No `_` here: it is part of nicks (m1ndsh1ft_, limbo_______), and stripping it
-    # makes the bot mention people who do not exist
-    text = re.sub(r'[`~>|]', '', text)
-    text = re.sub(r'^\s*[-\u2022\u25cf]\s+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\s*\d+[\.\)]\s+', '', text, flags=re.MULTILINE)
+    text = text.replace('`', '').replace('~~', '')
+    text = re.sub(r'^[ \t]*#{1,6}[ \t]+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^[ \t]*(?:>[ \t]?)+', '', text, flags=re.MULTILINE)
+    # A table: the separator row goes, the pipes of the others become spaces
+    text = _TABLE_RULE.sub('', text)
+    text = re.sub(r'^[ \t]*\|.*\|[ \t]*$', lambda m: m.group().replace('|', ' '), text, flags=re.MULTILINE)
+    text = re.sub(r'^[ \t]*[-\u2022\u25cf][ \t]+', '', text, flags=re.MULTILINE)
+    # One or two digits: a list item; a year starting a line is text
+    text = re.sub(r'^[ \t]*\d{1,2}[.)][ \t]+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\n', ' ', text)
     text = re.sub(r'\s{2,}', ' ', text).strip()
     return text
@@ -139,14 +153,3 @@ def cleanup_response(text: str, user: str, max_len: int = TWITCH_MSG_MAX) -> str
     text = mention.sub(user, text).strip()
     # The model exceeds the limit: cut at a sentence end, not mid-word
     return trim_to_sentence(text, max_len)
-
-
-def find_banned(text: str, banned: list[str]) -> str | None:
-    """The first stop-list word found in the text, or None."""
-    if not banned:
-        return None
-    lowered = text.lower()
-    for word in banned:
-        if word.lower() in lowered:
-            return word
-    return None

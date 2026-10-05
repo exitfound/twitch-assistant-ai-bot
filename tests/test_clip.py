@@ -8,7 +8,7 @@ import twitchio
 from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, Kind
 from src.core.component import ChatComponent
-from src.core.config import Clip, Follow
+from src.core.config import Clip, Follow, PerStream
 from src.core.database import count_bot_uses, record_bot_use
 from src.local import clip
 
@@ -109,18 +109,19 @@ async def test_malformed_args_are_refused_without_a_clip(db, text, key):
 
 
 async def test_the_limit_is_per_stream(db, monkeypatch):
-    monkeypatch.setattr(Clip, 'PER_STREAM', 3)
+    monkeypatch.setattr(PerStream, 'SUB', 3)
     bot = FakeBot()
     for _ in range(3):
         await clip.handle_clip(_ctx(bot=bot))
     ctx = _ctx(bot=bot)
     await clip.handle_clip(ctx)
     assert bot.create_clip.await_count == 3
-    ctx.message.respond.assert_awaited_once_with('texts.clip_no_left')
+    ctx.message.respond.assert_awaited_once_with('texts.per_stream_no_left')
 
 
 async def test_the_broadcaster_is_not_limited(db, monkeypatch):
-    monkeypatch.setattr(Clip, 'PER_STREAM', 1)
+    monkeypatch.setattr(PerStream, 'SUB', 1)
+    monkeypatch.setattr(PerStream, 'VIP', 1)
     bot = FakeBot()
     for _ in range(3):
         await clip.handle_clip(_ctx(chatter=make_chatter('streamer', broadcaster=True), bot=bot))
@@ -161,13 +162,16 @@ async def test_an_unexpected_error_still_answers(db):
     ctx.message.respond.assert_awaited_once_with('texts.clip_failed')
 
 
-async def test_a_viewer_without_badges_is_refused_by_the_gate(db, monkeypatch):
+async def test_a_follower_gets_one_clip_then_the_subscription_offer(db, monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     bot = FakeBot()
+    component = ChatComponent(bot)
+    await component.event_message(make_message('!clip 30'))
+    bot.clear_cooldown('viewer', Kind.LOCAL)
     message = make_message('!clip 30')
-    await ChatComponent(bot).event_message(message)
-    bot.create_clip.assert_not_awaited()
-    message.respond.assert_awaited_once_with('texts.role_denied_sub')
+    await component.event_message(message)
+    assert bot.create_clip.await_count == 1
+    message.respond.assert_awaited_once_with('texts.per_stream_trial_used')
 
 
 # --- waiting for Twitch to list the clip -------------------------------------

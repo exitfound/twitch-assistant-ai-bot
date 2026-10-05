@@ -26,7 +26,11 @@ _DONE = {
 
 _REFUND = {
     game.Status.FREE_LEFT: 'reward_refund_free_left',
-    game.Status.EXTRA_PAUSE: 'reward_refund_extra_pause',
+    game.Status.TOO_FAST: 'reward_refund_too_fast',
+    game.Status.REROLL_LIMIT: 'reward_refund_reroll_limit',
+    game.Status.SHIELD_LIMIT: 'reward_refund_shield_limit',
+    game.Status.CURSE_LIMIT: 'reward_refund_curse_limit',
+    game.Status.CLEANSE_LIMIT: 'reward_refund_cleanse_limit',
     game.Status.BAD_TARGET: 'reward_refund_bad_target',
     game.Status.EXTRA_WORDS: 'reward_refund_extra_words',
     game.Status.SELF_TARGET: 'reward_refund_self',
@@ -99,10 +103,11 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
         key, user=user, reward=reward_title(action), target=outcome.target,
         input=input_preview(user_input),
         old=outcome.old_value, value=outcome.value, free_left=outcome.free_left,
-        shield=Rewards.SHIELD_MINUTES, series=Rewards.EXTRA_SERIES,
+        shield=Rewards.SHIELD_MINUTES,
         loser=loser, loser_val=loser_val, max=Roll.MAX,
         ceiling=outcome.ceiling, next=outcome.next_ceiling,
         minutes=outcome.curse_minutes_left, protect=outcome.protect_minutes_left,
+        limit=outcome.limit, window=Rewards.REROLL_WINDOW_MINUTES,
         **curse_values(),
     )
     # A shield and a cleanse do not change the roll – no champion or curse note is appended

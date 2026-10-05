@@ -9,8 +9,8 @@ from google.genai import errors, types
 
 from fakes import FakeBot, make_chatter, make_message
 from src.core.commands import CommandContext, Kind
-from src.core.config import Caps, Emote, Gemini, Who
-from src.core.database import count_bot_uses, get_db
+from src.core.config import Caps, Emote, Gemini, PerStream
+from src.core.database import count_bot_uses, get_db, record_bot_use
 from src.core import limits
 from src.gemini import client, commands, ladder, responder
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR
@@ -345,6 +345,23 @@ async def test_send_chunked_keeps_to_the_message_limit(db, ctx):
     assert sent[1].endswith('.')
 
 
+async def test_summary_drops_links_a_viewer_planted(db, ctx, monkeypatch):
+    """The summary retells other people's chat, and its second message goes out on its
+    own: a link planted in chat must not come back in the bot's voice."""
+    text = 'Обсуждали сборку, кто-то кинул https://evil.com/x и evil.ru. ' * 20
+    monkeypatch.setattr(commands.summary, 'now', AsyncMock(return_value=(text, None)))
+    ctx.args = ''
+    await commands.handle_summary(ctx)
+    sent = ' '.join([ctx.message.respond.await_args.args[0], ctx.bot.send_chat_message.await_args.args[0]])
+    assert 'evil' not in sent
+    assert 'Обсуждали сборку' in sent
+
+
+async def test_ask_keeps_the_link_it_was_asked_for(db, ctx):
+    await send_chunked(ctx, 'Качай с https://python.org, там всё.', '[ask] где питон')
+    assert 'https://python.org' in ctx.message.respond.await_args.args[0]
+
+
 async def test_send_chunked_says_so_when_there_is_nothing(db, ctx):
     assert not await send_chunked(ctx, None, '[summary]')
     ctx.message.respond.assert_awaited_once_with('texts.no_answer')
@@ -354,7 +371,7 @@ async def test_send_chunked_says_so_when_there_is_nothing(db, ctx):
 
 
 async def test_per_stream_limit_counts_only_what_reached_chat(db, ctx, monkeypatch):
-    monkeypatch.setattr(Who, 'PER_STREAM_FOLLOWER', 1)
+    monkeypatch.setattr(PerStream, 'FOLLOWER', 1)
     run = AsyncMock(return_value=False)
     await commands.LIMITS[WHO_KIND].run(ctx, run)
     assert await count_bot_uses('gop', WHO_KIND, 60) == 0
@@ -366,7 +383,36 @@ async def test_per_stream_limit_counts_only_what_reached_chat(db, ctx, monkeypat
     run.reset_mock()
     await commands.LIMITS[WHO_KIND].run(ctx, run)
     run.assert_not_awaited()
-    ctx.message.respond.assert_awaited_with('texts.who_no_left')
+    # A follower's one use is a trial: past it the bot offers a subscription
+    ctx.message.respond.assert_awaited_with('texts.per_stream_trial_used')
+
+
+@pytest.mark.parametrize(('chatter', 'text'), [
+    (make_chatter('gop'), 'texts.per_stream_trial_used'),
+    (make_chatter('gop', vip=True), 'texts.per_stream_no_left texts.sub_hint'),
+    (make_chatter('gop', subscriber=True, vip=True), 'texts.per_stream_no_left'),
+    (make_chatter('gop', moderator=True), 'texts.per_stream_no_left'),
+])
+async def test_the_refusal_depends_on_the_status(db, ctx, monkeypatch, chatter, text):
+    for field in ('FOLLOWER', 'VIP', 'SUB'):
+        monkeypatch.setattr(PerStream, field, 1)
+    ctx.message.chatter = chatter
+    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    ctx.message.respond.assert_awaited_once_with(text)
+
+
+async def test_refusals_past_the_limit_are_braked(db, ctx, monkeypatch):
+    """A refusal gives the cooldown back, so without the brake every repeated !ask from
+    a follower past their trial would get a message of its own."""
+    monkeypatch.setattr(PerStream, 'FOLLOWER', 1)
+    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    for _ in range(3):
+        await record_bot_use(ctx.user, Kind.GEMINI)     # as the dispatcher does
+        await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    ctx.message.respond.assert_awaited_once_with('texts.per_stream_trial_used')
+    # Nothing was served: the hourly quota slots are given back as well
+    assert await count_bot_uses(ctx.user, Kind.GEMINI, 60) == 0
 
 
 async def test_one_command_per_viewer_at_a_time(db, ctx):
@@ -402,19 +448,19 @@ def _ask_ctx(chatter) -> CommandContext:
 
 
 @pytest.mark.parametrize(('chatter', 'answered'), [
-    (make_chatter('vip', vip=True), 3),
+    (make_chatter('vip', vip=True), 5),
     (make_chatter('sub', subscriber=True), 10),
     (make_chatter('mod', moderator=True), 10),
     (make_chatter('streamer', broadcaster=True), 12),
 ])
 async def test_ask_is_limited_per_stream_by_status(db, ctx, monkeypatch, chatter, answered):
-    """VIP 3, subscriber and moderator 10, broadcaster unlimited, as !ascii."""
+    """VIP 5, subscriber and moderator 10, broadcaster unlimited, as every per-stream command."""
     monkeypatch.setattr(commands, 'generate', AsyncMock(return_value='Ответ.'))
     replies = [_ask_ctx(chatter) for _ in range(12)]
     for ask_ctx in replies:
         await commands.handle_ask(ask_ctx)
     refused = [c for c in replies if c.message.respond.await_args
-               and c.message.respond.await_args.args[0] == 'texts.ask_no_left']
+               and c.message.respond.await_args.args[0].startswith('texts.per_stream_no_left')]
     assert len(replies) - len(refused) == answered
     assert await count_bot_uses(chatter.name, commands.ASK_KIND, 60) == answered
 

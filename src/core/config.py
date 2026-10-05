@@ -185,7 +185,7 @@ class Cooldown:
     # Broadcaster, moderator and subscriber never wait – their values are not
     # configurable, this is a rule, not a parameter.
     VIP: int = _env_int('COOLDOWN_VIP', 10, 0, 3600)
-    REGULAR: int = _env_int('COOLDOWN_REGULAR', 30, 0, 3600)
+    REGULAR: int = _env_int('COOLDOWN_REGULAR', 20, 0, 3600)
 
 
 class Quota:
@@ -209,28 +209,14 @@ class Follow:
     HINT_MINUTES: int = _env_int('FOLLOW_HINT_MINUTES', 10, 1, 1440)
 
 
-class Ask:
-    # !ask per stream (offline – per 24 hours). The command is open from the subscriber
-    # badge up, like !ascii. The broadcaster is not limited, 0 – no limit
-    PER_STREAM_VIP: int = _env_int('ASK_PER_STREAM_VIP', 3, 0, 1000)
-    PER_STREAM_SUB: int = _env_int('ASK_PER_STREAM_SUB', 10, 0, 1000)
-
-
-class Summary:
-    # !summary per stream (offline – per 24 hours), the current and the previous
-    # stream counted together. The broadcaster is not limited. 0 – no limit
-    PER_STREAM_FOLLOWER: int = _env_int('SUMMARY_PER_STREAM_FOLLOWER', 1, 0, 1000)
-    PER_STREAM_VIP: int = _env_int('SUMMARY_PER_STREAM_VIP', 3, 0, 1000)
-    PER_STREAM_SUB: int = _env_int('SUMMARY_PER_STREAM_SUB', 10, 0, 1000)
-
-
-class Who:
-    # !who and !versus per stream (offline – per 24 hours), each command counted on
-    # its own, with the same numbers as !summary. The broadcaster is not limited.
-    # 0 – no limit
-    PER_STREAM_FOLLOWER: int = _env_int('WHO_PER_STREAM_FOLLOWER', 1, 0, 1000)
-    PER_STREAM_VIP: int = _env_int('WHO_PER_STREAM_VIP', 3, 0, 1000)
-    PER_STREAM_SUB: int = _env_int('WHO_PER_STREAM_SUB', 10, 0, 1000)
+class PerStream:
+    # One per-stream limit for !ask, !who, !versus, !summary, !ascii and !clip, counted
+    # per command (offline – per 24 hours). A follower's uses are a trial: past them
+    # the refusal offers a subscription. A subscribing VIP counts as a subscriber, the
+    # broadcaster is not limited. 0 – no limit
+    FOLLOWER: int = _env_int('PER_STREAM_FOLLOWER', 1, 0, 1000)
+    VIP: int = _env_int('PER_STREAM_VIP', 5, 0, 1000)
+    SUB: int = _env_int('PER_STREAM_SUB', 10, 0, 1000)
 
 
 class Picture:
@@ -252,11 +238,6 @@ class Picture:
     # How dark a place must be to stay filled on top of the contour – that is what
     # gives volume. Higher – more fill, 0 – contour only
     SHADOW: int = _env_int('PICTURE_SHADOW', 45, 0, 255)
-    # How many pictures a viewer may draw per stream. The command is open from the
-    # subscriber badge up: followers and non-followers cannot use it at all.
-    # The broadcaster is unlimited, 0 – no limit
-    PER_STREAM_VIP: int = _env_int('PICTURE_PER_STREAM_VIP', 3, 0, 1000)
-    PER_STREAM_SUB: int = _env_int('PICTURE_PER_STREAM_SUB', 10, 0, 1000)
     # Show the picture to Gemini so it decides whether it may be drawn.
     # Better not to turn off: the link comes from a viewer
     CHECK: bool = _env_bool('PICTURE_CHECK', True)
@@ -278,9 +259,6 @@ class Clip:
     # so a clip shorter than MIN_SECONDS tends to miss the moment
     ENABLED: bool = _env_bool('CLIP_ENABLED', True)
     MIN_SECONDS, DEFAULT_SECONDS = _clip_lengths()
-    # Clips per viewer per stream: the command is open from the subscriber badge up.
-    # The broadcaster is unlimited, 0 – no limit
-    PER_STREAM: int = _env_int('CLIP_PER_STREAM', 3, 0, 1000)
 
 
 class Stream:
@@ -310,7 +288,13 @@ class Roll:
     # the «залупа» gets a curse. PERK_MINUTES counts from the person's first
     # appearance in the chat of the new stream
     PERKS_ENABLED: bool = _env_bool('ROLL_PERKS_ENABLED', True)
-    PERK_MINUTES: int = _env_int('ROLL_PERK_MINUTES', 30, 1, 600)
+    PERK_MINUTES: int = _env_int('ROLL_PERK_MINUTES', 60, 1, 600)
+    # Spam brake: once a player's last BURST_THROWS own throws – free !roll and paid extra
+    # rolls together – fit within BURST_SECONDS, the next opens BURST_PAUSE_MINUTES after
+    # the last of them. The broadcaster is not held
+    BURST_THROWS: int = _env_int('ROLL_BURST_THROWS', 5, 2, 1000)
+    BURST_SECONDS: int = _env_int('ROLL_BURST_SECONDS', 60, 1, 3600)
+    BURST_PAUSE_MINUTES: int = _env_int('ROLL_BURST_PAUSE_MINUTES', 1, 1, 1440)
 
 
 def _curse_range() -> tuple[int, int]:
@@ -348,24 +332,28 @@ class Rewards:
     # Twitch's limit counts each attacker separately, and a crowd finishes off one target.
     # A curse pierces this protection, like the shield. 0 – no protection
     REROLL_PROTECT_MINUTES: int = _env_int('REWARD_REROLL_PROTECT_MINUTES', 3, 0, 1440)
+    # How many rerolls, shields, curses and cleanses a buyer may buy, by the status their
+    # last !roll stored (a redemption carries no badges): rerolls per window of
+    # REROLL_WINDOW_MINUTES, opened by the first successful one, the rest per stream.
+    # The broadcaster is not limited
+    # 0 – no limit, like every other limit of the bot
+    LIMIT_FOLLOWER: int = _env_int('REWARD_LIMIT_FOLLOWER', 3, 0, 1000)
+    LIMIT_VIP: int = _env_int('REWARD_LIMIT_VIP', 5, 0, 1000)
+    LIMIT_SUB: int = _env_int('REWARD_LIMIT_SUB', 10, 0, 1000)
+    REROLL_WINDOW_MINUTES: int = _env_int('REWARD_REROLL_WINDOW_MINUTES', 30, 1, 1440)
     # How long a bought shield holds off rerolls, counted from the purchase
-    SHIELD_MINUTES: int = _env_int('REWARD_SHIELD_MINUTES', 60, 1, 1440)
+    SHIELD_MINUTES: int = _env_int('REWARD_SHIELD_MINUTES', 30, 1, 1440)
     # A cleansed player cannot be cursed again for this many minutes: without it a
     # cheaper curse would undo a cleanse right away
     CLEANSE_PROTECT_MINUTES: int = _env_int('REWARD_CLEANSE_PROTECT_MINUTES', 30, 1, 1440)
-    # Extra rolls come in series: after EXTRA_SERIES of them, each within the pause of the
-    # previous, the next opens EXTRA_PAUSE_MINUTES after the last. A pause that long
-    # starts a new series. Twitch has no per-viewer cooldown, so the bot counts it
-    EXTRA_SERIES: int = _env_int('REWARD_EXTRA_SERIES', 5, 1, 1000)
-    EXTRA_PAUSE_MINUTES: int = _env_int('REWARD_EXTRA_PAUSE_MINUTES', 5, 1, 1440)
     # How many times one viewer may redeem each reward per stream, counted by Twitch
     # itself. 0 – no limit. A limit set by hand in the Twitch dashboard is reset to
     # these on the next start
     EXTRA_MAX_PER_USER: int = _env_int('REWARD_EXTRA_MAX_PER_USER', 0, 0, 1000)
-    REROLL_MAX_PER_USER: int = _env_int('REWARD_REROLL_MAX_PER_USER', 3, 0, 1000)
-    CURSE_MAX_PER_USER: int = _env_int('REWARD_CURSE_MAX_PER_USER', 3, 0, 1000)
+    REROLL_MAX_PER_USER: int = _env_int('REWARD_REROLL_MAX_PER_USER', 0, 0, 1000)
+    CURSE_MAX_PER_USER: int = _env_int('REWARD_CURSE_MAX_PER_USER', 0, 0, 1000)
     SHIELD_MAX_PER_USER: int = _env_int('REWARD_SHIELD_MAX_PER_USER', 0, 0, 1000)
-    CLEANSE_MAX_PER_USER: int = _env_int('REWARD_CLEANSE_MAX_PER_USER', 3, 0, 1000)
+    CLEANSE_MAX_PER_USER: int = _env_int('REWARD_CLEANSE_MAX_PER_USER', 0, 0, 1000)
 
 
 class Context:
@@ -439,3 +427,27 @@ class Emote:
     SPAM_ENABLED: bool = _env_bool('EMOTE_SPAM_ENABLED', False)
     SPAM_INTERVAL_MIN_MINUTES, SPAM_INTERVAL_MAX_MINUTES = _interval_range('EMOTE_SPAM_INTERVAL', 5, 20)
     SPAM_MIN, SPAM_MAX = _emote_spam_range()
+
+
+def _mascot_thresholds() -> tuple[int, int, int]:
+    sit = _env_int('MASCOT_SIT', 3, 1, 1000)
+    stand = _env_int('MASCOT_STAND', 5, 1, 1000)
+    dance = _env_int('MASCOT_DANCE', 8, 1, 1000)
+    if not sit < stand < dance:
+        logger.warning('MASCOT_SIT=%s, MASCOT_STAND=%s, MASCOT_DANCE=%s должны расти – используются 3, 5, 8',
+                       sit, stand, dance)
+        return 3, 5, 8
+    return sit, stand, dance
+
+
+class Mascot:
+    ENABLED: bool = _env_bool('MASCOT_ENABLED', False)
+    # Local only by default (a bot run from the host for make oauth or debugging); compose
+    # sets 0.0.0.0 inside the container and decides itself which host address publishes it
+    HOST: str = _env_raw('MASCOT_HOST') or '127.0.0.1'
+    PORT: int = _env_int('MASCOT_PORT', 8787, 1, 65535)
+    WINDOW_SECONDS: int = _env_int('MASCOT_WINDOW_SECONDS', 300, 10, 3600)
+    # Distinct chatters over the window from which the mascot sits, stands up, dances
+    SIT, STAND, DANCE = _mascot_thresholds()
+    STEP_DOWN_SECONDS: int = _env_int('MASCOT_STEP_DOWN_SECONDS', 60, 0, 3600)
+    MAX_RATE: float = _env_float('MASCOT_MAX_RATE', 1.5, 1.0, 2.0)

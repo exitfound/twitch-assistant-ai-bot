@@ -23,6 +23,10 @@ select = ["E", "W", "F", "B", "UP", "SIM", "RUF", "ASYNC", "C4", "PERF"]
 # not worth a thread
 ignore = ["RUF001", "RUF002", "RUF003", "ASYNC240"]
 
+[tool.ruff.lint.per-file-ignores]
+# conftest clears and sets the environment before importing src: config reads it at import time
+"tests/conftest.py" = ["E402"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

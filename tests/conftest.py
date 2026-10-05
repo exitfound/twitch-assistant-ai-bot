@@ -4,8 +4,18 @@ The environment is set before anything from src is imported: config reads it at 
 time, and python-dotenv would otherwise find the project's .env with live keys.
 """
 import os
+import re
+from pathlib import Path
 
 os.environ['PYTHON_DOTENV_DISABLED'] = '1'
+# Every variable the bot reads is dropped, so the tests see the defaults whatever the
+# shell exported: with .env loaded into it, BOT_TIMEZONE=UTC or ROLL_MAX=50 failed tests.
+# .env.example lists them all; a loop interval also takes the one-number PREFIX_MINUTES
+_EXAMPLE = (Path(__file__).parents[1] / '.env.example').read_text(encoding='utf-8')
+for _name in re.findall(r'^#?\s*([A-Z][A-Z0-9_]*)=', _EXAMPLE, flags=re.MULTILINE):
+    os.environ.pop(_name, None)
+    if _name.endswith('_MIN_MINUTES'):
+        os.environ.pop(_name.removesuffix('_MIN_MINUTES') + '_MINUTES', None)
 os.environ.update({
     'TWITCH_CLIENT_ID': 'test',
     'TWITCH_CLIENT_SECRET': 'test',
@@ -30,7 +40,9 @@ from src.core.config import Gemini
 from src.gemini import client, commands
 from src.gemini.memory import build
 from src.gemini.picture import command as picture_command
-from src.local import clip, help_announce
+from src.local import clip, follow, help_announce
+from src.local.mascot import feed as mascot_feed
+from src.local.mascot import mood as mascot_mood
 from src.local.roll import game, perks
 
 def content_text() -> str:
@@ -71,7 +83,12 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(picture_command, '_cache', collections.OrderedDict())
     monkeypatch.setattr(perks, '_pending', {})
     monkeypatch.setattr(help_announce, '_help_shown_at', 0.0)
+    monkeypatch.setattr(follow, '_sent_at', collections.deque(maxlen=follow.GREETINGS_PER_MINUTE))
+    monkeypatch.setattr(follow, '_greeted', set())
     monkeypatch.setattr(client, 'usage', {'prompt': 0, 'cached': 0, 'output': 0})
+    monkeypatch.setattr(mascot_mood, 'tracker', mascot_mood.MoodTracker())
+    monkeypatch.setattr(mascot_feed, 'tracker', mascot_mood.tracker)
+    monkeypatch.setattr(mascot_feed, '_clients', set())
 
     def no_gemini():
         raise AssertionError('A test reached the real Gemini client: patch generate() where it is used')

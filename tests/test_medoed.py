@@ -22,13 +22,13 @@ def _chat(tracker: MoodTracker, count: int, at: float, prefix: str = 'viewer') -
 
 
 @pytest.mark.parametrize('chatters, expected', [
-    (0, 'sad'), (2, 'sad'), (3, 'bored'), (5, 'bored'), (6, 'idle'), (9, 'idle'), (10, 'dance'), (40, 'dance'),
+    (0, 'sad'), (2, 'sad'), (3, 'bored'), (4, 'bored'), (5, 'idle'), (7, 'idle'), (8, 'dance'), (40, 'dance'),
 ])
 def test_the_pose_follows_the_number_of_chatters(chatters, expected):
     assert target(chatters)[0] == expected
 
 
-@pytest.mark.parametrize('chatters, rate', [(9, 1.0), (10, 1.0), (11, 1.1), (13, 1.3), (15, 1.5), (30, 1.5)])
+@pytest.mark.parametrize('chatters, rate', [(7, 1.0), (8, 1.0), (9, 1.1), (11, 1.3), (13, 1.5), (30, 1.5)])
 def test_the_dance_speeds_up_by_a_tenth_per_chatter_up_to_the_cap(chatters, rate):
     assert target(chatters)[1] == rate
 
@@ -115,7 +115,7 @@ def test_the_dance_slows_to_normal_while_it_waits_to_step_down():
 
 def test_a_new_speed_counts_as_a_change():
     tracker = MoodTracker()
-    _chat(tracker, 10, at=0)
+    _chat(tracker, 8, at=0)
     tracker.update(now=0)
     tracker.saw('one_more', now=1)
     assert tracker.update(now=1) is True
@@ -147,10 +147,10 @@ async def test_the_feed_sends_the_current_mood_on_connect_and_every_change(monke
         # the overlay is a local file in OBS: a cross-origin listener
         assert response.headers['Access-Control-Allow-Origin'] == '*'
         assert await _event(response) == {'mood': 'sad', 'rate': 1.0, 'chatters': 0}
-        for nick in ('a', 'b', 'c', 'd', 'e', 'f'):
+        for nick in ('a', 'b', 'c', 'd', 'e'):
             feed.on_chat(nick)
         assert await _event(response) == {'mood': 'bored', 'rate': 1.0, 'chatters': 3}
-        assert await _event(response) == {'mood': 'idle', 'rate': 1.0, 'chatters': 6}
+        assert await _event(response) == {'mood': 'idle', 'rate': 1.0, 'chatters': 5}
         response.close()
 
 

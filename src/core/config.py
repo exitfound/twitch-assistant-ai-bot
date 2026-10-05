@@ -431,12 +431,12 @@ class Emote:
 
 def _medoed_thresholds() -> tuple[int, int, int]:
     sit = _env_int('MEDOED_SIT', 3, 1, 1000)
-    stand = _env_int('MEDOED_STAND', 6, 1, 1000)
-    dance = _env_int('MEDOED_DANCE', 10, 1, 1000)
+    stand = _env_int('MEDOED_STAND', 5, 1, 1000)
+    dance = _env_int('MEDOED_DANCE', 8, 1, 1000)
     if not sit < stand < dance:
-        logger.warning('MEDOED_SIT=%s, MEDOED_STAND=%s, MEDOED_DANCE=%s должны расти – используются 3, 6, 10',
+        logger.warning('MEDOED_SIT=%s, MEDOED_STAND=%s, MEDOED_DANCE=%s должны расти – используются 3, 5, 8',
                        sit, stand, dance)
-        return 3, 6, 10
+        return 3, 5, 8
     return sit, stand, dance
 
 

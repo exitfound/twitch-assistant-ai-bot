@@ -159,7 +159,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **local**
 - `commands.py` – `handle_help`, `handle_stats`
-- `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`: `resolve()`, the registry's fallback. BOT.md «Шаг 7а4»
+- `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`: `resolve()`, the registry's fallback; `handle_help_channel`. BOT.md «Шаг 7а4»
 - `clip.py` – `!clip`: `parse()`, `default_title()`, `handle_clip`, `make_clip()` (create the clip as the bot, wait until Twitch lists it). BOT.md «Шаг 7з»
 - `follow.py` – `handle_follow()`: a thank-you once per viewer, a few a minute
 - `emote_spam.py` – `emote_spam_loop()`

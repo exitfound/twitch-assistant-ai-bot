@@ -46,7 +46,8 @@ REQUIRED = {
         'prev_stream', 'people', 'chronicle', 'replied',
     ),
     'texts': (
-        'help', 'help_announce', 'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
+        'help', 'help_channel', 'help_channel_empty', 'help_announce',
+        'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
         'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',
         'cooldown_local', 'cooldown_gemini', 'per_stream_no_left', 'per_stream_trial_used', 'sub_hint',
         'follow_required', 'quota_exceeded', 'quota_channel',

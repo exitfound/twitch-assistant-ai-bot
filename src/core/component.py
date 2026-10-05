@@ -30,6 +30,7 @@ from src.gemini.commands import (
 )
 from src.gemini.picture.command import handle_ascii
 from src.local import channel
+from src.local.channel import handle_help_channel
 from src.local.clip import handle_clip
 from src.local.commands import handle_help, handle_stats
 from src.local.follow import handle_follow
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 
 STATS_TRIGGER = '!stat'
 HELP_TRIGGER = '!help-bot'
+HELP_CHANNEL_TRIGGER = '!help-channel'
 ASK_TRIGGER = '!ask'
 SUMMARY_TRIGGER = '!summary'
 WHO_TRIGGER = '!who'
@@ -125,6 +127,7 @@ class ChatComponent(commands.Component):
         # All commands work as bare text, without addressing the bot.
         # Order matters: longer triggers are registered first.
         add(HELP_TRIGGER,      handle_help,      public=True)
+        add(HELP_CHANNEL_TRIGGER, handle_help_channel, public=True)
         add(STATS_TRIGGER,     handle_stats,     prefix=True)
         # Longer trigger first, by the rule above. !roll takes a prefix only to answer
         # «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out

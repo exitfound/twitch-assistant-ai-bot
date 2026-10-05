@@ -11,6 +11,7 @@ from src.core.component import ChatComponent, route
 from src.core.config import Follow, Quota
 from src.core.database import count_bot_uses, record_bot_use
 from src.gemini.commands import handle_who
+from src.local.channel import handle_help_channel
 from src.local.commands import handle_help, handle_stats
 from src.local.roll.command import handle_roll, handle_rollstat
 
@@ -123,6 +124,7 @@ async def test_badges_and_help_skip_the_follow_check(db, gated, monkeypatch):
 
 @pytest.mark.parametrize(('text', 'handler'), [
     ('!help-bot', handle_help),
+    ('!help-channel', handle_help_channel),
     ('!stat', handle_stats),
     ('!stat nick', handle_stats),
     ('!rollstat', handle_rollstat),

@@ -159,7 +159,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **local**
 - `commands.py` – `handle_help_index` (`!help`), `handle_help` (`!bot`), `handle_stats`
-- `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`: `resolve()`, the registry's fallback; `handle_help_channel`. BOT.md «Шаг 7а4»
+- `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`: `ChannelCommands` (`resolve()`, the registry's fallback; `check()` logs clashes with bot commands and replies too long for Twitch on every edit); `handle_help_channel`. BOT.md «Шаг 7а4»
 - `clip.py` – `!clip`: `parse()`, `default_title()`, `handle_clip`, `make_clip()` (create the clip as the bot, wait until Twitch lists it). BOT.md «Шаг 7з»
 - `follow.py` – `handle_follow()`: a thank-you once per viewer, a few a minute
 - `emote_spam.py` – `emote_spam_loop()`
@@ -197,7 +197,7 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 
 - **Database.** Every write goes through `async with transaction()` (a nested one joins the outer); never `get_db()` + `commit()`. A script that touches the DB ends with `close_db()`, or its aiosqlite thread keeps the process alive. `init_db()` is walked on every start and by every CLI command, against the live database while the old bot still runs: steps are idempotent and additive. All queries share one connection, so `gather` over them gives order, not parallelism
 - **Commands are not stored** in `chat_messages`; readers still filter old `!…` rows. `has_chatted()` also looks at `rolls` and `bot_uses`
-- **The gate.** The cooldown is set right after its check with no `await` in between (twitchio runs every event in its own task); a quota refusal gives it back; a handler rejecting malformed input calls `ctx.refuse()` (cooldown and quota row) or `ctx.clear_cooldown()`
+- **The gate.** Help and channel commands (`public`) skip the personal cooldown and take a shared per-trigger one instead (`COOLDOWN_PUBLIC`). The cooldown is set right after its check with no `await` in between (twitchio runs every event in its own task); a quota refusal gives it back; a handler rejecting malformed input calls `ctx.refuse()` (cooldown and quota row) or `ctx.clear_cooldown()`
 - **Session = stream**; `session_id` is read once per event, since coroutines outlive a switch
 - **Game state** changes only in `local/roll/game.py`, under its lock, one transaction with its journal row
 - **twitchio 3.x.** Its command system is off (`process_commands()` is a no-op). `CustomRewardRedemption.fulfill()` sends the wrong id – statuses go through `_http.patch_custom_reward_redemption()`. A reply carries `parent_user`, not `parent_user_id`. Private fields read by the chat watch and the token check are verified at start. On `session_reconnect` twitchio drops the live socket from its registry unless `keep_migrated_sockets()` ran; the watch then subscribes twice. After a reconnect twitchio may keep a socket open with its subscriptions lost, or stop reconnecting it at all: a socket counts as alive only while it is connected and holds the watched subscription, or has a reconnect running. `event_ready` fires once per start: nothing in it may raise. `event_message` drops a message id it has already seen. Signal handlers are installed again from `event_ready`, because the OAuth adapter's aiohttp replaces them
@@ -210,7 +210,7 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (123 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (124 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 

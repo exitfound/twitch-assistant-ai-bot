@@ -56,6 +56,8 @@ CLIP_TRIGGER = '!clip'
 # Cooldown scope for the «follow the channel» hint: so the bot does not repeat it
 # on every message of a non-following viewer
 FOLLOW_HINT_SCOPE = 'follow_hint'
+# Cooldown scope of help and channel commands: one per trigger for the whole chat
+PUBLIC_SCOPE = 'public'
 
 # EventSub may deliver a message more than once, and a second chat subscription doubles
 # everything: ids of this many recent messages are remembered to drop the repeat
@@ -146,11 +148,9 @@ class ChatComponent(commands.Component):
         if Clip.ENABLED:
             add(CLIP_TRIGGER,  handle_clip,  prefix=True)
         # The channel's own commands come from CONTENT.md and change while the bot runs
-        self._registry.set_fallback(channel.resolve)
-        shadowed = [t for t in Content.channel_commands() if self._registry.resolve_own(t)]
-        if shadowed:
-            logger.error('CONTENT.md: команды канала %s совпадают с командами бота и не сработают',
-                         ', '.join(shadowed))
+        self._channel = channel.ChannelCommands(lambda trigger: self._registry.resolve_own(trigger) is not None)
+        self._registry.set_fallback(self._channel.resolve)
+        self._channel.check()
 
     def _repeated(self, message_id: str) -> bool:
         """True for a message already seen; no await, so two deliveries cannot both pass."""
@@ -233,6 +233,9 @@ class ChatComponent(commands.Component):
         if tier == Tier.REGULAR and not await self._allowed_without_follow(message, user, entry):
             return False
 
+        if entry is not None and entry.public:
+            return self._public_free(entry, tier)
+
         if seconds:
             remaining = self.bot.cooldown_remaining(user, kind)
             if remaining > 0:
@@ -258,6 +261,20 @@ class ChatComponent(commands.Component):
             if not within:
                 self.bot.clear_cooldown(user, kind)
                 return False
+        return True
+
+    def _public_free(self, entry: CommandEntry, tier: Tier) -> bool:
+        """Help and channel commands: once per COOLDOWN_PUBLIC for the whole chat, silently.
+
+        The answer is the same for everyone and is still in chat, so a repeat is dropped
+        without a refusal. No personal cooldown: !tg must not hold back !roll or the other
+        way round. No await between the check and the set, as with the personal cooldown.
+        """
+        if not Cooldown.PUBLIC or tier == Tier.BROADCASTER:
+            return True
+        if self.bot.cooldown_remaining(entry.trigger, PUBLIC_SCOPE) > 0:
+            return False
+        self.bot.set_cooldown(entry.trigger, Cooldown.PUBLIC, PUBLIC_SCOPE)
         return True
 
     async def _allowed_without_follow(self, message: twitchio.ChatMessage, user: str,

@@ -186,6 +186,9 @@ class Cooldown:
     # configurable, this is a rule, not a parameter.
     VIP: int = _env_int('COOLDOWN_VIP', 10, 0, 3600)
     REGULAR: int = _env_int('COOLDOWN_REGULAR', 20, 0, 3600)
+    # Help and channel commands (!help, !bot, !channel, !tg …): one answer per command for
+    # the whole chat, no personal pause. The broadcaster is exempt; 0 – off
+    PUBLIC: int = _env_int('COOLDOWN_PUBLIC', 30, 0, 3600)
 
 
 class Quota:

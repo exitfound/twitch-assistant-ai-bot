@@ -34,14 +34,15 @@ class Speaker:
     """Takes answers from src/core/speech.py and plays them through the voice client.
 
     An answer is dropped, not kept for later, when the voice is off, the bot is not in a
-    voice channel or the queue is full: a remark voiced minutes after it was written in
-    chat makes no sense.
+    voice channel, the queue is full or it waited longer than VOICE_MAX_WAIT_SECONDS:
+    a remark voiced long after it was written in chat makes no sense.
     """
 
     def __init__(self, voice_client: Callable[[], discord.VoiceClient | None], tts: TTSClient) -> None:
         self._voice_client = voice_client
         self._tts = tts
-        self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=Voice.QUEUE)
+        # (answer, when it was queued on the monotonic clock)
+        self._queue: asyncio.Queue[tuple[str, float]] = asyncio.Queue(maxsize=Voice.QUEUE)
         self.enabled = Voice.ENABLED
         self._unavailable_logged = 0.0
 
@@ -54,7 +55,7 @@ class Speaker:
         if not self.enabled or (source == 'twitch' and not Voice.TWITCH) or self._connected() is None:
             return
         try:
-            self._queue.put_nowait(text)
+            self._queue.put_nowait((text, time.monotonic()))
         except asyncio.QueueFull:
             logger.info('Озвучка: очередь полна (%d), реплика пропущена', Voice.QUEUE)
 
@@ -66,7 +67,11 @@ class Speaker:
     async def run(self) -> None:
         """The worker: one answer at a time, for as long as the bot runs."""
         while True:
-            text = await self._queue.get()
+            text, queued_at = await self._queue.get()
+            waited = time.monotonic() - queued_at
+            if waited > Voice.MAX_WAIT_SECONDS:
+                logger.info('Озвучка: реплика ждала %.0f с – устарела, пропущена', waited)
+                continue
             try:
                 await self.speak(text)
             except TTSUnavailable as e:

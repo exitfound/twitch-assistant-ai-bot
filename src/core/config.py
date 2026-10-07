@@ -491,7 +491,10 @@ class Voice:
     # per second of speech, so playback started too early runs dry before the end
     PREBUFFER_SECONDS: float = _env_float('VOICE_PREBUFFER_SECONDS', 2.0, 0.0, 30.0)
     PREBUFFER_SHARE: float = _env_percent('VOICE_PREBUFFER_SHARE', 25)
-    # Answers waiting to be voiced; a new one beyond this is dropped
-    QUEUE: int = _env_int('VOICE_QUEUE', 5, 1, 50)
+    # Answers waiting to be voiced; a new one beyond this is dropped. The server is a bit
+    # slower than speech, so a busy chat builds a queue, and an answer that waited longer
+    # than MAX_WAIT_SECONDS is dropped when its turn comes
+    QUEUE: int = _env_int('VOICE_QUEUE', 15, 1, 100)
+    MAX_WAIT_SECONDS: int = _env_int('VOICE_MAX_WAIT_SECONDS', 180, 10, 3600)
     # One answer from the request to the last byte of speech
     TIMEOUT: int = _env_int('VOICE_TIMEOUT', 120, 5, 600)

@@ -91,7 +91,7 @@ make venv            # = python3.11 -m venv venv && pip install --require-hashes
 
 # Before a merge (there is no CI)
 make check           # ruff + pytest
-make audit           # known vulnerabilities in requirements.txt and requirements-dev.txt
+make audit           # known vulnerabilities in requirements.txt and requirements-dev.txt; the one ignore (PyNaCl, pinned by discord.py) is explained in the Makefile
 make lock            # recompile requirements*.txt after editing requirements*.in
 ```
 
@@ -202,7 +202,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, emotes even with punctuation stuck to them, links, CAPS, numbers, versions «5.5», `%`, `+`, addressees at the start dropped, `trim_to_sentence()`)
 - `local/voice/tts.py` – `TTSClient.stream()`: streaming PCM from `/v1/audio/speech`, `TTSUnavailable`
 - `local/voice/audio.py` – `Upsampler` (24 kHz mono → 48 kHz stereo across chunk borders), `StreamSource` (silence on underrun, end only after `finish()`)
-- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time), `speak()` (prebuffer by the answer's expected length – `prebuffer_seconds()` – then play, underruns and player errors logged; a playback stopped early cancels the synthesis, a stuck one is stopped after `2 × VOICE_TIMEOUT`)
+- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time; an answer queued longer than `VOICE_MAX_WAIT_SECONDS` is dropped), `speak()` (prebuffer by the answer's expected length – `prebuffer_seconds()` – then play, underruns and player errors logged; a playback stopped early cancels the synthesis, a stuck one is stopped after `2 × VOICE_TIMEOUT`)
 
 **cli**
 - `main.py` – argparse, `_with_db`, `_check_combination()` (one command per run, modifiers only with their command)
@@ -229,13 +229,13 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 - **Output.** Every line the bot sends on its own goes through `Bot.send_chat_message()`, which runs `defuse()`; every reply to a viewer goes through `reply()`, which logs a send failure instead of raising; answers go through `cleanup_response()`. `strip_markdown()` keeps `_` (it is part of nicks)
 - **Follow gate.** `bool(await followers.followers)` – the iterator itself is always truthy. The cache fails open
 - **Case.** Free text keeps its case; FTS queries are lowercased (uppercase `AND`/`OR`/`NOT` are operators); Cyrillic facts are matched with `casefold()` in Python, since SQLite folds only ASCII
-- **Voice.** Only an answer that reached chat goes to `speech.say()`; refusals and service lines are not voiced. `Speaker.submit()` never blocks the chat path: it drops an answer rather than queue it past `VOICE_QUEUE` or while the bot is out of the voice channel. The TTS server's own normalization stays off (`normalize: false`): it is English and garbles Russian. `StreamSource.read()` returns `b''` only after `finish()` and an empty buffer – an early `b''` ends playback mid-answer
+- **Voice.** Only an answer that reached chat goes to `speech.say()`; refusals and service lines are not voiced. `Speaker.submit()` never blocks the chat path: it drops an answer rather than queue it past `VOICE_QUEUE` or while the bot is out of the voice channel, and the worker drops one that waited past `VOICE_MAX_WAIT_SECONDS`. The TTS server's own normalization stays off (`normalize: false`): it is English and garbles Russian. `StreamSource.read()` returns `b''` only after `finish()` and an empty buffer – an early `b''` ends playback mid-answer
 - **Tests** (`tests/`, `make test`) clear every variable of `.env.example` and set the environment in `conftest.py` before anything from `src` is imported, recreate module-level asyncio primitives per test, and replace `CONTENT.md` with one whose values are the key names. `client.get_client()` raises: a Gemini stub is patched where it is used (`ladder`, `commands`, `proactive`, `picture.command`, `memory.build`). A new module-level lock, semaphore or cache is added to `_isolation` in `conftest.py`
 - **Deployment.** The tree is mounted read-only at `/app`, dependencies live in `/deps`, the image is distroless (no shell; libopus is copied in from the builder and found through `DISCORD_OPUS_LIB`), one port is published – the mascot SSE feed, on `MASCOT_PUBLISH` (127.0.0.1 unless set), never the OAuth one; new tokens come from `make oauth`, logs go to stdout. Both tokens are read from `.tio.tokens.json` first; the `.env` values are only a fallback, since adding them on top would undo a new login. Session ids, memory keys and log times use `BOT_TIMEZONE`, not the process zone; `TZ` is not set anywhere. README «Эксплуатация»
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (139 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (140 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 

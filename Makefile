@@ -22,8 +22,13 @@ test:
 
 check: lint test
 
+# CVE-2025-69277 in PyNaCl 1.5.0 (two PYSEC ids): libsodium's ed25519 point check, which
+# the Discord voice does not use – it encrypts with secretbox. discord.py 2.7.1 pins
+# PyNaCl<1.6, so 1.6.2 cannot be installed; drop the ignore once discord.py allows it
+AUDIT_IGNORE := --ignore-vuln PYSEC-2026-1448 --ignore-vuln PYSEC-2026-3002
+
 audit:
-	$(PY) -m pip_audit -r requirements.txt -r requirements-dev.txt
+	$(PY) -m pip_audit -r requirements.txt -r requirements-dev.txt $(AUDIT_IGNORE)
 
 lock:
 	$(LOCK) -o requirements.txt requirements.in

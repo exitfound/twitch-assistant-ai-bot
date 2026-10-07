@@ -378,7 +378,7 @@ make lint     # ruff
 make test     # pytest: ~330 тестов за несколько секунд, без сети, Gemini и .env
 make check    # ruff + pytest – перед слиянием ветки
 make fix      # автоисправления ruff
-make audit    # известные уязвимости в requirements.txt и requirements-dev.txt
+make audit    # известные уязвимости в requirements.txt и requirements-dev.txt (исключение для PyNaCl – в Makefile)
 make lock     # пересобрать requirements*.txt после правки requirements*.in
 ```
 
@@ -586,7 +586,8 @@ docker compose run --rm bot /app/bot.py --lore-sources
 | `VOICE_MAX_CHARS` | `500` | Длиннее – озвучивается до конца последнего предложения в пределах этого числа символов |
 | `VOICE_PREBUFFER_SECONDS` | `2` | Сколько секунд речи накопить перед началом – не меньше этого |
 | `VOICE_PREBUFFER_SHARE` | `25` | Для длинного ответа – столько процентов его ожидаемой длины, чтобы он не заикался |
-| `VOICE_QUEUE` | `5` | Сколько ответов ждёт озвучки; новый сверх этого пропускается |
+| `VOICE_QUEUE` | `15` | Сколько ответов ждёт озвучки; новый сверх этого пропускается |
+| `VOICE_MAX_WAIT_SECONDS` | `180` | Ответ, ждавший озвучки дольше, пропускается: голос не отстаёт от чата на минуты |
 | `VOICE_TIMEOUT` | `120` | Предел на один ответ от запроса до последнего байта речи, секунды |
 
 ---

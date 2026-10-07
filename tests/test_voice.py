@@ -303,7 +303,25 @@ def test_a_full_queue_drops_the_new_answer(monkeypatch):
     for i in range(Voice.QUEUE + 2):
         speaker.submit(f'реплика {i}', 'twitch')
     assert speaker._queue.qsize() == Voice.QUEUE
-    assert speaker._queue.get_nowait() == 'реплика 0'
+    assert speaker._queue.get_nowait()[0] == 'реплика 0'
+
+
+async def test_an_answer_that_waited_too_long_is_dropped(plain_text, monkeypatch, caplog):
+    client = FakeVoiceClient()
+    tts = FakeTTS([pcm(1, 2, 3)])
+    speaker = Speaker(lambda: client, tts)
+    clock = [1000.0]
+    monkeypatch.setattr(speaker_module.time, 'monotonic', lambda: clock[0])
+    speaker.submit('старая', 'twitch')
+    clock[0] += Voice.MAX_WAIT_SECONDS + 1
+    speaker.submit('свежая', 'twitch')
+    worker = asyncio.create_task(speaker.run())
+    with caplog.at_level(logging.INFO):
+        for _ in range(30):
+            await asyncio.sleep(0)
+    worker.cancel()
+    assert tts.texts == ['свежая']
+    assert any('устарела' in r.message for r in caplog.records)
 
 
 def test_speech_reaches_a_listener_and_survives_a_broken_one():

@@ -52,6 +52,8 @@ class DiscordBot(discord.Client):
         self._unlisten = None
         self._presence_lock = asyncio.Lock()
         self._held_off = False
+        # Leaving the channel on close fires a voice event: it must not bring the bot back
+        self._closing = False
 
     async def setup_hook(self) -> None:
         if not Voice.TTS_URL:
@@ -69,6 +71,7 @@ class DiscordBot(discord.Client):
         self._unlisten = speech.listen(self.speaker.submit)
 
     async def close(self) -> None:
+        self._closing = True
         if self._unlisten:
             self._unlisten()
         if self._speaker_task:
@@ -103,7 +106,7 @@ class DiscordBot(discord.Client):
             await self._follow_owner()
 
     async def _follow_owner(self) -> None:
-        if self.speaker is None:
+        if self.speaker is None or self._closing:
             return
         async with self._presence_lock:
             channel = self._voice_channel()

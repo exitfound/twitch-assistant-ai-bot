@@ -3,6 +3,7 @@ import asyncio
 import logging
 from array import array
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import aiohttp
 import discord
@@ -11,7 +12,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestServer
 
 from src.core import speech
-from src.core.config import Voice
+from src.core.config import Discord, Voice
 from src.core.database import get_state, set_state
 from src.discord import bot as discord_module
 from src.discord.bot import Move, presence
@@ -402,6 +403,49 @@ async def test_tts_on_off_and_state(discord_bot):
     assert await discord_bot._command('!tts', []) == discord_module.MUTED
     assert await discord_bot._command('!tts', ['on']) == discord_module.OK
     assert await discord_bot._command('!tts', ['громче']) == discord_module.NO
+
+
+def _message(text: str, author: int = 42, channel: int | None = None, bot: bool = False):
+    return SimpleNamespace(
+        content=text, author=SimpleNamespace(id=author, bot=bot),
+        channel=SimpleNamespace(id=channel if channel is not None else Discord.TEXT_CHANNEL_ID),
+        reply=AsyncMock(), add_reaction=AsyncMock(),
+    )
+
+
+@pytest.fixture
+def discord_ids(monkeypatch):
+    monkeypatch.setattr(Discord, 'TEXT_CHANNEL_ID', 111)
+    monkeypatch.setattr(Discord, 'OWNER_ID', 7)
+
+
+async def test_help_answers_anyone_in_the_channel_once_per_cooldown(discord_bot, discord_ids):
+    first, second = _message('!help'), _message('!HELP')
+    await discord_bot.on_message(first)
+    await discord_bot.on_message(second)
+    first.reply.assert_awaited_once()
+    assert first.reply.await_args.args[0] == 'texts.discord_help'
+    second.reply.assert_not_awaited()
+
+
+@pytest.mark.parametrize('message', [
+    pytest.param({'text': '!help', 'bot': True}, id='another bot'),
+    pytest.param({'text': '!help', 'channel': 999}, id='another channel'),
+])
+async def test_help_ignores_bots_and_other_channels(discord_bot, discord_ids, message):
+    msg = _message(**message)
+    await discord_bot.on_message(msg)
+    msg.reply.assert_not_awaited()
+
+
+async def test_voice_commands_stay_with_the_owner(discord_bot, discord_ids):
+    stranger, owner = _message('!join', author=42), _message('!join', author=7)
+    await discord_bot.on_message(stranger)
+    assert not discord_bot.state['connected']
+    stranger.add_reaction.assert_not_awaited()
+    await discord_bot.on_message(owner)
+    assert discord_bot.state['connected']
+    owner.add_reaction.assert_awaited_once_with(discord_module.OK)
 
 
 class FlakyBot:

@@ -9,6 +9,7 @@ import discord
 
 from src.core import speech
 from src.core.config import Discord, Voice
+from src.core.content import Content
 from src.core.database import get_state, set_state
 from src.discord.local.voice.speaker import Speaker
 from src.discord.local.voice.tts import TTSClient
@@ -24,6 +25,8 @@ PRESENCE_CHECK_SECONDS = 60
 VOICE_STATE_KEY = 'discord_voice'
 # The owner's command is answered with a reaction: nothing to read, nothing to translate
 OK, NO, MUTED = '✅', '❌', '🔇'
+# !help answers anyone in the text channel, at most once per this many seconds
+HELP_COOLDOWN_SECONDS = 10
 # A start that failed is retried after this pause, doubling up to the cap
 RETRY_SECONDS = 30
 RETRY_MAX_SECONDS = 600
@@ -64,6 +67,7 @@ class DiscordBot(discord.Client):
         self._wanted: bool | None = None
         # Leaving the channel on close fires a voice event: it must not bring the bot back
         self._closing = False
+        self._help_at = float('-inf')
 
     async def setup_hook(self) -> None:
         if not Voice.TTS_URL:
@@ -188,14 +192,29 @@ class DiscordBot(discord.Client):
             logger.info('Discord: вышел из голосового канала')
 
     async def on_message(self, message: discord.Message) -> None:
-        if message.author.id != Discord.OWNER_ID or message.channel.id != Discord.TEXT_CHANNEL_ID:
+        if message.channel.id != Discord.TEXT_CHANNEL_ID or message.author.bot:
             return
         words = message.content.strip().lower().split()
-        if not words or words[0] not in ('!join', '!leave', '!tts'):
+        if words[:1] == ['!help']:
+            await self._help(message)
+            return
+        if message.author.id != Discord.OWNER_ID or not words or words[0] not in ('!join', '!leave', '!tts'):
             return
         reaction = await self._command(words[0], words[1:])
         with contextlib.suppress(discord.HTTPException):
             await message.add_reaction(reaction)
+
+    async def _help(self, message: discord.Message) -> None:
+        """The list of commands, for anyone in the text channel; one answer per cooldown."""
+        now = asyncio.get_running_loop().time()
+        if now - self._help_at < HELP_COOLDOWN_SECONDS:
+            return
+        self._help_at = now
+        text = Content.text('discord_help')
+        if not text:
+            return
+        with contextlib.suppress(discord.HTTPException):
+            await message.reply(text, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
 
     async def _command(self, name: str, args: list[str]) -> str:
         """The owner's voice commands; returns the reaction that answers it."""

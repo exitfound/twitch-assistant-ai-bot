@@ -21,8 +21,10 @@ CONNECT_TIMEOUT = 20
 # How often the voice channel is checked against the owner's choice: a connection that
 # dropped for good fires no event, and the bot would otherwise stay out until a restart
 PRESENCE_CHECK_SECONDS = 60
-# bot_state key of the owner's choice: 'on' after !join, 'off' after !leave
+# bot_state keys of the owner's choices, 'on' / 'off': the voice channel (!join / !leave)
+# and the voice itself (!voice; until the first one – VOICE_ENABLED)
 VOICE_STATE_KEY = 'discord_voice'
+VOICE_ENABLED_KEY = 'discord_voice_enabled'
 # The owner's command is answered with a reaction: nothing to read, nothing to translate
 OK, NO, MUTED = '✅', '❌', '🔇'
 # !help answers anyone in the text channel, at most once per this many seconds
@@ -77,6 +79,7 @@ class DiscordBot(discord.Client):
         # The owner's choice; None until read from the database, which the Twitch side
         # opens at its own start – until then the bot stays where it is
         self._wanted: bool | None = None
+        self._state_loaded = False
         # Leaving the channel on close fires a voice event: it must not bring the bot back
         self._closing = False
         self._help_at = float('-inf')
@@ -147,28 +150,39 @@ class DiscordBot(discord.Client):
             except Exception:
                 logger.exception('Discord: проверка голосового канала упала')
 
-    async def _load_wanted(self) -> None:
-        if self._wanted is not None:
+    async def _load_state(self) -> None:
+        """The owner's saved choices – the voice channel and the voice – read once."""
+        if self._state_loaded:
             return
         try:
-            self._wanted = await get_state(VOICE_STATE_KEY) == 'on'
+            wanted = await get_state(VOICE_STATE_KEY)
+            enabled = await get_state(VOICE_ENABLED_KEY)
         except Exception as e:
             # The database is not open yet: the Twitch side opens it a moment after start
-            logger.debug('Discord: выбор голосового канала пока не прочитан: %s', e)
+            logger.debug('Discord: сохранённый выбор пока не прочитан: %s', e)
+            return
+        self._state_loaded = True
+        if self._wanted is None:
+            self._wanted = wanted == 'on'
+        if enabled is not None and self.speaker is not None:
+            self.speaker.enabled = enabled == 'on'
+
+    async def _save(self, key: str, on: bool) -> None:
+        try:
+            await set_state(key, 'on' if on else 'off')
+        except Exception:
+            logger.exception('Discord: выбор %s не сохранён – действует до перезапуска', key)
 
     async def _save_wanted(self, wanted: bool) -> None:
         self._wanted = wanted
-        try:
-            await set_state(VOICE_STATE_KEY, 'on' if wanted else 'off')
-        except Exception:
-            logger.exception('Discord: выбор голосового канала не сохранён – действует до перезапуска')
+        await self._save(VOICE_STATE_KEY, wanted)
 
     async def _reconcile(self) -> None:
         """Put the bot where the owner's choice says: in the channel or out of it."""
         if self.speaker is None or self._closing:
             return
         async with self._presence_lock:
-            await self._load_wanted()
+            await self._load_state()
             if self._wanted is None:
                 return
             client = self._voice_client()
@@ -259,8 +273,10 @@ class DiscordBot(discord.Client):
                 await self._save_wanted(False)
                 await self._disconnect()
             return OK
-        # !voice toggles the voice; the reaction shows the state it is in now
+        # !voice toggles the voice and remembers it; the reaction shows the state it is in now
+        await self._load_state()
         self.speaker.enabled = not self.speaker.enabled
+        await self._save(VOICE_ENABLED_KEY, self.speaker.enabled)
         if not self.speaker.enabled:
             self.speaker.clear()
             client = self._voice_client()

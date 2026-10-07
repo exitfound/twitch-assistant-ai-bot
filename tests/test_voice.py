@@ -404,6 +404,22 @@ async def test_voice_toggles_and_the_reaction_shows_the_new_state(discord_bot):
     assert discord_bot.speaker.enabled
 
 
+async def test_the_voice_switch_is_remembered_across_restarts(discord_bot):
+    assert await discord_bot._command('!voice', []) == discord_module.MUTED
+    assert await get_state(discord_module.VOICE_ENABLED_KEY) == 'off'
+    restarted = discord_module.DiscordBot()
+    restarted.speaker = Speaker(lambda: None, FakeTTS())
+    assert restarted.speaker.enabled
+    await restarted._load_state()
+    assert not restarted.speaker.enabled
+    await discord.Client.close(restarted)
+
+
+async def test_without_a_saved_switch_the_voice_starts_as_configured(discord_bot):
+    await discord_bot._load_state()
+    assert discord_bot.speaker.enabled is Voice.ENABLED
+
+
 def _message(text: str, author: int = 42, channel: int | None = None, bot: bool = False):
     return SimpleNamespace(
         content=text, author=SimpleNamespace(id=author, bot=bot),

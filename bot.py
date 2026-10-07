@@ -8,30 +8,30 @@ from src.core.config import Discord, validate_config
 from src.core.content import validate_content
 from src.core.database import close_db
 from src.core.logging_setup import setup_logging
-from src.discord.bot import DiscordBot, run_discord
+from src.discord.bot import DiscordService
 from src.twitch.bot import Bot
 
 logger = logging.getLogger(__name__)
 
 
-def start_discord() -> tuple[DiscordBot, asyncio.Task] | None:
-    """The Discord bot beside Twitch, when its token is set; it never stops Twitch."""
+def start_discord() -> tuple[DiscordService, asyncio.Task] | None:
+    """Discord beside Twitch, whenever its token is set; it never stops Twitch."""
     if not Discord.TOKEN:
         return None
     missing = Discord.missing()
     if missing:
         logger.error('Discord не запущен: не заданы %s', ', '.join(missing))
         return None
-    bot = DiscordBot()
-    return bot, asyncio.create_task(run_discord(bot), name='discord')
+    service = DiscordService()
+    return service, asyncio.create_task(service.run(), name='discord')
 
 
-async def stop_discord(started: tuple[DiscordBot, asyncio.Task] | None) -> None:
+async def stop_discord(started: tuple[DiscordService, asyncio.Task] | None) -> None:
     if started is None:
         return
-    bot, task = started
+    service, task = started
     try:
-        await bot.close()
+        await service.stop()
     except Exception:
         logger.exception('Discord закрылся с ошибкой')
     task.cancel()

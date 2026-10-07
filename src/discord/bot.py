@@ -9,15 +9,24 @@ import discord
 
 from src.core import speech
 from src.core.config import Discord, Voice
+from src.core.database import get_state, set_state
 from src.discord.local.voice.speaker import Speaker
 from src.discord.local.voice.tts import TTSClient
 
 logger = logging.getLogger(__name__)
 
-# A voice connection that has not come up by then is given up; the next voice event retries
+# A voice connection that has not come up by then is given up; the next check retries
 CONNECT_TIMEOUT = 20
+# How often the voice channel is checked against the owner's choice: a connection that
+# dropped for good fires no event, and the bot would otherwise stay out until a restart
+PRESENCE_CHECK_SECONDS = 60
+# bot_state key of the owner's choice: 'on' after !join, 'off' after !leave
+VOICE_STATE_KEY = 'discord_voice'
 # The owner's command is answered with a reaction: nothing to read, nothing to translate
 OK, NO, MUTED = '✅', '❌', '🔇'
+# A start that failed is retried after this pause, doubling up to the cap
+RETRY_SECONDS = 30
+RETRY_MAX_SECONDS = 600
 
 
 class Move(StrEnum):
@@ -26,18 +35,17 @@ class Move(StrEnum):
     STAY = 'stay'
 
 
-def presence(connected: bool, owner_here: bool, people_here: bool, held_off: bool) -> Move:
-    """Where the bot should be: with the owner in the voice channel, and never alone in it.
-
-    held_off – the owner sent !leave and is still in the channel: the bot does not come
-    back until the owner leaves and joins again.
-    """
-    if connected:
-        return Move.STAY if people_here else Move.LEAVE
-    return Move.JOIN if owner_here and not held_off else Move.STAY
+def presence(wanted: bool, connected: bool) -> Move:
+    """Where the bot should be: in the voice channel exactly while the owner wants it there."""
+    if wanted and not connected:
+        return Move.JOIN
+    if connected and not wanted:
+        return Move.LEAVE
+    return Move.STAY
 
 
 class DiscordBot(discord.Client):
+    """One connection to Discord; DiscordService makes a new one after a failure."""
 
     def __init__(self) -> None:
         intents = discord.Intents.none()
@@ -48,10 +56,12 @@ class DiscordBot(discord.Client):
         super().__init__(intents=intents)
         self._session: aiohttp.ClientSession | None = None
         self.speaker: Speaker | None = None
-        self._speaker_task: asyncio.Task | None = None
+        self._tasks: list[asyncio.Task] = []
         self._unlisten = None
         self._presence_lock = asyncio.Lock()
-        self._held_off = False
+        # The owner's choice; None until read from the database, which the Twitch side
+        # opens at its own start – until then the bot stays where it is
+        self._wanted: bool | None = None
         # Leaving the channel on close fires a voice event: it must not bring the bot back
         self._closing = False
 
@@ -67,17 +77,23 @@ class DiscordBot(discord.Client):
                 return
         self._session = aiohttp.ClientSession()
         self.speaker = Speaker(self._voice_client, TTSClient(self._session, Voice.TTS_URL, Voice.TTS_VOICE))
-        self._speaker_task = asyncio.create_task(self.speaker.run(), name='voice-speaker')
+        self._tasks = [
+            asyncio.create_task(self.speaker.run(), name='voice-speaker'),
+            asyncio.create_task(self._presence_loop(), name='voice-presence'),
+        ]
         self._unlisten = speech.listen(self.speaker.submit)
 
     async def close(self) -> None:
         self._closing = True
         if self._unlisten:
             self._unlisten()
-        if self._speaker_task:
-            self._speaker_task.cancel()
+            self._unlisten = None
+        for task in self._tasks:
+            task.cancel()
+        for task in self._tasks:
             with contextlib.suppress(asyncio.CancelledError):
-                await self._speaker_task
+                await task
+        self._tasks = []
         client = self._voice_client()
         if client is not None:
             with contextlib.suppress(Exception):
@@ -99,27 +115,51 @@ class DiscordBot(discord.Client):
         logger.info('Discord: вошёл как %s', self.user)
         if self._voice_channel() is None:
             logger.error('Discord: голосовой канал %s не найден или недоступен боту', Discord.VOICE_CHANNEL_ID)
-        await self._follow_owner()
+        await self._reconcile()
 
     async def on_voice_state_update(self, member: discord.Member, before, after) -> None:
-        if member.guild.id == Discord.GUILD_ID:
-            await self._follow_owner()
+        # Only the bot's own state matters: a dropped or moved connection is put back at once
+        if self.user is not None and member.id == self.user.id:
+            await self._reconcile()
 
-    async def _follow_owner(self) -> None:
+    async def _presence_loop(self) -> None:
+        while True:
+            await asyncio.sleep(PRESENCE_CHECK_SECONDS)
+            try:
+                await self._reconcile()
+            except Exception:
+                logger.exception('Discord: проверка голосового канала упала')
+
+    async def _load_wanted(self) -> None:
+        if self._wanted is not None:
+            return
+        try:
+            self._wanted = await get_state(VOICE_STATE_KEY) == 'on'
+        except Exception as e:
+            # The database is not open yet: the Twitch side opens it a moment after start
+            logger.debug('Discord: выбор голосового канала пока не прочитан: %s', e)
+
+    async def _save_wanted(self, wanted: bool) -> None:
+        self._wanted = wanted
+        try:
+            await set_state(VOICE_STATE_KEY, 'on' if wanted else 'off')
+        except Exception:
+            logger.exception('Discord: выбор голосового канала не сохранён – действует до перезапуска')
+
+    async def _reconcile(self) -> None:
+        """Put the bot where the owner's choice says: in the channel or out of it."""
         if self.speaker is None or self._closing:
             return
         async with self._presence_lock:
-            channel = self._voice_channel()
-            if channel is None:
+            await self._load_wanted()
+            if self._wanted is None:
                 return
-            people = [m for m in channel.members if not m.bot]
-            owner_here = any(m.id == Discord.OWNER_ID for m in people)
-            if not owner_here:
-                self._held_off = False
             client = self._voice_client()
-            move = presence(client is not None and client.is_connected(), owner_here, bool(people), self._held_off)
+            move = presence(self._wanted, client is not None and client.is_connected())
             if move is Move.JOIN:
-                await self._connect(channel)
+                channel = self._voice_channel()
+                if channel is not None:
+                    await self._connect(channel)
             elif move is Move.LEAVE:
                 await self._disconnect()
 
@@ -127,6 +167,10 @@ class DiscordBot(discord.Client):
         client = self._voice_client()
         if client is not None and client.is_connected():
             return True
+        if client is not None:
+            # A client that lost its connection for good: a new one cannot start beside it
+            with contextlib.suppress(Exception):
+                await client.disconnect(force=True)
         try:
             await channel.connect(self_deaf=True, timeout=CONNECT_TIMEOUT)
         except Exception as e:
@@ -140,7 +184,7 @@ class DiscordBot(discord.Client):
         if self.speaker:
             self.speaker.clear()
         if client is not None:
-            await client.disconnect()
+            await client.disconnect(force=True)
             logger.info('Discord: вышел из голосового канала')
 
     async def on_message(self, message: discord.Message) -> None:
@@ -158,13 +202,14 @@ class DiscordBot(discord.Client):
         if self.speaker is None:
             return NO
         if name == '!join':
-            channel = self._voice_channel()
             async with self._presence_lock:
-                self._held_off = False
+                await self._save_wanted(True)
+                channel = self._voice_channel()
+                # A failed connect is retried by the presence check: the choice is kept
                 return OK if channel is not None and await self._connect(channel) else NO
         if name == '!leave':
             async with self._presence_lock:
-                self._held_off = True
+                await self._save_wanted(False)
                 await self._disconnect()
             return OK
         # !tts on|off; bare !tts shows the state
@@ -181,11 +226,45 @@ class DiscordBot(discord.Client):
         return OK if self.speaker.enabled else MUTED
 
 
-async def run_discord(bot: DiscordBot) -> None:
-    """Run the Discord bot until it is closed; a failure is logged and leaves Twitch running."""
-    try:
-        await bot.start(Discord.TOKEN)
-    except asyncio.CancelledError:
-        raise
-    except Exception:
-        logger.exception('Discord остановился из-за ошибки – Twitch работает дальше')
+class DiscordService:
+    """Keeps a Discord connection up for as long as the bot runs.
+
+    discord.py reconnects a session that dropped, but a start that failed – no network
+    yet after a reboot, Discord down – raises and leaves nothing running. The service
+    then starts a fresh client after a pause. A rejected token or a missing privileged
+    intent is not retried: it needs the owner's hand in the Developer Portal.
+    """
+
+    def __init__(self) -> None:
+        self.bot: DiscordBot | None = None
+        self._stopping = False
+
+    async def run(self) -> None:
+        delay = RETRY_SECONDS
+        while not self._stopping:
+            self.bot = DiscordBot()
+            try:
+                await self.bot.start(Discord.TOKEN)
+            except asyncio.CancelledError:
+                raise
+            except discord.LoginFailure:
+                logger.error('Discord: токен отклонён – проверь DISCORD_TOKEN; Discord не запущен, Twitch работает')
+                return
+            except discord.PrivilegedIntentsRequired:
+                logger.error('Discord: не включён Message Content Intent в Developer Portal; '
+                             'Discord не запущен, Twitch работает')
+                return
+            except Exception as e:
+                logger.warning('Discord не поднялся (%s: %s) – новая попытка через %d с', type(e).__name__, e, delay)
+            finally:
+                with contextlib.suppress(Exception):
+                    await self.bot.close()
+            if self._stopping:
+                return
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, RETRY_MAX_SECONDS)
+
+    async def stop(self) -> None:
+        self._stopping = True
+        if self.bot is not None:
+            await self.bot.close()

@@ -2,18 +2,24 @@
 import asyncio
 import logging
 from array import array
+from types import SimpleNamespace
 
+import aiohttp
 import discord
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 
 from src.core import speech
 from src.core.config import Voice
+from src.core.database import get_state, set_state
+from src.discord import bot as discord_module
 from src.discord.bot import Move, presence
 from src.discord.local.voice import speaker as speaker_module
 from src.discord.local.voice.audio import FRAME_BYTES, SILENCE, StreamSource, Upsampler
 from src.discord.local.voice.speaker import Speaker, prebuffer_seconds
 from src.discord.local.voice.text import number_words, parse_nicks, prepare
-from src.discord.local.voice.tts import TTSUnavailable
+from src.discord.local.voice.tts import TTSClient, TTSUnavailable
 
 NICKS = {'exitfound': 'Эксит-фаунд', 'm1ndsh1ft_': 'Майнд-шифт', 'nosok222': 'Носок'}
 
@@ -43,6 +49,14 @@ def test_an_unknown_latin_word_is_transliterated():
 
 def test_emotes_links_and_emoji_are_not_read_aloud():
     assert say('смотри https://example.com/x KEKW 😂 exitfoGigaCAT ага') == 'Смотри ссылка ага'
+
+
+def test_an_emote_with_punctuation_stuck_to_it_is_still_an_emote():
+    assert say('ага KEKW, ну KEKW!') == 'Ага ну'
+
+
+def test_versions_and_percents_are_read_as_words():
+    assert say('опус 5.5 и 50%') == 'Опус пять точка пять и пятьдесят процентов'
 
 
 def test_shouting_is_read_in_a_normal_voice():
@@ -191,6 +205,82 @@ async def test_the_worker_logs_a_dead_server_once_and_goes_on(plain_text, caplog
     assert sum('недоступен' in r.message for r in caplog.records) == 1
 
 
+async def test_playback_stopped_early_cancels_the_synthesis(plain_text):
+    """!tts off or leaving the channel must not leave the GPU finishing an answer nobody hears."""
+    cancelled = asyncio.Event()
+
+    class EndlessTTS:
+        async def stream(self, text):
+            try:
+                while True:
+                    yield pcm(*range(480))
+                    await asyncio.sleep(0)
+            finally:
+                cancelled.set()
+
+    class StoppedClient(FakeVoiceClient):
+        def play(self, source, after):
+            asyncio.get_running_loop().call_soon(after, None)
+
+    await asyncio.wait_for(Speaker(lambda: StoppedClient(), EndlessTTS()).speak('привет'), 1)
+    assert cancelled.is_set()
+
+
+async def test_a_player_error_is_logged(plain_text, caplog):
+    class BrokenClient(FakeVoiceClient):
+        def play(self, source, after):
+            asyncio.get_running_loop().call_soon(after, RuntimeError('opus encoder'))
+
+    with caplog.at_level(logging.ERROR):
+        await Speaker(lambda: BrokenClient(), FakeTTS([pcm(1, 2, 3)])).speak('привет')
+    assert any('opus encoder' in r.message for r in caplog.records)
+
+
+# --- tts client -------------------------------------------------------------
+
+async def _tts_server(handler):
+    app = web.Application()
+    app.router.add_post('/v1/audio/speech', handler)
+    server = TestServer(app)
+    await server.start_server()
+    return server
+
+
+async def test_the_tts_client_streams_pcm_and_sends_prepared_text():
+    seen = {}
+
+    async def handler(request):
+        seen.update(await request.json())
+        response = web.StreamResponse()
+        await response.prepare(request)
+        for part in (b'\x01\x00', b'\x02\x00'):
+            await response.write(part)
+        return response
+
+    server = await _tts_server(handler)
+    async with aiohttp.ClientSession() as session:
+        client = TTSClient(session, str(server.make_url('/')), 'clone:kael_low')
+        audio = b''.join([chunk async for chunk in client.stream('Привет')])
+    await server.close()
+    assert audio == b'\x01\x00\x02\x00'
+    assert seen['voice'] == 'clone:kael_low' and seen['input'] == 'Привет'
+    assert seen['normalization_options'] == {'normalize': False} and seen['stream'] is True
+
+
+async def test_a_server_error_or_no_server_is_tts_unavailable():
+    async def handler(request):
+        return web.Response(status=500, text='CUDA out of memory')
+
+    server = await _tts_server(handler)
+    async with aiohttp.ClientSession() as session:
+        with pytest.raises(TTSUnavailable, match='500'):
+            [chunk async for chunk in TTSClient(session, str(server.make_url('/')), 'v').stream('а')]
+        url = str(server.make_url('/'))
+        await server.close()
+        with pytest.raises(TTSUnavailable):
+            [chunk async for chunk in TTSClient(session, url, 'v').stream('а')]
+
+
 def test_nothing_is_queued_off_voice_or_with_the_voice_off():
     away = Speaker(lambda: FakeVoiceClient(connected=False), FakeTTS())
     away.submit('привет', 'twitch')
@@ -231,16 +321,114 @@ def test_speech_reaches_a_listener_and_survives_a_broken_one():
 
 # --- presence ---------------------------------------------------------------
 
-@pytest.mark.parametrize(('connected', 'owner', 'people', 'held_off', 'move'), [
-    (False, True, True, False, Move.JOIN),
-    (False, True, True, True, Move.STAY),
-    (False, False, True, False, Move.STAY),
-    (True, False, True, False, Move.STAY),
-    (True, False, False, False, Move.LEAVE),
-    (True, True, True, False, Move.STAY),
+@pytest.mark.parametrize(('wanted', 'connected', 'move'), [
+    (True, False, Move.JOIN),
+    (True, True, Move.STAY),
+    (False, True, Move.LEAVE),
+    (False, False, Move.STAY),
 ])
-def test_the_bot_follows_the_owner_and_never_sits_alone(connected, owner, people, held_off, move):
-    assert presence(connected, owner, people, held_off) is move
+def test_the_bot_is_in_the_channel_exactly_while_the_owner_wants_it(wanted, connected, move):
+    assert presence(wanted, connected) is move
+
+
+@pytest.fixture
+async def discord_bot(db, monkeypatch):
+    """A DiscordBot that never touches Discord: the voice channel is a flag."""
+    bot = discord_module.DiscordBot()
+    bot.speaker = Speaker(lambda: None, FakeTTS())
+    state = {'connected': False}
+
+    async def connect(channel):
+        state['connected'] = True
+        return True
+
+    async def disconnect():
+        state['connected'] = False
+
+    monkeypatch.setattr(bot, '_connect', connect)
+    monkeypatch.setattr(bot, '_disconnect', disconnect)
+    monkeypatch.setattr(bot, '_voice_channel', lambda: SimpleNamespace(name='голос'))
+    monkeypatch.setattr(bot, '_voice_client', lambda: SimpleNamespace(
+        is_connected=lambda: state['connected'], is_playing=lambda: False))
+    bot.state = state
+    yield bot
+    await discord.Client.close(bot)
+
+
+async def test_join_and_leave_are_remembered_across_restarts(discord_bot):
+    assert await discord_bot._command('!join', []) == discord_module.OK
+    assert discord_bot.state['connected']
+    assert await get_state(discord_module.VOICE_STATE_KEY) == 'on'
+    assert await discord_bot._command('!leave', []) == discord_module.OK
+    assert not discord_bot.state['connected']
+    assert await get_state(discord_module.VOICE_STATE_KEY) == 'off'
+
+
+async def test_a_dropped_connection_is_put_back_while_the_owner_wants_it(discord_bot):
+    await set_state(discord_module.VOICE_STATE_KEY, 'on')
+    await discord_bot._reconcile()
+    assert discord_bot.state['connected']
+    discord_bot.state['connected'] = False
+    await discord_bot._reconcile()
+    assert discord_bot.state['connected']
+
+
+async def test_without_a_choice_the_bot_stays_out(discord_bot):
+    await discord_bot._reconcile()
+    assert not discord_bot.state['connected']
+
+
+async def test_tts_on_off_and_state(discord_bot):
+    assert await discord_bot._command('!tts', ['off']) == discord_module.MUTED
+    assert not discord_bot.speaker.enabled
+    assert await discord_bot._command('!tts', []) == discord_module.MUTED
+    assert await discord_bot._command('!tts', ['on']) == discord_module.OK
+    assert await discord_bot._command('!tts', ['громче']) == discord_module.NO
+
+
+class FlakyBot:
+    """DiscordBot stand-in: start() fails as told, then blocks until close()."""
+    starts = 0
+    failures: tuple[BaseException, ...] = ()
+
+    def __init__(self) -> None:
+        self._closed = asyncio.Event()
+
+    async def start(self, token) -> None:
+        FlakyBot.starts += 1
+        if FlakyBot.failures:
+            error, *rest = FlakyBot.failures
+            FlakyBot.failures = tuple(rest)
+            raise error
+        await self._closed.wait()
+
+    async def close(self) -> None:
+        self._closed.set()
+
+
+@pytest.fixture
+def flaky(monkeypatch):
+    FlakyBot.starts = 0
+    monkeypatch.setattr(discord_module, 'DiscordBot', FlakyBot)
+    monkeypatch.setattr(discord_module, 'RETRY_SECONDS', 0)
+    return FlakyBot
+
+
+async def test_a_failed_start_is_retried_until_discord_comes_up(flaky):
+    flaky.failures = (OSError('no network'), OSError('still no network'))
+    service = discord_module.DiscordService()
+    task = asyncio.create_task(service.run())
+    for _ in range(50):
+        await asyncio.sleep(0)
+    assert flaky.starts == 3 and not task.done()
+    await service.stop()
+    await asyncio.wait_for(task, 1)
+
+
+async def test_a_rejected_token_is_not_retried(flaky):
+    flaky.failures = (discord.LoginFailure('bad token'),)
+    await asyncio.wait_for(discord_module.DiscordService().run(), 1)
+    assert flaky.starts == 1
 
 
 def test_the_fake_voice_client_matches_what_the_speaker_uses():

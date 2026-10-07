@@ -191,6 +191,19 @@ async def _roll_throws(db: aiosqlite.Connection) -> None:
     )
 
 
+async def _bot_state(db: aiosqlite.Connection) -> None:
+    """Bot_state: small settings the bot keeps across restarts, key → value."""
+    # A choice the owner makes by a chat command (the Discord voice channel) must
+    # survive a restart; one row per setting, rewritten in place
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS bot_state (
+            key        TEXT PRIMARY KEY,
+            value      TEXT NOT NULL,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+
 async def _roll_perks(db: aiosqlite.Connection) -> None:
     """Roll_perks: perks from the previous stream."""
     # Game perks from the previous stream's results: a shield for the «китежанин»,
@@ -339,6 +352,7 @@ STEPS = [
     ('legacy', _legacy),
     ('fts', _fts),
     ('roll_throws', _roll_throws),
+    ('bot_state', _bot_state),
 ]
 SCHEMA_VERSION = len(STEPS)
 

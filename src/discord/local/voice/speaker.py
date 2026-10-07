@@ -20,6 +20,9 @@ UNAVAILABLE_LOG_SECONDS = 300
 # took 17–20 s. A faster voice only makes the estimate, and so the prebuffer, generous
 CHARS_PER_SECOND = 14.5
 FRAME_SECONDS = 0.02
+# Playback that has not ended by then is stopped: synthesis is bounded by VOICE_TIMEOUT,
+# and an answer plays no longer than it took to arrive, so only a stuck player gets here
+PLAY_TIMEOUT_FACTOR = 2
 
 
 def prebuffer_seconds(phrase: str) -> float:
@@ -86,19 +89,39 @@ class Speaker:
         fetch = asyncio.create_task(self._fetch(phrase, source, ready, prebuffer_seconds(phrase)))
         try:
             await ready.wait()
-            client = self._connected()
-            if source.empty or client is None or not self.enabled:
-                # Nothing came (the error is in the task) or the bot left meanwhile
+            if source.empty:
+                # Nothing came: the server's error is in the task
                 await fetch
+                return
+            client = self._connected()
+            if client is None or not self.enabled:
+                # The bot left or the voice was turned off meanwhile: the synthesis is
+                # cancelled below rather than waited out on the GPU
                 return
             started = time.monotonic()
             played = asyncio.Event()
             loop = asyncio.get_running_loop()
-            client.play(source, after=lambda _error: loop.call_soon_threadsafe(played.set))
-            await played.wait()
+
+            def after(error: Exception | None) -> None:
+                # discord.py's player thread: errors reach nobody unless logged here
+                if error is not None:
+                    logger.error('Озвучка: ошибка плеера: %s', error)
+                loop.call_soon_threadsafe(played.set)
+
+            client.play(source, after=after)
+            try:
+                await asyncio.wait_for(played.wait(), Voice.TIMEOUT * PLAY_TIMEOUT_FACTOR)
+            except TimeoutError:
+                logger.warning('Озвучка: воспроизведение не закончилось за %d с – остановлено',
+                               Voice.TIMEOUT * PLAY_TIMEOUT_FACTOR)
+                client.stop()
+                return
             logger.info('Озвучка: %d симв., %.1f с, провалов %.1f с', len(phrase),
                         time.monotonic() - started, source.underruns * FRAME_SECONDS)
-            await fetch
+            if fetch.done():
+                # Raises if the server broke off mid-answer; a playback stopped early
+                # (!tts off, the bot left) leaves the task running – cancelled below
+                await fetch
         finally:
             if not fetch.done():
                 fetch.cancel()

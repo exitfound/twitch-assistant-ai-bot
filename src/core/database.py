@@ -23,6 +23,7 @@ from src.core.db.quota import (
     count_bot_uses_this_stream, count_channel_bot_uses, forget_bot_use, oldest_bot_use_age, record_bot_use,
 )
 from src.core.db.schema import init_db
+from src.core.db.state import get_state, set_state
 from src.core.db.streams import (
     StreamRow, end_stream, get_last_stream, get_previous_stream_session, get_session_start,
     get_stream, last_chat_time, reopen_stream, save_stream,
@@ -35,9 +36,9 @@ __all__ = [
     'get_all_facts', 'get_chat_after',
     'get_db', 'get_last_chat_session', 'get_last_stream', 'get_last_tagged_interaction',
     'get_previous_chat_session', 'get_previous_stream_session', 'get_random_knowledge',
-    'get_recent_chat', 'get_relevant_facts', 'get_session_start', 'get_session_stats', 'get_stream',
+    'get_recent_chat', 'get_relevant_facts', 'get_session_start', 'get_session_stats', 'get_state', 'get_stream',
     'get_tagged_answers', 'get_total_stats', 'get_user_interactions', 'get_user_messages',
     'get_user_stats', 'has_chatted', 'init_db', 'invalidate_knowledge_cache', 'last_chat_time',
     'oldest_bot_use_age', 'record_bot_use', 'reopen_stream', 'save_bot_interaction',
-    'save_chat_message', 'save_stream', 'search_context', 'transaction', 'vacuum_db', 'was_greeted',
+    'save_chat_message', 'save_stream', 'search_context', 'set_state', 'transaction', 'vacuum_db', 'was_greeted',
 ]

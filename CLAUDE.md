@@ -110,7 +110,7 @@ make lock            # recompile requirements*.txt after editing requirements*.i
 | `src/twitch/core/` | the Twitch skeleton: command registry, chat dispatcher and its gate, per-stream limits, viewer tiers, replies in chat, chat sockets, tokens, the stream tracker, follower checks | nothing feature-specific. Twitch features depend on it, never the reverse – the one exception is `component.py`, which registers every feature's commands |
 | `src/twitch/gemini/` | Twitch handlers of generated answers: free text, `!ask`, `!who`, `!versus`, `!summary`, `!ascii`, proactive remarks, the response pipeline | a Twitch command that generates text (`kind=Kind.GEMINI`) |
 | `src/twitch/local/` | сосурян's Twitch features without Gemini: simple commands, follow replies, emote spam, the periodic command reminder, the `roll/` game and the `mascot/` OBS overlay feed | a small command or event reply served from SQLite + `CONTENT.md` |
-| `src/discord/` | everything tied to Discord: `bot.py` (the discord.py client: the voice channel follows the owner, the owner's commands) and `local/voice/` – the bot's answers spoken through the TTS server | a Discord feature, inside the package of its kind (`discord/local/…`, later `discord/gemini/…`) |
+| `src/discord/` | everything tied to Discord: `bot.py` (the discord.py client, kept up by `DiscordService`: the voice channel by the owner's `!join` / `!leave`, the owner's commands) and `local/voice/` – the bot's answers spoken through the TTS server | a Discord feature, inside the package of its kind (`discord/local/…`, later `discord/gemini/…`) |
 | `src/twitch/local/roll/` | the «залупа стрима» game: throws, channel-points rewards, perks, curse-lift announcements. A local feature that grew big enough for its own subpackage | anything about `!roll` |
 
 Shared code (`src/core/`, `src/gemini/`, `src/cli/`) never imports a platform package, and the platforms never import each other: Twitch hands an answer that reached chat to `src/core/speech.py`, the Discord voice listens there. The one exception: `gemini/memory/build.py` reads a session's game results from `src/twitch/local/roll/storage.py`. A new platform gets its own `src/<platform>/` with the same kinds inside, and takes the brain from `src/gemini/` rather than from another platform.
@@ -135,6 +135,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `db/knowledge.py` – `knowledge` and `facts`: FTS5 search, the random «language» sample
 - `db/quota.py` – `bot_uses`: hourly quota, channel ceiling, per-stream counts, the all-time count that numbers clips
 - `db/streams.py` – `streams`: stream id → session, start, end
+- `db/state.py` – `bot_state`: `get_state()` / `set_state()`, small settings kept across restarts (the Discord voice channel choice)
 - `activity.py` – `ChatWatch`: «has anyone written since» for the chat loops
 - `cooldowns.py` – `Cooldowns` on the monotonic clock
 - `speech.py` – `say(text, source)` / `listen()`: an answer that reached a platform's chat, handed to whoever voices it; never blocks or raises. BOT.md «Голос в Discord»
@@ -197,11 +198,11 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `perks.py` – perks at stream start and on a player's first message
 
 **discord** (BOT.md «Голос в Discord»)
-- `bot.py` – `DiscordBot(discord.Client)`: loads libopus and starts the `Speaker` in `setup_hook`, `presence()` (the pure rule: join the owner, never sit alone, `!leave` holds off until the owner rejoins), `on_voice_state_update`, the owner's `!join` / `!leave` / `!tts` answered with a reaction; `run_discord()`
-- `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, emotes, links, CAPS, numbers, addressees at the start dropped, `trim_to_sentence()`)
+- `bot.py` – `DiscordBot(discord.Client)`: loads libopus and starts the `Speaker` and the minute presence check in `setup_hook`; `presence()` (the pure rule: in the channel exactly while the owner's choice – `bot_state.discord_voice`, set by `!join` / `!leave` – says so), `_reconcile()` on ready, on the bot's own voice state and every minute; the owner's `!join` / `!leave` / `!tts` answered with a reaction. `DiscordService` – a fresh client after a failed start (30 s doubling to 10 min), no retry for a rejected token or a missing intent
+- `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, emotes even with punctuation stuck to them, links, CAPS, numbers, versions «5.5», `%`, `+`, addressees at the start dropped, `trim_to_sentence()`)
 - `local/voice/tts.py` – `TTSClient.stream()`: streaming PCM from `/v1/audio/speech`, `TTSUnavailable`
 - `local/voice/audio.py` – `Upsampler` (24 kHz mono → 48 kHz stereo across chunk borders), `StreamSource` (silence on underrun, end only after `finish()`)
-- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time), `speak()` (prebuffer by the answer's expected length – `prebuffer_seconds()` – then play, underruns logged)
+- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time), `speak()` (prebuffer by the answer's expected length – `prebuffer_seconds()` – then play, underruns and player errors logged; a playback stopped early cancels the synthesis, a stuck one is stopped after `2 × VOICE_TIMEOUT`)
 
 **cli**
 - `main.py` – argparse, `_with_db`, `_check_combination()` (one command per run, modifiers only with their command)

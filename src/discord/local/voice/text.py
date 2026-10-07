@@ -27,6 +27,11 @@ LINK_RE = re.compile(r'https?://\S+|www\.\S+')
 EMOJI_RE = re.compile(r'[\U0001F000-\U0001FAFF☀-➿️]')
 LATIN_RE = re.compile(r'@?[A-Za-z][A-Za-z0-9_]*')
 LEADING_MENTIONS_RE = re.compile(r'^(?:@\w+[\s,.:;!?]*)+')
+# Punctuation that sticks to a word in chat: «KEKW,» is still the emote
+WORD_PUNCTUATION = '.,:;!?…"\'()«»'
+# A dotted number in a stream about code is a version far more often than a fraction:
+# «5.5» is read «пять точка пять», not as two sentences
+DECIMAL_RE = re.compile(r'(\d+)\.(?=\d)')
 
 
 def _under_1000(n: int, female: bool = False) -> list[str]:
@@ -94,7 +99,7 @@ def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) 
     """The text to synthesize, or '' when nothing speakable is left."""
     text = LINK_RE.sub('ссылка', text)
     # Emotes are matched case-sensitively, as Twitch does: «KEKW» is one, «kekw» a word
-    text = ' '.join(word for word in text.split() if word not in emotes)
+    text = ' '.join(word for word in text.split() if word.strip(WORD_PUNCTUATION) not in emotes)
     text = EMOJI_RE.sub('', text)
     text = _decaps(text)
     # The addressees at the start are not read: chat shows whom the answer is for, and a
@@ -111,6 +116,8 @@ def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) 
         return spoken.capitalize() if word[0].isupper() or word.startswith('@') else spoken
 
     text = LATIN_RE.sub(latin, text)
+    text = DECIMAL_RE.sub(r'\1 точка ', text)
+    text = text.replace('%', ' процентов').replace('+', ' плюс ')
     text = re.sub(r'\d+', lambda m: number_words(int(m.group(0))), text)
     text = text.replace('@', '').replace('_', ' ').replace('«', '"').replace('»', '"')
     text = re.sub(r'([!?.])\1+', r'\1', text)

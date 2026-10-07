@@ -20,9 +20,9 @@ UNAVAILABLE_LOG_SECONDS = 300
 # took 17–20 s. A faster voice only makes the estimate, and so the prebuffer, generous
 CHARS_PER_SECOND = 14.5
 FRAME_SECONDS = 0.02
-# The server's speed – seconds of synthesis per second of speech – drifts with its load and
-# state (1.1–1.7 were seen on one evening), so it is measured on every answer. The estimate
-# starts here, follows a slowdown at once and a speedup gradually
+# The server's speed – seconds of synthesis per second of speech – drifts with its load
+# between 0.8 and 1.8, so it is measured on every answer. The estimate starts here,
+# follows a slowdown at once and a speedup gradually
 RTF_START = 1.35
 RTF_EASE = 0.3
 # Headroom over the measured speed in the prebuffer. The speed is measured from the first
@@ -114,7 +114,10 @@ class Speaker:
         source = StreamSource()
         ready = asyncio.Event()
         prebuffer = prebuffer_seconds(phrase, self.rtf)
-        fetch = asyncio.create_task(self._fetch(phrase, source, ready, prebuffer))
+        # Text is trimmed before numbers and Latin are spelled out, so the speech can run
+        # longer than VOICE_MAX_CHARS suggests: the bound grows with the phrase
+        total = max(Voice.TIMEOUT, len(phrase) / CHARS_PER_SECOND * RTF_MAX + 30)
+        fetch = asyncio.create_task(self._fetch(phrase, source, ready, prebuffer, total))
         try:
             await ready.wait()
             if source.empty:
@@ -156,13 +159,18 @@ class Speaker:
                 fetch.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await fetch
+            elif not fetch.cancelled():
+                # An early return leaves a failed synthesis unawaited: taking its exception
+                # keeps asyncio from logging it as never retrieved
+                fetch.exception()
 
-    async def _fetch(self, phrase: str, source: StreamSource, ready: asyncio.Event, prebuffer: float) -> None:
+    async def _fetch(self, phrase: str, source: StreamSource, ready: asyncio.Event, prebuffer: float,
+                     total: float) -> None:
         upsampler = Upsampler()
         first_at: float | None = None
         first_bytes = received = 0
         try:
-            async for chunk in self._tts.stream(phrase):
+            async for chunk in self._tts.stream(phrase, total):
                 if first_at is None:
                     first_at, first_bytes = time.monotonic(), len(chunk)
                 received += len(chunk)

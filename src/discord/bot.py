@@ -21,11 +21,16 @@ logger = logging.getLogger(__name__)
 # A voice connection that has not come up by then is given up; the next check retries
 CONNECT_TIMEOUT = 20
 # How often the voice channel is checked against the owner's choice: a connection that
-# dropped for good fires no event, and the bot would otherwise stay out until a restart
+# dropped for good fires no event, and the bot would otherwise stay out until a restart.
+# While the connection is unsettled (lost, or in another channel) it is checked more often,
+# so the grace periods below are counted from close to the real moment
 PRESENCE_CHECK_SECONDS = 60
-# A voice client that lost its connection is left to discord.py's own reconnect this long
-# before the bot starts a new one: two connect flows at once fight over the channel
+UNSETTLED_CHECK_SECONDS = 10
+# A voice client that lost its connection is left to discord.py's own reconnect this long,
+# and one dragged to another channel is left to finish discord.py's own move handling,
+# before the bot acts: two connect flows at once fight over the channel
 RECONNECT_GRACE_SECONDS = 90
+MOVE_GRACE_SECONDS = 10
 # bot_state keys of the owner's choices, 'on' / 'off': the voice channel (!join / !leave)
 # and the voice itself (!voice; until the first one – VOICE_ENABLED)
 VOICE_STATE_KEY = 'discord_voice'
@@ -52,8 +57,8 @@ class Where(StrEnum):
     """Where the bot's voice connection is."""
     OUT = 'out'                # no voice client at all
     HERE = 'here'              # connected to DISCORD_VOICE_CHANNEL_ID
-    ELSEWHERE = 'elsewhere'    # connected, but moved to another channel
-    RECOVERING = 'recovering'  # lost its connection, discord.py is still reconnecting it
+    ELSEWHERE = 'elsewhere'    # connected in another channel for longer than MOVE_GRACE_SECONDS
+    RECOVERING = 'recovering'  # lost or moved just now: discord.py is still handling it
     DOWN = 'down'              # lost its connection for longer than RECONNECT_GRACE_SECONDS
 
 
@@ -91,8 +96,8 @@ class DiscordBot(discord.Client):
         self._presence_lock = asyncio.Lock()
         # The owner's choice of the voice channel, read in setup_hook
         self._wanted = False
-        # Since when the voice client has been without a connection (monotonic)
-        self._down_since: float | None = None
+        # Since when the voice client has been lost or in another channel (monotonic)
+        self._unsettled_since: float | None = None
         # Leaving the channel on close fires a voice event: it must not bring the bot back
         self._closing = False
         self._cooldowns = Cooldowns()
@@ -143,24 +148,27 @@ class DiscordBot(discord.Client):
         return channel if isinstance(channel, discord.VoiceChannel) else None
 
     def _voice_client(self) -> discord.VoiceClient | None:
-        # The server is the voice channel's own: a separately configured one could disagree
-        channel = self._voice_channel()
-        client = channel.guild.voice_client if channel is not None else None
-        return client if isinstance(client, discord.VoiceClient) else None
+        # The bot keeps one voice connection; it is found among its own, so it stays
+        # visible – to !leave and to close() – even when the configured channel is not
+        for client in self.voice_clients:
+            if isinstance(client, discord.VoiceClient):
+                return client
+        return None
 
     def _where(self) -> Where:
         client = self._voice_client()
-        if client is None:
-            self._down_since = None
-            return Where.OUT
-        if client.is_connected():
-            self._down_since = None
-            here = client.channel is not None and client.channel.id == Discord.VOICE_CHANNEL_ID
-            return Where.HERE if here else Where.ELSEWHERE
+        connected = client is not None and client.is_connected()
+        if client is None or (connected and client.channel is not None
+                              and client.channel.id == Discord.VOICE_CHANNEL_ID):
+            self._unsettled_since = None
+            return Where.OUT if client is None else Where.HERE
         now = time.monotonic()
-        if self._down_since is None:
-            self._down_since = now
-        return Where.RECOVERING if now - self._down_since < RECONNECT_GRACE_SECONDS else Where.DOWN
+        if self._unsettled_since is None:
+            self._unsettled_since = now
+        grace = MOVE_GRACE_SECONDS if connected else RECONNECT_GRACE_SECONDS
+        if now - self._unsettled_since < grace:
+            return Where.RECOVERING
+        return Where.ELSEWHERE if connected else Where.DOWN
 
     async def on_ready(self) -> None:
         self.was_ready = True
@@ -176,7 +184,8 @@ class DiscordBot(discord.Client):
 
     async def _presence_loop(self) -> None:
         while True:
-            await asyncio.sleep(PRESENCE_CHECK_SECONDS)
+            unsettled = self._unsettled_since is not None
+            await asyncio.sleep(UNSETTLED_CHECK_SECONDS if unsettled else PRESENCE_CHECK_SECONDS)
             try:
                 await self._reconcile()
             except Exception:
@@ -218,12 +227,14 @@ class DiscordBot(discord.Client):
         if client is not None and client.is_connected():
             if client.channel is not None and client.channel.id == channel.id:
                 return True
-            # Dragged to another channel: discord.py keeps the connection, only moves it
-            try:
-                await client.move_to(channel)
-            except Exception as e:
-                logger.warning('Discord: не удалось вернуться в «%s»: %s', channel.name, e)
+            # Dragged to another channel: discord.py keeps the connection, only moves it.
+            # A move that times out is logged and reverted by discord.py, not raised
+            with contextlib.suppress(Exception):
+                await client.move_to(channel, timeout=CONNECT_TIMEOUT)
+            if client.channel is None or client.channel.id != channel.id:
+                logger.warning('Discord: не удалось вернуться в «%s»', channel.name)
                 return False
+            self._unsettled_since = None
             logger.info('Discord: вернулся в «%s»', channel.name)
             return True
         if client is not None:
@@ -235,7 +246,7 @@ class DiscordBot(discord.Client):
         except Exception as e:
             logger.warning('Discord: не удалось зайти в «%s»: %s', channel.name, e)
             return False
-        self._down_since = None
+        self._unsettled_since = None
         logger.info('Discord: зашёл в «%s»', channel.name)
         return True
 
@@ -333,20 +344,18 @@ class DiscordService:
                              'Discord не запущен, Twitch работает')
                 return
             except Exception as e:
-                if self.bot.was_ready:
-                    # A session that ran for a while: its failure starts the backoff anew
-                    delay = RETRY_SECONDS
-                logger.warning('Discord не поднялся (%s: %s) – новая попытка через %d с', type(e).__name__, e, delay)
+                failure = f'не поднялся ({type(e).__name__}: {e})'
             else:
-                if self.bot.was_ready:
-                    delay = RETRY_SECONDS
-                if not self._stopping:
-                    logger.warning('Discord: сессия закрылась – новая попытка через %d с', delay)
+                failure = 'сессия закрылась'
             finally:
                 with contextlib.suppress(Exception):
                     await self.bot.close()
             if self._stopping:
                 return
+            if self.bot.was_ready:
+                # A session that ran for a while: its end starts the backoff anew
+                delay = RETRY_SECONDS
+            logger.warning('Discord %s – новая попытка через %d с', failure, delay)
             await self._sleep(delay)
             delay = min(delay * 2, RETRY_MAX_SECONDS)
 

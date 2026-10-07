@@ -113,7 +113,7 @@ def test_the_prebuffer_follows_the_measured_server_speed(monkeypatch):
     # 290 characters are about 20 s of speech
     assert prebuffer_seconds('а' * 50, 1.2) == 2.0
     assert prebuffer_seconds('а' * 290, 1.2) == pytest.approx(5.0)
-    # At 1.74 – the evening the voice crackled – it has to wait for about 10 s
+    # At 1.74 it has to wait for about 10 s
     assert prebuffer_seconds('а' * 290, 1.74) == pytest.approx(20 * (1 - 1 / 1.74) * 1.15)
 
 
@@ -134,7 +134,7 @@ def test_a_slowdown_is_taken_at_once_a_speedup_gradually():
 
 async def test_waiting_in_the_server_queue_does_not_count_as_slow_generation(plain_text):
     class QueuedTTS:
-        async def stream(self, text):
+        async def stream(self, text, total=None):
             await asyncio.sleep(0.3)  # behind another request in the server's queue
             for _ in range(30):
                 yield pcm(*range(2400))  # 0.1 s of speech each, as fast as it can
@@ -155,6 +155,23 @@ def test_a_dry_buffer_makes_one_pause_until_a_reserve_is_back():
     source.feed(b'\x02' * int(REBUFFER_SECONDS * BYTES_PER_SECOND))
     assert source.read() == b'\x02' * FRAME_BYTES
     assert source.stalls == 1 and source.underruns == 2
+
+
+def test_each_next_pause_in_one_answer_gathers_more():
+    source = StreamSource()
+    for stall in (1, 2):
+        source.feed(b'\x01' * FRAME_BYTES)
+        source.read()
+        assert source.read() == SILENCE
+        need = int(REBUFFER_SECONDS * 2 ** (stall - 1) * BYTES_PER_SECOND)
+        source.feed(b'\x01' * (need - 2 * FRAME_BYTES))
+        assert source.read() == SILENCE
+        source.feed(b'\x01' * 2 * FRAME_BYTES)
+        assert source.read() == b'\x01' * FRAME_BYTES
+        while len(source._buffer) >= FRAME_BYTES:
+            source.read()
+        source._buffer.clear()
+    assert source.stalls == 2
 
 
 def test_the_end_of_an_answer_is_played_out_without_a_pause():
@@ -192,7 +209,7 @@ class FakeTTS:
         self.error = error
         self.texts: list[str] = []
 
-    async def stream(self, text: str):
+    async def stream(self, text: str, total=None):
         self.texts.append(text)
         if self.error:
             raise self.error
@@ -254,7 +271,7 @@ async def test_playback_stopped_early_cancels_the_synthesis(plain_text):
     cancelled = asyncio.Event()
 
     class EndlessTTS:
-        async def stream(self, text):
+        async def stream(self, text, total=None):
             try:
                 while True:
                     yield pcm(*range(480))
@@ -323,6 +340,23 @@ async def test_a_server_error_or_no_server_is_tts_unavailable():
         await server.close()
         with pytest.raises(TTSUnavailable):
             [chunk async for chunk in TTSClient(session, url, 'v').stream('а')]
+
+
+async def test_the_first_byte_may_wait_in_the_server_queue(monkeypatch):
+    monkeypatch.setattr(tts_module, 'READ_TIMEOUT', 0.1)
+
+    async def handler(request):
+        await asyncio.sleep(0.4)  # behind another request
+        response = web.StreamResponse()
+        await response.prepare(request)
+        await response.write(b'\x01\x00')
+        return response
+
+    server = await _tts_server(handler)
+    async with aiohttp.ClientSession() as session:
+        audio = await asyncio.wait_for(_drain(TTSClient(session, str(server.make_url('/')), 'v').stream('а')), 3)
+    await server.close()
+    assert audio == [b'\x01\x00']
 
 
 async def test_a_server_that_goes_silent_mid_answer_is_given_up(monkeypatch):
@@ -461,11 +495,30 @@ async def test_the_saved_choice_brings_the_bot_back_after_a_restart(discord_bot)
     assert discord_bot.state['connected']
 
 
-async def test_a_bot_dragged_to_another_channel_is_brought_back(discord_bot):
+async def test_a_bot_dragged_to_another_channel_is_brought_back_after_discord_py_settles(discord_bot, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(discord_module.time, 'monotonic', lambda: clock[0])
     discord_bot._wanted = True
     discord_bot.state.update(client=True, connected=True, channel=999)
     await discord_bot._reconcile()
+    # discord.py is still handling the move: no second connect flow beside it
+    assert discord_bot.state['connects'] == 0
+    clock[0] += discord_module.MOVE_GRACE_SECONDS + 1
+    await discord_bot._reconcile()
     assert discord_bot.state['connects'] == 1 and discord_bot.state['channel'] == Discord.VOICE_CHANNEL_ID
+
+
+async def test_a_move_that_did_not_happen_is_not_reported_as_done(db, monkeypatch):
+    bot = discord_module.DiscordBot()
+    stuck = SimpleNamespace(is_connected=lambda: True, channel=SimpleNamespace(id=999))
+
+    async def move_to(channel, **_kwargs):
+        pass  # discord.py logs its timeout and reverts instead of raising
+
+    stuck.move_to = move_to
+    monkeypatch.setattr(bot, '_voice_client', lambda: stuck)
+    assert await bot._connect(SimpleNamespace(id=Discord.VOICE_CHANNEL_ID, name='голос')) is False
+    await discord.Client.close(bot)
 
 
 async def test_a_lost_connection_is_left_to_discord_py_then_replaced(discord_bot, monkeypatch):

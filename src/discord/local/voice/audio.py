@@ -15,8 +15,11 @@ SILENCE = bytes(FRAME_BYTES)
 # Output bytes per second: 48000 samples × 2 channels × 2 bytes
 BYTES_PER_SECOND = 192_000
 # Speech gathered again after the buffer ran dry mid-answer: one pause of a second or two
-# instead of a crackle of 0.5 s pieces with silence between them
+# instead of a crackle of 0.5 s pieces with silence between them. Each next pause in the
+# same answer gathers twice as much, up to the cap: a server that keeps lagging then gives
+# a couple of pauses, not a stutter in bigger pieces
 REBUFFER_SECONDS = 1.5
+REBUFFER_MAX_SECONDS = 6.0
 
 
 class Upsampler:
@@ -72,6 +75,7 @@ class StreamSource(discord.AudioSource):
         self.underruns = 0
         self.stalls = 0
         self._rebuffering = False
+        self._rebuffer_bytes = 0
 
     def feed(self, frames: bytes) -> None:
         with self._lock:
@@ -94,7 +98,7 @@ class StreamSource(discord.AudioSource):
     def read(self) -> bytes:
         with self._lock:
             if self._rebuffering:
-                if len(self._buffer) < REBUFFER_SECONDS * BYTES_PER_SECOND and not self._finished:
+                if len(self._buffer) < self._rebuffer_bytes and not self._finished:
                     self.underruns += 1
                     return SILENCE
                 self._rebuffering = False
@@ -111,6 +115,8 @@ class StreamSource(discord.AudioSource):
             # Ran dry mid-answer: hold one pause until a reserve has built up again
             self._rebuffering = True
             self.stalls += 1
+            target = min(REBUFFER_SECONDS * 2 ** (self.stalls - 1), REBUFFER_MAX_SECONDS)
+            self._rebuffer_bytes = int(target * BYTES_PER_SECOND)
             self.underruns += 1
         return SILENCE
 

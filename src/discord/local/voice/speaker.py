@@ -20,14 +20,31 @@ UNAVAILABLE_LOG_SECONDS = 300
 # took 17–20 s. A faster voice only makes the estimate, and so the prebuffer, generous
 CHARS_PER_SECOND = 14.5
 FRAME_SECONDS = 0.02
+# The server's speed – seconds of synthesis per second of speech – drifts with its load and
+# state (1.1–1.7 were seen on one evening), so it is measured on every answer. The estimate
+# starts here, follows a slowdown at once and a speedup gradually
+RTF_START = 1.35
+RTF_EASE = 0.3
+# Headroom over the measured speed in the prebuffer; answers under this length of speech
+# do not update it – the first second of a request is mostly fixed latency
+RTF_SAFETY = 1.15
+RTF_MIN_SPEECH_SECONDS = 2.0
+# Raw speech from the server per second: 24 kHz mono 16-bit
+SERVER_BYTES_PER_SECOND = 48_000
 # Playback that has not ended by then is stopped: synthesis is bounded by VOICE_TIMEOUT,
 # and an answer plays no longer than it took to arrive, so only a stuck player gets here
 PLAY_TIMEOUT_FACTOR = 2
 
 
-def prebuffer_seconds(phrase: str) -> float:
-    """Speech to gather before playback: a share of the expected length, never below the floor."""
-    return max(Voice.PREBUFFER_SECONDS, len(phrase) / CHARS_PER_SECOND * Voice.PREBUFFER_SHARE)
+def prebuffer_seconds(phrase: str, rtf: float) -> float:
+    """Speech to gather before playback so that it does not run dry at this server speed.
+
+    At rtf r an answer of length L finishes arriving at r·L, so playback may start once
+    L·(1 − 1/r) is in. Never below VOICE_PREBUFFER_SECONDS or VOICE_PREBUFFER_SHARE of L.
+    """
+    length = len(phrase) / CHARS_PER_SECOND
+    need = length * max(0.0, 1 - 1 / rtf) * RTF_SAFETY if rtf > 0 else 0.0
+    return max(Voice.PREBUFFER_SECONDS, length * Voice.PREBUFFER_SHARE, need)
 
 
 class Speaker:
@@ -45,6 +62,7 @@ class Speaker:
         self._queue: asyncio.Queue[tuple[str, float]] = asyncio.Queue(maxsize=Voice.QUEUE)
         self.enabled = Voice.ENABLED
         self._unavailable_logged = 0.0
+        self.rtf = RTF_START
 
     def _connected(self) -> discord.VoiceClient | None:
         client = self._voice_client()
@@ -91,7 +109,8 @@ class Speaker:
             return
         source = StreamSource()
         ready = asyncio.Event()
-        fetch = asyncio.create_task(self._fetch(phrase, source, ready, prebuffer_seconds(phrase)))
+        prebuffer = prebuffer_seconds(phrase, self.rtf)
+        fetch = asyncio.create_task(self._fetch(phrase, source, ready, prebuffer))
         try:
             await ready.wait()
             if source.empty:
@@ -121,8 +140,9 @@ class Speaker:
                                Voice.TIMEOUT * PLAY_TIMEOUT_FACTOR)
                 client.stop()
                 return
-            logger.info('Озвучка: %d симв., %.1f с, провалов %.1f с', len(phrase),
-                        time.monotonic() - started, source.underruns * FRAME_SECONDS)
+            logger.info('Озвучка: %d симв., %.1f с, запас %.1f с, пауз %d (%.1f с), скорость сервера %.2f',
+                        len(phrase), time.monotonic() - started, prebuffer, source.stalls,
+                        source.underruns * FRAME_SECONDS, self.rtf)
             if fetch.done():
                 # Raises if the server broke off mid-answer; a playback stopped early
                 # (!voice turned it off, the bot left) leaves the task running – cancelled below
@@ -135,11 +155,22 @@ class Speaker:
 
     async def _fetch(self, phrase: str, source: StreamSource, ready: asyncio.Event, prebuffer: float) -> None:
         upsampler = Upsampler()
+        started = time.monotonic()
+        received = 0
         try:
             async for chunk in self._tts.stream(phrase):
+                received += len(chunk)
                 source.feed(upsampler.convert(chunk))
                 if source.buffered_seconds >= prebuffer:
                     ready.set()
+            self._measure(time.monotonic() - started, received / SERVER_BYTES_PER_SECOND)
         finally:
             source.finish()
             ready.set()
+
+    def _measure(self, synthesis: float, speech: float) -> None:
+        """Fold one answer's speed into the estimate: a slowdown at once, a speedup gradually."""
+        if speech < RTF_MIN_SPEECH_SECONDS:
+            return
+        rtf = synthesis / speech
+        self.rtf = rtf if rtf > self.rtf else self.rtf + RTF_EASE * (rtf - self.rtf)

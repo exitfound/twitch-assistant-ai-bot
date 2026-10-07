@@ -15,9 +15,11 @@ from src.core import config, speech
 from src.core.config import Discord, Voice
 from src.core.database import get_state, set_state
 from src.discord import bot as discord_module
-from src.discord.bot import Move, presence
+from src.discord.bot import Move, Where, presence
 from src.discord.local.voice import speaker as speaker_module
-from src.discord.local.voice.audio import FRAME_BYTES, SILENCE, StreamSource, Upsampler
+from src.discord.local.voice.audio import (
+    BYTES_PER_SECOND, FRAME_BYTES, REBUFFER_SECONDS, SILENCE, StreamSource, Upsampler,
+)
 from src.discord.local.voice.speaker import Speaker, prebuffer_seconds
 from src.discord.local.voice.text import number_words, parse_nicks, prepare
 from src.discord.local.voice.tts import TTSClient, TTSUnavailable
@@ -104,24 +106,49 @@ def test_a_sample_split_across_chunks_is_not_lost():
     assert parts == Upsampler().convert(whole)
 
 
-def test_a_long_answer_waits_for_a_share_of_its_length_a_short_one_for_the_floor(monkeypatch):
+def test_the_prebuffer_follows_the_measured_server_speed(monkeypatch):
     monkeypatch.setattr(Voice, 'PREBUFFER_SECONDS', 2.0)
     monkeypatch.setattr(Voice, 'PREBUFFER_SHARE', 0.25)
-    assert prebuffer_seconds('а' * 50) == 2.0
-    assert prebuffer_seconds('а' * 290) == pytest.approx(5.0)
+    # 290 characters are about 20 s of speech
+    assert prebuffer_seconds('а' * 50, 1.2) == 2.0
+    assert prebuffer_seconds('а' * 290, 1.2) == pytest.approx(5.0)
+    # At 1.74 – the evening the voice crackled – it has to wait for about 10 s
+    assert prebuffer_seconds('а' * 290, 1.74) == pytest.approx(20 * (1 - 1 / 1.74) * 1.15)
 
 
-def test_a_missing_frame_plays_as_silence_until_the_answer_ends():
+def test_a_slowdown_is_taken_at_once_a_speedup_gradually():
+    speaker = Speaker(lambda: None, FakeTTS())
+    speaker.rtf = 1.2
+    speaker._measure(17.4, 10.0)
+    assert speaker.rtf == pytest.approx(1.74)
+    speaker._measure(12.0, 10.0)
+    assert 1.2 < speaker.rtf < 1.74
+    before = speaker.rtf
+    speaker._measure(5.0, 1.0)
+    assert speaker.rtf == before
+
+
+def test_a_dry_buffer_makes_one_pause_until_a_reserve_is_back():
     source = StreamSource()
-    assert source.read() == SILENCE
-    source.feed(b'\x01' * (FRAME_BYTES + 10))
+    source.feed(b'\x01' * FRAME_BYTES)
     assert source.read() == b'\x01' * FRAME_BYTES
     assert source.read() == SILENCE
+    # A trickle does not restart playback: that would crackle
+    source.feed(b'\x02' * FRAME_BYTES * 10)
+    assert source.read() == SILENCE
+    source.feed(b'\x02' * int(REBUFFER_SECONDS * BYTES_PER_SECOND))
+    assert source.read() == b'\x02' * FRAME_BYTES
+    assert source.stalls == 1 and source.underruns == 2
+
+
+def test_the_end_of_an_answer_is_played_out_without_a_pause():
+    source = StreamSource()
+    source.feed(b'\x01' * (FRAME_BYTES + 10))
     source.finish()
+    assert source.read() == b'\x01' * FRAME_BYTES
     assert source.read() == (b'\x01' * 10).ljust(FRAME_BYTES, b'\0')
     assert source.read() == b''
-    # Two frames went out as silence before the end: what the prebuffer is tuned by
-    assert source.underruns == 2
+    assert source.stalls == 0
 
 
 # --- speaker ----------------------------------------------------------------
@@ -340,83 +367,107 @@ def test_speech_reaches_a_listener_and_survives_a_broken_one():
 
 # --- presence ---------------------------------------------------------------
 
-@pytest.mark.parametrize(('wanted', 'connected', 'move'), [
-    (True, False, Move.JOIN),
-    (True, True, Move.STAY),
-    (False, True, Move.LEAVE),
-    (False, False, Move.STAY),
+@pytest.mark.parametrize(('wanted', 'where', 'move'), [
+    (True, Where.OUT, Move.JOIN),
+    (True, Where.HERE, Move.STAY),
+    (True, Where.ELSEWHERE, Move.JOIN),
+    (True, Where.RECOVERING, Move.STAY),
+    (True, Where.DOWN, Move.JOIN),
+    (False, Where.HERE, Move.LEAVE),
+    (False, Where.ELSEWHERE, Move.LEAVE),
+    (False, Where.OUT, Move.STAY),
 ])
-def test_the_bot_is_in_the_channel_exactly_while_the_owner_wants_it(wanted, connected, move):
-    assert presence(wanted, connected) is move
+def test_the_bot_is_in_its_channel_exactly_while_the_owner_wants_it(wanted, where, move):
+    assert presence(wanted, where) is move
 
 
 @pytest.fixture
 async def discord_bot(db, monkeypatch):
-    """A DiscordBot that never touches Discord: the voice channel is a flag."""
+    """A DiscordBot that never touches Discord: the voice connection is a pair of flags."""
     bot = discord_module.DiscordBot()
     bot.speaker = Speaker(lambda: None, FakeTTS())
-    state = {'connected': False}
+    state = {'connected': False, 'channel': Discord.VOICE_CHANNEL_ID, 'client': False, 'connects': 0}
 
     async def connect(channel):
-        state['connected'] = True
+        state.update(connected=True, client=True, channel=Discord.VOICE_CHANNEL_ID)
+        state['connects'] += 1
         return True
 
     async def disconnect():
-        state['connected'] = False
+        state.update(connected=False, client=False)
 
     monkeypatch.setattr(bot, '_connect', connect)
     monkeypatch.setattr(bot, '_disconnect', disconnect)
     monkeypatch.setattr(bot, '_voice_channel', lambda: SimpleNamespace(name='голос'))
     monkeypatch.setattr(bot, '_voice_client', lambda: SimpleNamespace(
-        is_connected=lambda: state['connected'], is_playing=lambda: False))
+        is_connected=lambda: state['connected'], is_playing=lambda: False,
+        channel=SimpleNamespace(id=state['channel'])) if state['client'] else None)
     bot.state = state
     yield bot
     await discord.Client.close(bot)
 
 
 async def test_join_and_leave_are_remembered_across_restarts(discord_bot):
-    assert await discord_bot._command('!join', []) == discord_module.OK
+    assert await discord_bot._command('!join') == discord_module.OK
     assert discord_bot.state['connected']
     assert await get_state(discord_module.VOICE_STATE_KEY) == 'on'
-    assert await discord_bot._command('!leave', []) == discord_module.OK
+    assert await discord_bot._command('!leave') == discord_module.OK
     assert not discord_bot.state['connected']
     assert await get_state(discord_module.VOICE_STATE_KEY) == 'off'
 
 
-async def test_a_dropped_connection_is_put_back_while_the_owner_wants_it(discord_bot):
+async def test_the_saved_choice_brings_the_bot_back_after_a_restart(discord_bot):
     await set_state(discord_module.VOICE_STATE_KEY, 'on')
+    await discord_bot.load_state()
     await discord_bot._reconcile()
     assert discord_bot.state['connected']
-    discord_bot.state['connected'] = False
+
+
+async def test_a_bot_dragged_to_another_channel_is_brought_back(discord_bot):
+    discord_bot._wanted = True
+    discord_bot.state.update(client=True, connected=True, channel=999)
     await discord_bot._reconcile()
-    assert discord_bot.state['connected']
+    assert discord_bot.state['connects'] == 1 and discord_bot.state['channel'] == Discord.VOICE_CHANNEL_ID
+
+
+async def test_a_lost_connection_is_left_to_discord_py_then_replaced(discord_bot, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(discord_module.time, 'monotonic', lambda: clock[0])
+    discord_bot._wanted = True
+    discord_bot.state.update(client=True, connected=False)
+    await discord_bot._reconcile()
+    assert discord_bot.state['connects'] == 0
+    clock[0] += discord_module.RECONNECT_GRACE_SECONDS + 1
+    await discord_bot._reconcile()
+    assert discord_bot.state['connects'] == 1
 
 
 async def test_without_a_choice_the_bot_stays_out(discord_bot):
+    await discord_bot.load_state()
     await discord_bot._reconcile()
     assert not discord_bot.state['connected']
 
 
 async def test_voice_toggles_and_the_reaction_shows_the_new_state(discord_bot):
-    assert await discord_bot._command('!voice', []) == discord_module.MUTED
+    assert await discord_bot._command('!voice') == discord_module.MUTED
     assert not discord_bot.speaker.enabled
-    assert await discord_bot._command('!voice', []) == discord_module.OK
+    assert await discord_bot._command('!voice') == discord_module.OK
     assert discord_bot.speaker.enabled
 
 
 async def test_the_voice_switch_is_remembered_across_restarts(discord_bot):
-    assert await discord_bot._command('!voice', []) == discord_module.MUTED
+    assert await discord_bot._command('!voice') == discord_module.MUTED
     assert await get_state(discord_module.VOICE_ENABLED_KEY) == 'off'
     restarted = discord_module.DiscordBot()
     restarted.speaker = Speaker(lambda: None, FakeTTS())
     assert restarted.speaker.enabled
-    await restarted._load_state()
+    await restarted.load_state()
     assert not restarted.speaker.enabled
     await discord.Client.close(restarted)
 
 
 async def test_without_a_saved_switch_the_voice_starts_as_configured(discord_bot):
-    await discord_bot._load_state()
+    await discord_bot.load_state()
     assert discord_bot.speaker.enabled is Voice.ENABLED
 
 
@@ -496,18 +547,21 @@ def test_command_role_ids_are_read_from_a_comma_list(monkeypatch, caplog):
 
 
 class FlakyBot:
-    """DiscordBot stand-in: start() fails as told, then blocks until close()."""
+    """DiscordBot stand-in: start() fails as told (after coming up, if so marked), then
+    blocks until close()."""
     starts = 0
-    failures: tuple[BaseException, ...] = ()
+    failures: tuple[tuple[BaseException, bool], ...] = ()
 
     def __init__(self) -> None:
         self._closed = asyncio.Event()
+        self.was_ready = False
 
     async def start(self, token) -> None:
         FlakyBot.starts += 1
         if FlakyBot.failures:
-            error, *rest = FlakyBot.failures
+            (error, came_up), *rest = FlakyBot.failures
             FlakyBot.failures = tuple(rest)
+            self.was_ready = came_up
             raise error
         await self._closed.wait()
 
@@ -519,13 +573,16 @@ class FlakyBot:
 def flaky(monkeypatch):
     FlakyBot.starts = 0
     monkeypatch.setattr(discord_module, 'DiscordBot', FlakyBot)
-    monkeypatch.setattr(discord_module, 'RETRY_SECONDS', 0)
     return FlakyBot
 
 
+async def _no_sleep(seconds):
+    await asyncio.sleep(0)
+
+
 async def test_a_failed_start_is_retried_until_discord_comes_up(flaky):
-    flaky.failures = (OSError('no network'), OSError('still no network'))
-    service = discord_module.DiscordService()
+    flaky.failures = ((OSError('no network'), False), (OSError('still no network'), False))
+    service = discord_module.DiscordService(sleep=_no_sleep)
     task = asyncio.create_task(service.run())
     for _ in range(50):
         await asyncio.sleep(0)
@@ -535,9 +592,27 @@ async def test_a_failed_start_is_retried_until_discord_comes_up(flaky):
 
 
 async def test_a_rejected_token_is_not_retried(flaky):
-    flaky.failures = (discord.LoginFailure('bad token'),)
-    await asyncio.wait_for(discord_module.DiscordService().run(), 1)
+    flaky.failures = ((discord.LoginFailure('bad token'), False),)
+    await asyncio.wait_for(discord_module.DiscordService(sleep=_no_sleep).run(), 1)
     assert flaky.starts == 1
+
+
+async def test_a_session_that_came_up_starts_the_backoff_anew(flaky):
+    pauses = []
+
+    async def sleep(seconds):
+        pauses.append(seconds)
+        await asyncio.sleep(0)
+
+    flaky.failures = ((OSError('a'), False), (OSError('b'), False), (OSError('dropped after a week'), True))
+    service = discord_module.DiscordService(sleep=sleep)
+    task = asyncio.create_task(service.run())
+    for _ in range(50):
+        await asyncio.sleep(0)
+    await service.stop()
+    await asyncio.wait_for(task, 1)
+    r = discord_module.RETRY_SECONDS
+    assert pauses == [r, 2 * r, r]
 
 
 def test_the_fake_voice_client_matches_what_the_speaker_uses():

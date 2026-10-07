@@ -105,6 +105,9 @@ def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) 
     # The addressees at the start are not read: chat shows whom the answer is for, and a
     # nick read aloud before every answer is noise. A nick inside a sentence is part of it
     text = LEADING_MENTIONS_RE.sub('', text)
+    # Cut before anything is spelled out: numbers and Latin grow into longer Russian words,
+    # and the limit is about what was written – one Twitch message is said whole
+    text = trim_to_sentence(text, max_chars)
 
     def latin(m: re.Match) -> str:
         word = m.group(0)
@@ -124,7 +127,6 @@ def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) 
     text = re.sub(r'\s{2,}', ' ', text).strip(' ,')
     if not re.search(r'[а-яёА-ЯЁ]', text):
         return ''
-    text = trim_to_sentence(text, max_chars)
     return text[:1].upper() + text[1:]
 
 

@@ -474,7 +474,6 @@ class Discord:
     # Empty token – the bot does not connect to Discord at all. The ids are copied in
     # Discord with developer mode on: right click → Copy ID
     TOKEN: str | None = _env_raw('DISCORD_TOKEN')
-    GUILD_ID: int = _env_int('DISCORD_GUILD_ID', 0, 0)
     TEXT_CHANNEL_ID: int = _env_int('DISCORD_TEXT_CHANNEL_ID', 0, 0)
     VOICE_CHANNEL_ID: int = _env_int('DISCORD_VOICE_CHANNEL_ID', 0, 0)
     OWNER_ID: int = _env_int('DISCORD_OWNER_ID', 0, 0)
@@ -487,8 +486,8 @@ class Discord:
     @classmethod
     def missing(cls) -> list[str]:
         """The Discord variables a set token still needs."""
-        ids = {'DISCORD_GUILD_ID': cls.GUILD_ID, 'DISCORD_TEXT_CHANNEL_ID': cls.TEXT_CHANNEL_ID,
-               'DISCORD_VOICE_CHANNEL_ID': cls.VOICE_CHANNEL_ID, 'DISCORD_OWNER_ID': cls.OWNER_ID}
+        ids = {'DISCORD_TEXT_CHANNEL_ID': cls.TEXT_CHANNEL_ID, 'DISCORD_VOICE_CHANNEL_ID': cls.VOICE_CHANNEL_ID,
+               'DISCORD_OWNER_ID': cls.OWNER_ID}
         return [name for name, value in ids.items() if not value]
 
 

@@ -12,7 +12,6 @@ from src.twitch.core.component import ChatComponent
 from src.core.config import Emote, Help, Mascot, Memory, Proactive, Rewards, Roll, Twitch
 from src.core.content import Content
 from src.core.cooldowns import Cooldowns
-from src.core.database import init_db
 from src.twitch.core.stream import StreamTracker, watch_stream
 from src.core.tasks import BackgroundTasks
 from src.twitch.core.tokens import (
@@ -119,7 +118,6 @@ class Bot(commands.Bot):
     async def setup_hook(self) -> None:
         check_private_api(self)
         keep_migrated_sockets()
-        await init_db()
         await add_bot_token(self)
         users = await self.fetch_users(logins=[Twitch.CHANNEL])
         if users:

@@ -6,7 +6,7 @@ import signal
 
 from src.core.config import Discord, validate_config
 from src.core.content import validate_content
-from src.core.database import close_db
+from src.core.database import close_db, init_db
 from src.core.logging_setup import setup_logging
 from src.discord.bot import DiscordService
 from src.twitch.bot import Bot
@@ -54,8 +54,12 @@ async def run_bot() -> None:
 
     loop.add_signal_handler(signal.SIGTERM, _on_signal, 'SIGTERM')
     loop.add_signal_handler(signal.SIGINT, _on_signal, 'SIGINT')
-    discord_bot = start_discord()
+    discord_bot = None
     try:
+        # The schema is brought up to date before any platform starts: both write to the
+        # database, and a write during a migration would roll back its unfinished work
+        await init_db()
+        discord_bot = start_discord()
         async with Bot() as bot:
             bot.on_shutdown_signal = _on_signal
             bot_task = asyncio.create_task(bot.start())

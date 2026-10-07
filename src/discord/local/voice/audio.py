@@ -14,6 +14,9 @@ FRAME_BYTES = 3840
 SILENCE = bytes(FRAME_BYTES)
 # Output bytes per second: 48000 samples × 2 channels × 2 bytes
 BYTES_PER_SECOND = 192_000
+# Speech gathered again after the buffer ran dry mid-answer: one pause of a second or two
+# instead of a crackle of 0.5 s pieces with silence between them
+REBUFFER_SECONDS = 1.5
 
 
 class Upsampler:
@@ -54,18 +57,21 @@ class Upsampler:
 class StreamSource(discord.AudioSource):
     """An answer that is still being generated, played as it arrives.
 
-    discord.py reads a frame every 20 ms from its own thread. A frame that has not
-    arrived yet is played as silence, so a slow server makes a pause instead of ending
-    the answer; b'' – the end – comes only after finish() and the last byte.
+    discord.py reads a frame every 20 ms from its own thread. When speech runs dry before
+    the server has finished, the source goes quiet until REBUFFER_SECONDS have arrived
+    again: a slow server makes one pause instead of ending the answer or crackling.
+    b'' – the end – comes only after finish() and the last byte.
     """
 
     def __init__(self) -> None:
         self._buffer = bytearray()
         self._lock = threading.Lock()
         self._finished = False
-        # Frames played as silence because speech had not arrived: the measure of a
-        # prebuffer that was too short
+        # Frames played as silence because speech had not arrived, and the pauses they
+        # made: the measure of a prebuffer that was too short
         self.underruns = 0
+        self.stalls = 0
+        self._rebuffering = False
 
     def feed(self, frames: bytes) -> None:
         with self._lock:
@@ -87,6 +93,11 @@ class StreamSource(discord.AudioSource):
 
     def read(self) -> bytes:
         with self._lock:
+            if self._rebuffering:
+                if len(self._buffer) < REBUFFER_SECONDS * BYTES_PER_SECOND and not self._finished:
+                    self.underruns += 1
+                    return SILENCE
+                self._rebuffering = False
             if len(self._buffer) >= FRAME_BYTES:
                 frame = bytes(self._buffer[:FRAME_BYTES])
                 del self._buffer[:FRAME_BYTES]
@@ -97,6 +108,9 @@ class StreamSource(discord.AudioSource):
                 frame = bytes(self._buffer).ljust(FRAME_BYTES, b'\0')
                 self._buffer.clear()
                 return frame
+            # Ran dry mid-answer: hold one pause until a reserve has built up again
+            self._rebuffering = True
+            self.stalls += 1
             self.underruns += 1
         return SILENCE
 

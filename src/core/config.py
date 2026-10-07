@@ -497,7 +497,7 @@ class Voice:
     # Empty – Discord without a voice
     TTS_URL: str | None = _env_raw('VOICE_TTS_URL')
     TTS_VOICE: str = _env_raw('VOICE_TTS_VOICE') or 'clone:kael_low'
-    # The state of !tts after a start, and whether the Twitch answers are voiced at all
+    # The state of !voice after a start, and whether the Twitch answers are voiced at all
     ENABLED: bool = _env_bool('VOICE_ENABLED', True)
     TWITCH: bool = _env_bool('VOICE_TWITCH', True)
     # A longer answer is voiced up to the last sentence end within this many characters:

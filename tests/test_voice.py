@@ -207,7 +207,7 @@ async def test_the_worker_logs_a_dead_server_once_and_goes_on(plain_text, caplog
 
 
 async def test_playback_stopped_early_cancels_the_synthesis(plain_text):
-    """!tts off or leaving the channel must not leave the GPU finishing an answer nobody hears."""
+    """!voice off or leaving the channel must not leave the GPU finishing an answer nobody hears."""
     cancelled = asyncio.Event()
 
     class EndlessTTS:
@@ -397,12 +397,11 @@ async def test_without_a_choice_the_bot_stays_out(discord_bot):
     assert not discord_bot.state['connected']
 
 
-async def test_tts_on_off_and_state(discord_bot):
-    assert await discord_bot._command('!tts', ['off']) == discord_module.MUTED
+async def test_voice_toggles_and_the_reaction_shows_the_new_state(discord_bot):
+    assert await discord_bot._command('!voice', []) == discord_module.MUTED
     assert not discord_bot.speaker.enabled
-    assert await discord_bot._command('!tts', []) == discord_module.MUTED
-    assert await discord_bot._command('!tts', ['on']) == discord_module.OK
-    assert await discord_bot._command('!tts', ['громче']) == discord_module.NO
+    assert await discord_bot._command('!voice', []) == discord_module.OK
+    assert discord_bot.speaker.enabled
 
 
 def _message(text: str, author: int = 42, channel: int | None = None, bot: bool = False):
@@ -439,7 +438,7 @@ async def test_help_ignores_bots_and_other_channels(discord_bot, discord_ids, me
 
 
 async def test_voice_commands_stay_with_the_owner(discord_bot, discord_ids):
-    stranger, again, owner = _message('!join', author=42), _message('!tts off', author=42), _message('!join', author=7)
+    stranger, again, owner = _message('!join', author=42), _message('!voice', author=42), _message('!join', author=7)
     await discord_bot.on_message(stranger)
     await discord_bot.on_message(again)
     assert not discord_bot.state['connected'] and discord_bot.speaker.enabled

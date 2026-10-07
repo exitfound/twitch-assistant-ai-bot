@@ -211,7 +211,7 @@ class DiscordBot(discord.Client):
         if words[:1] == ['!help']:
             await self._help(message)
             return
-        if not words or words[0] not in ('!join', '!leave', '!tts'):
+        if not words or words[0] not in ('!join', '!leave', '!voice'):
             return
         if not may_command(message.author):
             await self._refuse(message)
@@ -259,17 +259,13 @@ class DiscordBot(discord.Client):
                 await self._save_wanted(False)
                 await self._disconnect()
             return OK
-        # !tts on|off; bare !tts shows the state
-        if args[:1] == ['on']:
-            self.speaker.enabled = True
-        elif args[:1] == ['off']:
-            self.speaker.enabled = False
+        # !voice toggles the voice; the reaction shows the state it is in now
+        self.speaker.enabled = not self.speaker.enabled
+        if not self.speaker.enabled:
             self.speaker.clear()
             client = self._voice_client()
             if client is not None and client.is_playing():
                 client.stop()
-        elif args:
-            return NO
         return OK if self.speaker.enabled else MUTED
 
 

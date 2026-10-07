@@ -125,7 +125,7 @@ class Speaker:
                         time.monotonic() - started, source.underruns * FRAME_SECONDS)
             if fetch.done():
                 # Raises if the server broke off mid-answer; a playback stopped early
-                # (!tts off, the bot left) leaves the task running – cancelled below
+                # (!voice turned it off, the bot left) leaves the task running – cancelled below
                 await fetch
         finally:
             if not fetch.done():

@@ -11,6 +11,10 @@ RATE = 24000
 MODEL = 'tts-1-ru'
 # A server that is off is noticed at once, not after the whole TIMEOUT
 CONNECT_TIMEOUT = 5
+# A server that stops sending mid-answer is given up after this much silence: a clone
+# that missed its end of speech can keep the server busy for minutes, and dropping the
+# connection is also what makes the server stop that generation at its next chunk
+READ_TIMEOUT = 30
 
 
 class TTSUnavailable(Exception):
@@ -31,7 +35,7 @@ class TTSClient:
             # English normalization garbles Russian: the text comes prepared (text.py)
             'normalization_options': {'normalize': False},
         }
-        timeout = aiohttp.ClientTimeout(total=Voice.TIMEOUT, connect=CONNECT_TIMEOUT)
+        timeout = aiohttp.ClientTimeout(total=Voice.TIMEOUT, connect=CONNECT_TIMEOUT, sock_read=READ_TIMEOUT)
         try:
             async with self._session.post(self._url, json=body, timeout=timeout) as response:
                 if response.status != 200:

@@ -22,6 +22,7 @@ from src.discord.local.voice.audio import (
 )
 from src.discord.local.voice.speaker import Speaker, prebuffer_seconds
 from src.discord.local.voice.text import number_words, parse_nicks, prepare
+from src.discord.local.voice import tts as tts_module
 from src.discord.local.voice.tts import TTSClient, TTSUnavailable
 
 NICKS = {'exitfound': 'Эксит-фаунд', 'm1ndsh1ft_': 'Майнд-шифт', 'nosok222': 'Носок'}
@@ -307,6 +308,28 @@ async def test_a_server_error_or_no_server_is_tts_unavailable():
         await server.close()
         with pytest.raises(TTSUnavailable):
             [chunk async for chunk in TTSClient(session, url, 'v').stream('а')]
+
+
+async def test_a_server_that_goes_silent_mid_answer_is_given_up(monkeypatch):
+    monkeypatch.setattr(tts_module, 'READ_TIMEOUT', 0.2)
+
+    async def handler(request):
+        response = web.StreamResponse()
+        await response.prepare(request)
+        await response.write(b'\x01\x00')
+        await asyncio.sleep(5)
+        return response
+
+    server = await _tts_server(handler)
+    async with aiohttp.ClientSession() as session:
+        client = TTSClient(session, str(server.make_url('/')), 'v')
+        with pytest.raises(TTSUnavailable):
+            await asyncio.wait_for(_drain(client.stream('а')), 3)
+    await server.close()
+
+
+async def _drain(stream):
+    return [chunk async for chunk in stream]
 
 
 def test_nothing_is_queued_off_voice_or_with_the_voice_off():

@@ -27,6 +27,8 @@ VOICE_STATE_KEY = 'discord_voice'
 OK, NO, MUTED = '✅', '❌', '🔇'
 # !help answers anyone in the text channel, at most once per this many seconds
 HELP_COOLDOWN_SECONDS = 10
+# A voice command without the rights is refused once per person per this many seconds
+REFUSAL_COOLDOWN_SECONDS = 30
 # A start that failed is retried after this pause, doubling up to the cap
 RETRY_SECONDS = 30
 RETRY_MAX_SECONDS = 600
@@ -78,6 +80,7 @@ class DiscordBot(discord.Client):
         # Leaving the channel on close fires a voice event: it must not bring the bot back
         self._closing = False
         self._help_at = float('-inf')
+        self._refused_at: dict[int, float] = {}
 
     async def setup_hook(self) -> None:
         if not Voice.TTS_URL:
@@ -208,7 +211,10 @@ class DiscordBot(discord.Client):
         if words[:1] == ['!help']:
             await self._help(message)
             return
-        if not words or words[0] not in ('!join', '!leave', '!tts') or not may_command(message.author):
+        if not words or words[0] not in ('!join', '!leave', '!tts'):
+            return
+        if not may_command(message.author):
+            await self._refuse(message)
             return
         reaction = await self._command(words[0], words[1:])
         with contextlib.suppress(discord.HTTPException):
@@ -221,6 +227,18 @@ class DiscordBot(discord.Client):
             return
         self._help_at = now
         text = Content.text('discord_help')
+        if not text:
+            return
+        with contextlib.suppress(discord.HTTPException):
+            await message.reply(text, mention_author=False, allowed_mentions=discord.AllowedMentions.none())
+
+    async def _refuse(self, message: discord.Message) -> None:
+        """Tell someone without the rights that the voice commands are not theirs, once per cooldown."""
+        now = asyncio.get_running_loop().time()
+        if now - self._refused_at.get(message.author.id, float('-inf')) < REFUSAL_COOLDOWN_SECONDS:
+            return
+        self._refused_at[message.author.id] = now
+        text = Content.text('discord_no_rights')
         if not text:
             return
         with contextlib.suppress(discord.HTTPException):

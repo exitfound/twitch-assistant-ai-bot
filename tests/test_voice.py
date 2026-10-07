@@ -439,10 +439,15 @@ async def test_help_ignores_bots_and_other_channels(discord_bot, discord_ids, me
 
 
 async def test_voice_commands_stay_with_the_owner(discord_bot, discord_ids):
-    stranger, owner = _message('!join', author=42), _message('!join', author=7)
+    stranger, again, owner = _message('!join', author=42), _message('!tts off', author=42), _message('!join', author=7)
     await discord_bot.on_message(stranger)
-    assert not discord_bot.state['connected']
+    await discord_bot.on_message(again)
+    assert not discord_bot.state['connected'] and discord_bot.speaker.enabled
     stranger.add_reaction.assert_not_awaited()
+    # Told once that the commands are not theirs, then quiet for the cooldown
+    stranger.reply.assert_awaited_once()
+    assert stranger.reply.await_args.args[0] == 'texts.discord_no_rights'
+    again.reply.assert_not_awaited()
     await discord_bot.on_message(owner)
     assert discord_bot.state['connected']
     owner.add_reaction.assert_awaited_once_with(discord_module.OK)

@@ -108,6 +108,20 @@ def _interval_range(prefix: str, default_min: int, default_max: int) -> tuple[in
     return low, high
 
 
+def _env_ids(name: str) -> frozenset[int]:
+    """Comma-separated numeric ids (Discord roles, users); a malformed one is skipped with a warning."""
+    ids = set()
+    for part in (_env_raw(name) or '').split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if part.isdigit():
+            ids.add(int(part))
+        else:
+            logger.warning('%s: %r – не числовой ID, пропущен', name, part)
+    return frozenset(ids)
+
+
 def _env_zone(name: str, default: str) -> ZoneInfo:
     """A time zone by its IANA name. A wrong name stops the start: falling back to UTC
     would silently move every session id and memory key by hours."""
@@ -464,6 +478,9 @@ class Discord:
     TEXT_CHANNEL_ID: int = _env_int('DISCORD_TEXT_CHANNEL_ID', 0, 0)
     VOICE_CHANNEL_ID: int = _env_int('DISCORD_VOICE_CHANNEL_ID', 0, 0)
     OWNER_ID: int = _env_int('DISCORD_OWNER_ID', 0, 0)
+    # Roles whose members may run the voice commands besides the owner: who gets them is
+    # decided by giving out the role in Discord, without touching the bot
+    COMMAND_ROLE_IDS: frozenset[int] = _env_ids('DISCORD_COMMAND_ROLE_IDS')
     # libopus encodes the voice; the image carries it at the path its Dockerfile sets
     OPUS_LIB: str = _env_raw('DISCORD_OPUS_LIB') or 'libopus.so.0'
 

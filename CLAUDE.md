@@ -124,7 +124,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `bot.py` – the entry point: `__main__` delegates to `src/cli/main.py`, otherwise `run_bot()` – logging, config and content checks, signal handling, the Twitch bot and, beside it, the Discord bot (`start_discord()` / `stop_discord()`: its own task, a failure there never stops Twitch), `close_db()` on the way out. BOT.md «Жизненный цикл бота»
 
 **core** (shared)
-- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`, `Mascot`, `Discord` (with `missing()`), `Voice`
+- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_env_ids`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`, `Mascot`, `Discord` (with `missing()`), `Voice`
 - `paths.py` – `DB_PATH`, `CONTENT_PATH`: `chat_history.db` in the repository root and `docs/CONTENT.md`, or `BOT_DB_PATH` / `BOT_CONTENT_PATH`
 - `content.py` – `CONTENT.md` access (`Content.prompt/label/text/items`), mtime cache, `REQUIRED`, `validate_content()`
 - `database.py` – facade re-exporting `src/core/db/`: callers import every query from here
@@ -198,7 +198,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `perks.py` – perks at stream start and on a player's first message
 
 **discord** (BOT.md «Голос в Discord»)
-- `bot.py` – `DiscordBot(discord.Client)`: loads libopus and starts the `Speaker` and the minute presence check in `setup_hook`; `presence()` (the pure rule: in the channel exactly while the owner's choice – `bot_state.discord_voice`, set by `!join` / `!leave` – says so), `_reconcile()` on ready, on the bot's own voice state and every minute; the owner's `!join` / `!leave` / `!tts` answered with a reaction, `!help` for anyone in the text channel (`texts.discord_help`, one answer per 10 s). `DiscordService` – a fresh client after a failed start (30 s doubling to 10 min), no retry for a rejected token or a missing intent
+- `bot.py` – `DiscordBot(discord.Client)`: loads libopus and starts the `Speaker` and the minute presence check in `setup_hook`; `presence()` (the pure rule: in the channel exactly while the owner's choice – `bot_state.discord_voice`, set by `!join` / `!leave` – says so), `_reconcile()` on ready, on the bot's own voice state and every minute; `!join` / `!leave` / `!tts` for the owner and `DISCORD_COMMAND_ROLE_IDS` (`may_command()`), answered with a reaction, `!help` for anyone in the text channel (`texts.discord_help`, one answer per 10 s). `DiscordService` – a fresh client after a failed start (30 s doubling to 10 min), no retry for a rejected token or a missing intent
 - `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, emotes even with punctuation stuck to them, links, CAPS, numbers, versions «5.5», `%`, `+`, addressees at the start dropped, `trim_to_sentence()`)
 - `local/voice/tts.py` – `TTSClient.stream()`: streaming PCM from `/v1/audio/speech`, `TTSUnavailable`
 - `local/voice/audio.py` – `Upsampler` (24 kHz mono → 48 kHz stereo across chunk borders), `StreamSource` (silence on underrun, end only after `finish()`)
@@ -235,7 +235,7 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (140 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (141 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 

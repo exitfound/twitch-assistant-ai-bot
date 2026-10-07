@@ -47,6 +47,16 @@ def presence(wanted: bool, connected: bool) -> Move:
     return Move.STAY
 
 
+def may_command(author) -> bool:
+    """The owner, or a member holding one of DISCORD_COMMAND_ROLE_IDS.
+
+    A guild message carries its author's roles, so no members intent is needed.
+    """
+    if author.id == Discord.OWNER_ID:
+        return True
+    return any(role.id in Discord.COMMAND_ROLE_IDS for role in getattr(author, 'roles', ()))
+
+
 class DiscordBot(discord.Client):
     """One connection to Discord; DiscordService makes a new one after a failure."""
 
@@ -198,7 +208,7 @@ class DiscordBot(discord.Client):
         if words[:1] == ['!help']:
             await self._help(message)
             return
-        if message.author.id != Discord.OWNER_ID or not words or words[0] not in ('!join', '!leave', '!tts'):
+        if not words or words[0] not in ('!join', '!leave', '!tts') or not may_command(message.author):
             return
         reaction = await self._command(words[0], words[1:])
         with contextlib.suppress(discord.HTTPException):

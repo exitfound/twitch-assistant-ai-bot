@@ -11,7 +11,7 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
 
-from src.core import speech
+from src.core import config, speech
 from src.core.config import Discord, Voice
 from src.core.database import get_state, set_state
 from src.discord import bot as discord_module
@@ -446,6 +446,33 @@ async def test_voice_commands_stay_with_the_owner(discord_bot, discord_ids):
     await discord_bot.on_message(owner)
     assert discord_bot.state['connected']
     owner.add_reaction.assert_awaited_once_with(discord_module.OK)
+
+
+async def test_a_member_of_a_command_role_runs_voice_commands(discord_bot, discord_ids, monkeypatch):
+    monkeypatch.setattr(Discord, 'COMMAND_ROLE_IDS', frozenset({500}))
+    guard = _message('!join', author=42)
+    guard.author.roles = [SimpleNamespace(id=300), SimpleNamespace(id=500)]
+    await discord_bot.on_message(guard)
+    assert discord_bot.state['connected']
+    guard.add_reaction.assert_awaited_once_with(discord_module.OK)
+
+
+@pytest.mark.parametrize(('author', 'allowed'), [
+    pytest.param(SimpleNamespace(id=7), True, id='owner'),
+    pytest.param(SimpleNamespace(id=42, roles=[SimpleNamespace(id=500)]), True, id='role'),
+    pytest.param(SimpleNamespace(id=42, roles=[SimpleNamespace(id=300)]), False, id='other role'),
+    pytest.param(SimpleNamespace(id=42), False, id='no roles (a DM user)'),
+])
+def test_who_may_run_the_voice_commands(discord_ids, monkeypatch, author, allowed):
+    monkeypatch.setattr(Discord, 'COMMAND_ROLE_IDS', frozenset({500}))
+    assert discord_module.may_command(author) is allowed
+
+
+def test_command_role_ids_are_read_from_a_comma_list(monkeypatch, caplog):
+    monkeypatch.setenv('DISCORD_COMMAND_ROLE_IDS', ' 1516436699696070726, 1516432204467667056 ,дружина,')
+    with caplog.at_level(logging.WARNING):
+        assert config._env_ids('DISCORD_COMMAND_ROLE_IDS') == {1516436699696070726, 1516432204467667056}
+    assert any('дружина' in r.message for r in caplog.records)
 
 
 class FlakyBot:

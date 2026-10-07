@@ -180,7 +180,7 @@ cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py
 2. Вкладка **Bot**: **Reset Token** → скопировать в `DISCORD_TOKEN`; в **Privileged Gateway Intents** включить **Message Content Intent** → **Save Changes**
 3. Чтобы бота мог добавить только владелец: **Installation** → Install Link = **None** → Save, затем **Bot** → выключить **Public Bot**
 4. **OAuth2** → **URL Generator**: области `bot` и `applications.commands`, тип интеграции **Guild Install**; права View Channels, Send Messages, Read Message History, Add Reactions, Connect, Speak, Use Voice Activity. Открыть ссылку и добавить бота на свой сервер. Если каналы закрыты ролями – дать роли бота доступ к нужному текстовому и голосовому
-5. В Discord включить **Настройки → Расширенные → Режим разработчика**, затем правой кнопкой → **Копировать ID**: сервер → `DISCORD_GUILD_ID`, текстовый канал для команд → `DISCORD_TEXT_CHANNEL_ID`, голосовой канал → `DISCORD_VOICE_CHANNEL_ID`, свой ник → `DISCORD_OWNER_ID`
+5. В Discord включить **Настройки → Расширенные → Режим разработчика**, затем правой кнопкой → **Копировать ID**: сервер → `DISCORD_GUILD_ID`, текстовый канал для команд → `DISCORD_TEXT_CHANNEL_ID`, голосовой канал → `DISCORD_VOICE_CHANNEL_ID`, свой ник → `DISCORD_OWNER_ID`. Если команды голоса нужны не только тебе – ID ролей (Настройки сервера → Роли → правой кнопкой) через запятую в `DISCORD_COMMAND_ROLE_IDS`
 6. Голос: адрес TTS-сервера с OpenAI-совместимым `/v1/audio/speech` и потоковым PCM 24 кГц (например, Qwen3-TTS-Openai-Fastapi на машине с видеокартой) – в `VOICE_TTS_URL`, голос на нём – в `VOICE_TTS_VOICE`
 
 После правки `.env` – `docker compose up -d`. В логе появится «Discord: вошёл как …». В голосовой канал бот заходит по команде `!join` (см. «Голос в Discord») – «Discord: зашёл в …»; если Discord на старте недоступен, бот повторяет попытку сам. Сервер TTS выключен – бот отвечает только текстом. Как это устроено – BOT.md, «Голос в Discord».
@@ -263,7 +263,7 @@ cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py
 
 Бот заходит в голосовой канал Discord по команде `!join` и сидит там, пока не скажешь `!leave`: после перезапуска или обрыва связи он возвращается сам. Свои ответы из Twitch (на обращения, `!ask`, `!who`, `!versus`, `!summary` и проактивные реплики) он произносит вслух. Ники, к которым обращён ответ, в начале не читаются; ник внутри фразы читается по словарю `lists.voice_nicks` в `CONTENT.md` (`ник = как сказать`, без перезапуска). Эмоты и ссылки пропускаются, длинный ответ звучит до 500 символов – одно сообщение Twitch целиком. Голос начинается через 2 секунды после ответа в чате, у длинного ответа – позже, до 8 секунд: так он звучит без провалов.
 
-Команды – в текстовом канале `DISCORD_TEXT_CHANNEL_ID`. `!help` выводит их список любому (текст – `texts.discord_help` в `CONTENT.md`), остальные работают только у владельца (`DISCORD_OWNER_ID`) и отвечают реакцией:
+Команды – в текстовом канале `DISCORD_TEXT_CHANNEL_ID`. `!help` выводит их список любому (текст – `texts.discord_help` в `CONTENT.md`), остальные работают у владельца (`DISCORD_OWNER_ID`) и у ролей из `DISCORD_COMMAND_ROLE_IDS` и отвечают реакцией:
 
 | Команда | Что делает |
 |---|---|
@@ -578,7 +578,8 @@ docker compose run --rm bot /app/bot.py --lore-sources
 | `DISCORD_GUILD_ID` | – | ID сервера Discord |
 | `DISCORD_TEXT_CHANNEL_ID` | – | ID текстового канала для команд владельца |
 | `DISCORD_VOICE_CHANNEL_ID` | – | ID голосового канала, куда бот заходит |
-| `DISCORD_OWNER_ID` | – | ID владельца: за ним бот заходит в канал, только его команды слушает |
+| `DISCORD_OWNER_ID` | – | ID владельца: его команды бот слушает всегда |
+| `DISCORD_COMMAND_ROLE_IDS` | – | ID ролей через запятую, которым тоже доступны `!join`, `!leave`, `!tts`; пусто – только владелец |
 | `DISCORD_OPUS_LIB` | `libopus.so.0` | Библиотека Opus; образ задаёт свой путь сам, в `.env` для контейнера не указывать |
 | `VOICE_TTS_URL` | – | Адрес TTS-сервера; пусто – Discord без голоса |
 | `VOICE_TTS_VOICE` | `clone:kael_low` | Голос на TTS-сервере |

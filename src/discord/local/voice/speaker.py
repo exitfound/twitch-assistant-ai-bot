@@ -25,10 +25,14 @@ FRAME_SECONDS = 0.02
 # starts here, follows a slowdown at once and a speedup gradually
 RTF_START = 1.35
 RTF_EASE = 0.3
-# Headroom over the measured speed in the prebuffer; answers under this length of speech
-# do not update it – the first second of a request is mostly fixed latency
+# Headroom over the measured speed in the prebuffer. The speed is measured from the first
+# byte of speech to the last: before it the request may wait behind another in the
+# server's queue, which says nothing about generation. Answers with less speech than this
+# after the first chunk do not count, and one measurement is capped – a stall must not
+# make every following answer wait for its whole synthesis
 RTF_SAFETY = 1.15
 RTF_MIN_SPEECH_SECONDS = 2.0
+RTF_MAX = 3.0
 # Raw speech from the server per second: 24 kHz mono 16-bit
 SERVER_BYTES_PER_SECOND = 48_000
 # Playback that has not ended by then is stopped: synthesis is bounded by VOICE_TIMEOUT,
@@ -155,15 +159,18 @@ class Speaker:
 
     async def _fetch(self, phrase: str, source: StreamSource, ready: asyncio.Event, prebuffer: float) -> None:
         upsampler = Upsampler()
-        started = time.monotonic()
-        received = 0
+        first_at: float | None = None
+        first_bytes = received = 0
         try:
             async for chunk in self._tts.stream(phrase):
+                if first_at is None:
+                    first_at, first_bytes = time.monotonic(), len(chunk)
                 received += len(chunk)
                 source.feed(upsampler.convert(chunk))
                 if source.buffered_seconds >= prebuffer:
                     ready.set()
-            self._measure(time.monotonic() - started, received / SERVER_BYTES_PER_SECOND)
+            if first_at is not None:
+                self._measure(time.monotonic() - first_at, (received - first_bytes) / SERVER_BYTES_PER_SECOND)
         finally:
             source.finish()
             ready.set()
@@ -172,5 +179,5 @@ class Speaker:
         """Fold one answer's speed into the estimate: a slowdown at once, a speedup gradually."""
         if speech < RTF_MIN_SPEECH_SECONDS:
             return
-        rtf = synthesis / speech
+        rtf = min(synthesis / speech, RTF_MAX)
         self.rtf = rtf if rtf > self.rtf else self.rtf + RTF_EASE * (rtf - self.rtf)

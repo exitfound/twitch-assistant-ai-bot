@@ -127,6 +127,21 @@ def test_a_slowdown_is_taken_at_once_a_speedup_gradually():
     before = speaker.rtf
     speaker._measure(5.0, 1.0)
     assert speaker.rtf == before
+    # A stall is capped: it must not make every next answer wait for its whole synthesis
+    speaker._measure(64.0, 10.0)
+    assert speaker.rtf == speaker_module.RTF_MAX
+
+
+async def test_waiting_in_the_server_queue_does_not_count_as_slow_generation(plain_text):
+    class QueuedTTS:
+        async def stream(self, text):
+            await asyncio.sleep(0.3)  # behind another request in the server's queue
+            for _ in range(30):
+                yield pcm(*range(2400))  # 0.1 s of speech each, as fast as it can
+
+    speaker = Speaker(lambda: FakeVoiceClient(), QueuedTTS())
+    await speaker.speak('привет')
+    assert speaker.rtf < speaker_module.RTF_START
 
 
 def test_a_dry_buffer_makes_one_pause_until_a_reserve_is_back():

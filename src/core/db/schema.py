@@ -119,7 +119,7 @@ async def _bot_uses(db: aiosqlite.Connection) -> None:
 async def _rolls(db: aiosqlite.Connection) -> None:
     """Rolls and its added columns."""
     # Tables of the !roll game: rolls, rewards, roll_actions, roll_throws, roll_perks. Schema and migrations
-    # live here with all the others, their queries – in src/local/roll/storage.py
+    # live here with all the others, their queries – in src/twitch/local/roll/storage.py
     await db.execute('''
         CREATE TABLE IF NOT EXISTS rolls (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,

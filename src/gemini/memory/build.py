@@ -25,7 +25,7 @@ from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR, SAFETY_OF
 from src.gemini.memory import storage
 from src.gemini.memory.storage import Block, Profile
 from src.gemini.output import fix_dashes, trim_to_sentence
-from src.local.roll.storage import get_session_champion, get_session_loser
+from src.twitch.local.roll.storage import get_session_champion, get_session_loser
 
 logger = logging.getLogger(__name__)
 

@@ -8,11 +8,12 @@ from google.genai import types
 from PIL import Image, ImageDraw
 
 from fakes import FakeBot, make_chatter, make_message
-from src.core.commands import CommandContext, Kind
+from src.twitch.core.commands import CommandContext, Kind
 from src.core.config import Gemini
 from src.core.database import count_bot_uses
-from src.core import limits
-from src.gemini.picture import command, fetch, render
+from src.twitch.core import limits
+from src.gemini.picture import fetch, render
+from src.twitch.gemini import picture as command
 from src.gemini.picture.fetch import BAD_URL, PictureError
 
 BRAILLE = {chr(c) for c in range(0x2800, 0x2900)}

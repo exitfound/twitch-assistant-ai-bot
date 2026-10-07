@@ -1,0 +1,85 @@
+"""Proactive remarks: the bot writes to chat on its own once per interval."""
+import asyncio
+import logging
+import random
+
+from src.core import speech
+from src.core.activity import ChatWatch
+from src.core.config import Context, Proactive
+from src.core.content import Content
+from src.core.database import get_random_knowledge, get_recent_chat, save_bot_interaction
+from src.twitch.core.port import BotPort
+from src.core.utils import random_delay
+from src.gemini.client import generate, make_gen_config
+from src.gemini.context import ContextBuilder
+from src.gemini.output import (
+    TWITCH_MSG_MAX, fix_dashes, strip_links, strip_markdown, strip_pings, trim_to_sentence,
+)
+from src.twitch.gemini.responder import apply_caps, maybe_add_emote, passes_moderation
+
+logger = logging.getLogger(__name__)
+
+
+async def proactive_loop(bot: BotPort) -> None:
+    """A periodic remark to chat on the bot's own initiative."""
+    watch = ChatWatch()
+    try:
+        while True:
+            delay = random_delay(Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
+            logger.debug('Следующая проактивная реплика через %.1f мин', delay / 60)
+            await asyncio.sleep(delay)
+            try:
+                await _send_proactive(bot, watch)
+            except Exception:
+                logger.exception('Проактивное сообщение не отправлено')
+    except asyncio.CancelledError:
+        raise
+    finally:
+        logger.info('Цикл проактивных сообщений остановлен')
+
+
+async def _send_proactive(bot: BotPort, watch: ChatWatch) -> None:
+    session_id = bot.session_id
+    # Only while live and only into a live conversation: with nobody writing since the
+    # previous remark a new one is the bot talking to itself, and a message written
+    # offline would otherwise start it commenting an empty chat – at Gemini's price
+    if not bot.stream_live or not await watch.new_messages(session_id):
+        return
+    recent_chat = await get_recent_chat(session_id, Context.CHAT_MESSAGES)
+    if not recent_chat:
+        return
+
+    random_knowledge = await get_random_knowledge(Context.KNOWLEDGE_RANDOM)
+    active_users = list({u for u, _ in recent_chat[-Proactive.ACTIVE_WINDOW:]})
+    target_user = random.choice(active_users) if active_users else None
+
+    if target_user and random.random() < Proactive.TARGET_PROBABILITY:
+        event_prompt = Content.prompt('proactive_user', user=target_user)
+    else:
+        event_prompt = Content.prompt('proactive_general')
+
+    prompt_ctx = (
+        ContextBuilder()
+        .add_pairs(Content.label('chat'), recent_chat)
+        .add_lines(Content.label('language'), random_knowledge)
+        .add_raw(event_prompt)
+    )
+    text = await generate(prompt_ctx.build(), make_gen_config())
+    if not text:
+        return
+
+    # An unattended remark gets the strictest cleanup of all the output paths: without
+    # it asterisks and backticks reach chat, the dash rule is broken and the cut falls
+    # mid-word
+    text = fix_dashes(strip_markdown(text))
+    # Nobody is watching this one, and the chat it is built from is written by viewers:
+    # a planted link or ping must not reach chat through the bot
+    text = strip_pings(strip_links(text))
+    text = trim_to_sentence(text, TWITCH_MSG_MAX)
+    if not text or not passes_moderation(text):
+        return
+    text = apply_caps(text)
+    text = maybe_add_emote(text)
+    if await bot.send_chat_message(text):
+        speech.say(text, 'twitch')
+        await save_bot_interaction(session_id, '_proactive_', event_prompt, text)

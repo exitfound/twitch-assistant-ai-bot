@@ -8,12 +8,12 @@ import aiohttp
 import pytest
 from aiohttp.test_utils import TestClient, TestServer
 
-import bot as bot_module
+from src.twitch import bot as bot_module
 from fakes import FakeBot, make_chatter, make_message
-from src.core.component import ChatComponent
+from src.twitch.core.component import ChatComponent
 from src.core.config import Mascot
-from src.local.mascot import feed, mood
-from src.local.mascot.mood import MoodTracker, target
+from src.twitch.local.mascot import feed, mood
+from src.twitch.local.mascot.mood import MoodTracker, target
 
 
 def _chat(tracker: MoodTracker, count: int, at: float, prefix: str = 'viewer') -> None:

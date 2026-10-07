@@ -454,3 +454,41 @@ class Mascot:
     SIT, STAND, DANCE = _mascot_thresholds()
     STEP_DOWN_SECONDS: int = _env_int('MASCOT_STEP_DOWN_SECONDS', 60, 0, 3600)
     MAX_RATE: float = _env_float('MASCOT_MAX_RATE', 1.5, 1.0, 2.0)
+
+
+class Discord:
+    # Empty token – the bot does not connect to Discord at all. The ids are copied in
+    # Discord with developer mode on: right click → Copy ID
+    TOKEN: str | None = _env_raw('DISCORD_TOKEN')
+    GUILD_ID: int = _env_int('DISCORD_GUILD_ID', 0, 0)
+    TEXT_CHANNEL_ID: int = _env_int('DISCORD_TEXT_CHANNEL_ID', 0, 0)
+    VOICE_CHANNEL_ID: int = _env_int('DISCORD_VOICE_CHANNEL_ID', 0, 0)
+    OWNER_ID: int = _env_int('DISCORD_OWNER_ID', 0, 0)
+    # libopus encodes the voice; the image carries it at the path its Dockerfile sets
+    OPUS_LIB: str = _env_raw('DISCORD_OPUS_LIB') or 'libopus.so.0'
+
+    @classmethod
+    def missing(cls) -> list[str]:
+        """The Discord variables a set token still needs."""
+        ids = {'DISCORD_GUILD_ID': cls.GUILD_ID, 'DISCORD_TEXT_CHANNEL_ID': cls.TEXT_CHANNEL_ID,
+               'DISCORD_VOICE_CHANNEL_ID': cls.VOICE_CHANNEL_ID, 'DISCORD_OWNER_ID': cls.OWNER_ID}
+        return [name for name, value in ids.items() if not value]
+
+
+class Voice:
+    # The TTS server (OpenAI-style /v1/audio/speech, streaming PCM 24 kHz mono).
+    # Empty – Discord without a voice
+    TTS_URL: str | None = _env_raw('VOICE_TTS_URL')
+    TTS_VOICE: str = _env_raw('VOICE_TTS_VOICE') or 'clone:kael_low'
+    # The state of !tts after a start, and whether the Twitch answers are voiced at all
+    ENABLED: bool = _env_bool('VOICE_ENABLED', True)
+    TWITCH: bool = _env_bool('VOICE_TWITCH', True)
+    # A longer answer is voiced up to the last sentence end within this many characters
+    MAX_CHARS: int = _env_int('VOICE_MAX_CHARS', 300, 20, 2000)
+    # Speech gathered before playback starts: the server is about as fast as speech
+    # while OBS runs, and without a reserve a long answer stutters
+    PREBUFFER_SECONDS: float = _env_float('VOICE_PREBUFFER_SECONDS', 2.0, 0.0, 30.0)
+    # Answers waiting to be voiced; a new one beyond this is dropped
+    QUEUE: int = _env_int('VOICE_QUEUE', 5, 1, 50)
+    # One answer from the request to the last byte of speech
+    TIMEOUT: int = _env_int('VOICE_TIMEOUT', 120, 5, 600)

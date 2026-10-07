@@ -6,14 +6,14 @@ from unittest.mock import AsyncMock
 import pytest
 
 from fakes import FakeBot, make_chatter, make_message
-from src.core.commands import CommandContext, CommandEntry, Kind
-from src.core.component import ChatComponent, route
+from src.twitch.core.commands import CommandContext, CommandEntry, Kind
+from src.twitch.core.component import ChatComponent, route
 from src.core.config import Follow, Quota
 from src.core.database import count_bot_uses, record_bot_use
-from src.gemini.commands import handle_who
-from src.local.channel import handle_help_channel
-from src.local.commands import handle_help, handle_help_index, handle_stats
-from src.local.roll.command import handle_roll, handle_rollstat
+from src.twitch.gemini.commands import handle_who
+from src.twitch.local.channel import handle_help_channel
+from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
+from src.twitch.local.roll.command import handle_roll, handle_rollstat
 
 
 async def _noop(ctx):
@@ -222,7 +222,7 @@ async def test_two_quick_messages_start_one_generation(db, monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     component = ChatComponent(FakeBot())
     handler = AsyncMock()
-    monkeypatch.setattr('src.core.component.handle_default', handler)
+    monkeypatch.setattr('src.twitch.core.component.handle_default', handler)
 
     first, second = make_message('сосурян раз'), make_message('сосурян два')
     await asyncio.gather(component.event_message(first), component.event_message(second))
@@ -254,7 +254,7 @@ async def test_roll_with_anything_after_it_is_refused_without_a_throw(db, monkey
     bot = FakeBot()
     component = ChatComponent(bot)
     throw = AsyncMock()
-    monkeypatch.setattr('src.local.roll.game.free_throw', throw)
+    monkeypatch.setattr('src.twitch.local.roll.game.free_throw', throw)
 
     message = make_message('!roll 100 ПЛИЗ')
     await component.event_message(message)
@@ -269,7 +269,7 @@ async def test_a_failing_quota_check_gives_the_cooldown_back(db, monkeypatch):
     monkeypatch.setattr(Quota, 'CHANNEL_PER_HOUR', 10)
     bot = FakeBot()
     component = ChatComponent(bot)
-    monkeypatch.setattr('src.core.component.count_channel_bot_uses', AsyncMock(side_effect=RuntimeError('db')))
+    monkeypatch.setattr('src.twitch.core.component.count_channel_bot_uses', AsyncMock(side_effect=RuntimeError('db')))
     with pytest.raises(RuntimeError):
         await component.event_message(make_message('сосурян раз'))
     assert bot.cooldown_remaining('viewer', Kind.GEMINI) == 0

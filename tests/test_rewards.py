@@ -7,9 +7,9 @@ from unittest.mock import AsyncMock
 import pytest
 import twitchio
 
-from src.local.roll import game, rewards
-from src.local.roll.rewards import CANCELED, FULFILLED, RewardService
-from src.local.roll.storage import get_reward_ids, save_action
+from src.twitch.local.roll import game, rewards
+from src.twitch.local.roll.rewards import CANCELED, FULFILLED, RewardService
+from src.twitch.local.roll.storage import get_reward_ids, save_action
 
 
 class FakeBroadcaster:

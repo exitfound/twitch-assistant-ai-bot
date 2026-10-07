@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from src.core import stream
+from src.twitch.core import stream
 from src.core.database import get_stream
-from src.core.stream import StreamTracker
+from src.twitch.core.stream import StreamTracker
 from src.gemini.memory import storage
 
 

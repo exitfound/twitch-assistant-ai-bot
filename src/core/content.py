@@ -83,7 +83,7 @@ REQUIRED = {
         'versus_usage', 'versus_unknown', 'versus_unknown_one', 'versus_failed',
         'no_answer', 'filtered', 'gen_error', 'gen_failed',
     ),
-    'lists': ('emotes', 'follow', 'banned'),
+    'lists': ('emotes', 'follow', 'banned', 'voice_nicks'),
 }
 
 # The channel's own commands: `### !tg` and its reply. The keys are whatever the owner

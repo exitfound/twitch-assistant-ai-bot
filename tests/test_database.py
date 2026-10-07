@@ -13,7 +13,7 @@ from src.core.database import (
 )
 from src.core.db import connection, schema
 from src.core.db.knowledge import _sanitize_fts_query
-from src.local.roll.storage import get_session_loser, save_roll
+from src.twitch.local.roll.storage import get_session_loser, save_roll
 
 
 async def _tables(db) -> set[str]:

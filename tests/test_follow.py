@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from fakes import FakeBot
 from src.core import content
 from src.core.database import save_bot_interaction
-from src.local import follow
+from src.twitch.local import follow
 
 
 def _follow(name: str) -> SimpleNamespace:

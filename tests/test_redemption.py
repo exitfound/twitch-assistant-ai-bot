@@ -2,9 +2,9 @@
 import asyncio
 
 from fakes import FakeBot
-from src.local.roll import game, redemption
-from src.local.roll.redemption import handle_redemption
-from src.local.roll.storage import save_roll
+from src.twitch.local.roll import game, redemption
+from src.twitch.local.roll.redemption import handle_redemption
+from src.twitch.local.roll.storage import save_roll
 
 
 async def test_offline_redemption_is_refunded(db):

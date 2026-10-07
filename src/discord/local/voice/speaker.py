@@ -1,0 +1,107 @@
+"""The voice queue: answers are spoken one at a time in the voice channel the bot is in."""
+import asyncio
+import contextlib
+import logging
+import time
+from collections.abc import Callable
+
+import discord
+
+from src.core.config import Voice
+from src.discord.local.voice.audio import StreamSource, Upsampler
+from src.discord.local.voice.text import spoken
+from src.discord.local.voice.tts import TTSClient, TTSUnavailable
+
+logger = logging.getLogger(__name__)
+
+# A server that is off fails every answer: say so in the log once per this many seconds
+UNAVAILABLE_LOG_SECONDS = 300
+
+
+class Speaker:
+    """Takes answers from src/core/speech.py and plays them through the voice client.
+
+    An answer is dropped, not kept for later, when the voice is off, the bot is not in a
+    voice channel or the queue is full: a remark voiced minutes after it was written in
+    chat makes no sense.
+    """
+
+    def __init__(self, voice_client: Callable[[], discord.VoiceClient | None], tts: TTSClient) -> None:
+        self._voice_client = voice_client
+        self._tts = tts
+        self._queue: asyncio.Queue[str] = asyncio.Queue(maxsize=Voice.QUEUE)
+        self.enabled = Voice.ENABLED
+        self._unavailable_logged = 0.0
+
+    def _connected(self) -> discord.VoiceClient | None:
+        client = self._voice_client()
+        return client if client is not None and client.is_connected() else None
+
+    def submit(self, text: str, source: str) -> None:
+        """A listener of src/core/speech.py: queue the answer or drop it. Never blocks."""
+        if not self.enabled or (source == 'twitch' and not Voice.TWITCH) or self._connected() is None:
+            return
+        try:
+            self._queue.put_nowait(text)
+        except asyncio.QueueFull:
+            logger.info('Озвучка: очередь полна (%d), реплика пропущена', Voice.QUEUE)
+
+    def clear(self) -> None:
+        """Drop everything waiting: the voice was turned off or the bot left the channel."""
+        while not self._queue.empty():
+            self._queue.get_nowait()
+
+    async def run(self) -> None:
+        """The worker: one answer at a time, for as long as the bot runs."""
+        while True:
+            text = await self._queue.get()
+            try:
+                await self.speak(text)
+            except TTSUnavailable as e:
+                now = time.monotonic()
+                if now - self._unavailable_logged >= UNAVAILABLE_LOG_SECONDS:
+                    self._unavailable_logged = now
+                    logger.warning('Озвучка: TTS-сервер недоступен (%s) – бот отвечает только текстом', e)
+            except Exception:
+                logger.exception('Озвучка: реплика не прозвучала')
+
+    async def speak(self, text: str) -> None:
+        """Synthesize and play one answer; returns when it has been played."""
+        if not self.enabled:
+            return
+        phrase = spoken(text, Voice.MAX_CHARS)
+        if not phrase or self._connected() is None:
+            return
+        source = StreamSource()
+        ready = asyncio.Event()
+        fetch = asyncio.create_task(self._fetch(phrase, source, ready))
+        try:
+            await ready.wait()
+            client = self._connected()
+            if source.empty or client is None or not self.enabled:
+                # Nothing came (the error is in the task) or the bot left meanwhile
+                await fetch
+                return
+            started = time.monotonic()
+            played = asyncio.Event()
+            loop = asyncio.get_running_loop()
+            client.play(source, after=lambda _error: loop.call_soon_threadsafe(played.set))
+            await played.wait()
+            logger.info('Озвучка: %d симв., %.1f с', len(phrase), time.monotonic() - started)
+            await fetch
+        finally:
+            if not fetch.done():
+                fetch.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await fetch
+
+    async def _fetch(self, phrase: str, source: StreamSource, ready: asyncio.Event) -> None:
+        upsampler = Upsampler()
+        try:
+            async for chunk in self._tts.stream(phrase):
+                source.feed(upsampler.convert(chunk))
+                if source.buffered_seconds >= Voice.PREBUFFER_SECONDS:
+                    ready.set()
+        finally:
+            source.finish()
+            ready.set()

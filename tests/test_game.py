@@ -8,13 +8,13 @@ import time
 import pytest
 
 from fakes import FakeBot, make_chatter, make_message
-from src.core.commands import CommandContext
+from src.twitch.core.commands import CommandContext
 from src.core.config import Rewards, Roll, Twitch
-from src.core.viewer import Tier
+from src.twitch.core.viewer import Tier
 from src.core.database import get_db, save_chat_message, save_stream
-from src.local.roll import game, rules
-from src.local.roll.command import handle_roll, handle_rollstat
-from src.local.roll.storage import (
+from src.twitch.local.roll import game, rules
+from src.twitch.local.roll.command import handle_roll, handle_rollstat
+from src.twitch.local.roll.storage import (
     RollRow, add_perk, get_pending_perk_users, get_perk, get_roll, get_session_champion,
     get_session_loser, save_roll, set_curse,
 )

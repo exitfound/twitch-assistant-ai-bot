@@ -6,7 +6,7 @@ import pytest
 
 from src.core import content
 from src.core.content import Content, parse, validate_content
-from src.local.roll import game, redemption, rewards
+from src.twitch.local.roll import game, redemption, rewards
 
 ROOT = Path(__file__).resolve().parents[1]
 

@@ -6,11 +6,11 @@ then VIP, then everyone else; a subscribing VIP gets the subscriber's terms.
 import pytest
 
 from fakes import make_chatter
-from src.core import component
+from src.twitch.core import component
 from src.core.config import Cooldown, PerStream, Quota, Roll
-from src.core.limits import limit_for
-from src.core.viewer import Tier, sub_hint, tier_of
-from src.local.roll.command import free_limit_for
+from src.twitch.core.limits import limit_for
+from src.twitch.core.viewer import Tier, sub_hint, tier_of
+from src.twitch.local.roll.command import free_limit_for
 
 BADGES = {
     'broadcaster': {'broadcaster': True},

@@ -8,13 +8,15 @@ import pytest
 from google.genai import errors, types
 
 from fakes import FakeBot, make_chatter, make_message
-from src.core.commands import CommandContext, Kind
+from src.twitch.core.commands import CommandContext, Kind
+from src.core import speech
 from src.core.config import Caps, Emote, Gemini, PerStream
 from src.core.database import count_bot_uses, get_db, record_bot_use
-from src.core import limits
-from src.gemini import client, commands, ladder, responder
+from src.twitch.core import limits
+from src.gemini import client, ladder
+from src.twitch.gemini import commands, responder
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR
-from src.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
+from src.twitch.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
 from src.gemini.who import WHO_KIND
 
 # --- generate_checked -------------------------------------------------------
@@ -286,6 +288,23 @@ async def test_answer_goes_out_as_a_reply_and_is_saved(db, ctx):
     assert await respond_and_save(ctx, '@gop Привет!', 'привет')
     ctx.message.respond.assert_awaited_once_with('@gop Привет!')
     assert await _saved('привет') == ['Привет!']
+
+
+async def test_an_answer_that_reached_chat_is_handed_to_the_voice(db, ctx):
+    heard = []
+    speech.listen(lambda text, source: heard.append((text, source)))
+    assert await respond_and_save(ctx, 'Привет!', 'привет')
+    assert await respond_and_save(ctx, 'Предложение номер раз и два. ' * 40, '[versus] a vs b', max_chunks=2)
+    assert heard[0] == ('@gop Привет!', 'twitch')
+    assert heard[1][0].startswith('@gop Предложение') and len(heard) == 2
+
+
+async def test_an_answer_that_did_not_reach_chat_is_not_voiced(db, ctx):
+    heard = []
+    speech.listen(lambda text, source: heard.append(text))
+    ctx.message.respond.side_effect = RuntimeError('twitch down')
+    assert not await respond_and_save(ctx, 'Привет!', 'привет')
+    assert heard == []
 
 
 async def test_empty_answer_sends_nothing(db, ctx):

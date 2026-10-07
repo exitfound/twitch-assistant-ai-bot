@@ -6,6 +6,7 @@
 - **Команды**: пересказ стрима, «кто такой» и батл двух зрителей, фактические ответы, брайль-арт по ссылке, статистика
 - **Игра** «залупа стрима» на `!roll` и награды за баллы канала, которые бот создаёт и применяет сам
 - **Сам в чате**: реплики, эмоты, напоминание о командах, приветствие фолловеров – только в живой разговор
+- **Голос в Discord**: сидит в голосовом канале вместе со стримером и произносит свои ответы из Twitch клонированным голосом с TTS-сервера
 - **Хранит** всю историю чата в SQLite с полнотекстовым поиском; все тексты бота – в одном [CONTENT.md](docs/CONTENT.md), правятся без перезапуска
 
 Быстрый старт, подробно – в [Установке](#установка):
@@ -22,6 +23,7 @@ make oauth               # один раз: войти под бот-аккау�
 Стек:
 - Python 3.11
 - [twitchio](https://github.com/TwitchIO/TwitchIO) 3.x – подключение к Twitch через EventSub (WebSocket), не IRC
+- [discord.py](https://github.com/Rapptz/discord.py) 2.7 с голосом – Discord, включая обязательное шифрование голоса DAVE
 - [google-genai](https://pypi.org/project/google-genai/) – Gemini API (модель `gemini-2.5-flash`)
 - [aiosqlite](https://github.com/omnilib/aiosqlite) – асинхронная работа с SQLite в WAL-режиме
 - [httpx](https://www.python-httpx.org/) и [Pillow](https://python-pillow.org/) – скачивание и отрисовка картинок для `!ascii`
@@ -170,6 +172,19 @@ cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py
 
 **Примечание:** подписка на follow-события требует scope `moderator:read:followers`. Если при запуске появляется ошибка, переавторизуйте бота по ссылке из консоли.
 
+### 9. Discord и голос (опционально)
+
+Без `DISCORD_TOKEN` бот в Discord не заходит, остальное работает как прежде.
+
+1. [discord.com/developers/applications](https://discord.com/developers/applications) → **New Application**
+2. Вкладка **Bot**: **Reset Token** → скопировать в `DISCORD_TOKEN`; в **Privileged Gateway Intents** включить **Message Content Intent** → **Save Changes**
+3. Чтобы бота мог добавить только владелец: **Installation** → Install Link = **None** → Save, затем **Bot** → выключить **Public Bot**
+4. **OAuth2** → **URL Generator**: области `bot` и `applications.commands`, тип интеграции **Guild Install**; права View Channels, Send Messages, Read Message History, Add Reactions, Connect, Speak, Use Voice Activity. Открыть ссылку и добавить бота на свой сервер. Если каналы закрыты ролями – дать роли бота доступ к нужному текстовому и голосовому
+5. В Discord включить **Настройки → Расширенные → Режим разработчика**, затем правой кнопкой → **Копировать ID**: сервер → `DISCORD_GUILD_ID`, текстовый канал для команд → `DISCORD_TEXT_CHANNEL_ID`, голосовой канал → `DISCORD_VOICE_CHANNEL_ID`, свой ник → `DISCORD_OWNER_ID`
+6. Голос: адрес TTS-сервера с OpenAI-совместимым `/v1/audio/speech` и потоковым PCM 24 кГц (например, Qwen3-TTS-Openai-Fastapi на машине с видеокартой) – в `VOICE_TTS_URL`, голос на нём – в `VOICE_TTS_VOICE`
+
+После правки `.env` – `docker compose up -d`. В логе появится «Discord: вошёл как …», а когда владелец зайдёт в голосовой канал – «Discord: зашёл в …». Сервер TTS выключен – бот отвечает только текстом. Как это устроено – BOT.md, «Голос в Discord».
+
 ---
 
 ## Что умеет бот
@@ -243,6 +258,19 @@ cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py
 Реплики, эмоты и напоминание – только во время эфира и только в живой разговор: если с прошлой реплики никто не написал, бот молчит. Команды разговором не считаются. Приветствие фолловера уходит на каждый фолов. Подробно – BOT.md, «Проактивные сообщения», «Напоминание о командах», «Спам эмотами».
 
 Эмоты ведутся не руками: `--sync-emotes` тянет эмоты канала из Twitch в `CONTENT.md`. Эмот рисуется картинкой, только если доступен отправителю: сабские – при подписке бот-аккаунта нужного тира (tier 3 открывает все), фолловерские – при фолове.
+
+### Голос в Discord
+
+Бот заходит в голосовой канал Discord, когда туда заходит стример, и выходит, когда в канале никого не осталось. Свои ответы из Twitch (на обращения, `!ask`, `!who`, `!versus`, `!summary` и проактивные реплики) он произносит вслух. Ники читаются по словарю `lists.voice_nicks` в `CONTENT.md` (`ник = как сказать`, без перезапуска), эмоты и ссылки пропускаются, длинный ответ звучит до 300 символов. Голос начинается примерно через 2 секунды после ответа в чате.
+
+Команды – только от владельца (`DISCORD_OWNER_ID`) в текстовом канале `DISCORD_TEXT_CHANNEL_ID`, ответ – реакцией:
+
+| Команда | Что делает |
+|---|---|
+| `!join` | Зайти в голосовой канал |
+| `!leave` | Выйти и не возвращаться, пока стример не перезайдёт в канал |
+| `!tts` | ✅ – голос включён, 🔇 – выключен |
+| `!tts on` / `!tts off` | Включить / выключить голос до перезапуска |
 
 ### Брайль-арт
 
@@ -545,12 +573,26 @@ docker compose run --rm bot /app/bot.py --lore-sources
 | `MASCOT_DANCE` | `8` | С какого числа танцует |
 | `MASCOT_STEP_DOWN_SECONDS` | `60` | Вниз – на одну позу не чаще раза в столько секунд |
 | `MASCOT_MAX_RATE` | `1.5` | Предел скорости танца: +0.1 за каждого сверх `MASCOT_DANCE` |
+| `DISCORD_TOKEN` | – | Токен Discord-бота; пусто – бот в Discord не заходит |
+| `DISCORD_GUILD_ID` | – | ID сервера Discord |
+| `DISCORD_TEXT_CHANNEL_ID` | – | ID текстового канала для команд владельца |
+| `DISCORD_VOICE_CHANNEL_ID` | – | ID голосового канала, куда бот заходит |
+| `DISCORD_OWNER_ID` | – | ID владельца: за ним бот заходит в канал, только его команды слушает |
+| `DISCORD_OPUS_LIB` | `libopus.so.0` | Библиотека Opus; образ задаёт свой путь сам, в `.env` для контейнера не указывать |
+| `VOICE_TTS_URL` | – | Адрес TTS-сервера; пусто – Discord без голоса |
+| `VOICE_TTS_VOICE` | `clone:kael_low` | Голос на TTS-сервере |
+| `VOICE_ENABLED` | `true` | Голос включён после запуска (`!tts on/off` меняет до перезапуска) |
+| `VOICE_TWITCH` | `true` | Озвучивать ответы бота в Twitch |
+| `VOICE_MAX_CHARS` | `300` | Длиннее – озвучивается до конца последнего предложения в пределах этого числа символов |
+| `VOICE_PREBUFFER_SECONDS` | `2` | Сколько секунд речи накопить перед началом, чтобы длинный ответ не заикался |
+| `VOICE_QUEUE` | `5` | Сколько ответов ждёт озвучки; новый сверх этого пропускается |
+| `VOICE_TIMEOUT` | `120` | Предел на один ответ от запроса до последнего байта речи, секунды |
 
 ---
 ## Структура проекта
 
 ```
-├── bot.py                 # Точка входа: класс Bot (twitchio), жизненный цикл, run_bot()
+├── bot.py                 # Точка входа: CLI-команды или запуск бота на всех настроенных платформах, run_bot()
 ├── README.md              # Этот файл: что умеет бот, установка, эксплуатация, переменные
 ├── CLAUDE.md              # Правила для кода и документации, карта модулей (для Claude Code)
 ├── LICENSE                # MIT
@@ -558,75 +600,89 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   ├── BOT.md             # Подробный справочник: как устроена каждая механика
 │   └── CONTENT.md         # Всё, что произносит бот: промпты, ответы в чат, эмоты, фоловы, стоп-лист (hot-reload)
 ├── src/
-│   ├── core/                # Каркас, на котором стоят все фичи
+│   ├── core/                # Общий каркас для всех платформ
 │   │   ├── activity.py      # ChatWatch: писал ли кто-то в чате с прошлого раза – бот говорит только в живой разговор
-│   │   ├── component.py     # ChatComponent: диспетчер event_message, регистрация команд всех фич
-│   │   ├── commands.py      # CommandRegistry, CommandContext, CommandEntry – описание команд
 │   │   ├── config.py        # Только .env: секреты, числа, флаги – с валидацией диапазонов
 │   │   ├── paths.py         # Пути к базе и CONTENT.md: по умолчанию в дереве проекта, иначе BOT_DB_PATH / BOT_CONTENT_PATH
 │   │   ├── content.py       # Загрузка CONTENT.md: Content.prompt/label/text/items, mtime-кеш
 │   │   ├── database.py      # Фасад хранилища: реэкспорт src/core/db/
 │   │   ├── db/              # SQLite по темам: connection, schema, chat, interactions, knowledge, quota, streams
-│   │   ├── stream.py        # Сессия = эфир: StreamTracker, перезапуск и обрыв стрима
 │   │   ├── cooldowns.py     # Кулдауны по монотонным часам
 │   │   ├── tasks.py         # Фоновые циклы бота по имени: запуск один раз, остановка вместе
-│   │   ├── chat_socket.py   # Сторож подписок на чат и на награды, проверка приватных полей twitchio
-│   │   ├── tokens.py        # Токены Twitch: токен канала, сохранение, OAuth-ссылки, мёртвый токен
-│   │   ├── limits.py        # PerStreamLimit: общий лимит за эфир для !ask, !who, !versus, !summary, !ascii и !clip
-│   │   ├── port.py          # Что фичам нужно от бота: протоколы BotPort и StreamBot
-│   │   ├── viewer.py        # Лестница статусов зрителя: Tier, tier_of(), by_tier(), приписка про сабку
-│   │   ├── followers.py     # FollowerCache: фолловер ли зритель, по Helix с TTL-кешем
+│   │   ├── speech.py        # Что бот сказал вслух: платформа отдаёт ушедший ответ, голос его забирает
 │   │   ├── logging_setup.py # setup_logging(): консоль + опциональный файл с ротацией
-│   │   └── utils.py         # Общие утилиты: ники, шаблоны, SOSUR_RE, локальное время
-│   ├── gemini/              # Всё, что стоит запроса к Gemini
+│   │   └── utils.py         # Общие утилиты: ники, шаблоны, SOSUR_RE, стоп-лист, локальное время
+│   ├── gemini/              # Мозг: всё, что стоит запроса к Gemini, без привязки к платформе
 │   │   ├── client.py        # Gemini-клиент, generate() с ретраями, make_gen_config(), SAFETY_OFF
 │   │   ├── context.py       # ContextBuilder: сборка секционированных промптов
 │   │   ├── output.py        # Вывод Gemini в чат: лимиты Twitch, CAPS, markdown, тире, обрезка, куски
-│   │   ├── responder.py     # Конвейер ответа: очистка, стоп-лист, CAPS, эмот, отправка
 │   │   ├── ladder.py        # Лестница фолбэков: тот же запрос с меньшим контекстом при блокировке
 │   │   ├── answer_context.py # Контекст свободного ответа и его ступени
-│   │   ├── commands.py      # Болталка, !ask, !summary, !who, !versus, лимиты за эфир
 │   │   ├── summary.py       # !summary: весь стрим с лестницей, прошлый стрим по хронике
 │   │   ├── who.py           # !who и !versus: случайная выборка из всей истории человека, лестница, лимит за эфир
-│   │   ├── proactive.py     # Реплики бота от себя раз в интервал
 │   │   ├── memory/          # Долговременная память: хроники сессий и профили зрителей
 │   │   │   ├── storage.py     # Запросы к chronicles, chatter_events, chatter_profiles
 │   │   │   └── build.py       # Хроника и профили после сессии, догонялка при запуске
 │   │   └── picture/         # !ascii: картинка по ссылке – в брайль-арт
 │   │       ├── fetch.py       # Скачивание по ссылке из чата: схема, адрес, mime, размер
-│   │       ├── render.py      # Пиксели в символы Брайля, ровно на одно сообщение
-│   │       └── command.py     # !ascii: скачать, нарисовать, показать, подписать
-│   ├── local/               # Возможности бота без Gemini
-│   │   ├── commands.py      # !help, !bot, !stat
-│   │   ├── channel.py       # Команды канала (!tg …) из секции channel в CONTENT.md, !channel
-│   │   ├── clip.py          # !clip: клип последних секунд эфира, ожидание, ссылка в чат
-│   │   ├── follow.py        # Ответ на новый фолов
-│   │   ├── emote_spam.py    # Спам эмотами раз в интервал
-│   │   ├── help_announce.py # Напоминание о командах раз в интервал
-│   │   ├── mascot/          # Оверлей маскота в OBS по настроению чата
-│   │   │   ├── mood.py        # Правило: разные пишущие за окно – поза, спад по ступеням
-│   │   │   └── feed.py        # SSE для страницы в OBS и цикл пересчёта
-│   │   └── roll/            # Игра «залупа стрима»
-│   │       ├── rules.py       # Правила чистыми функциями: бросок, проклятие, минуты, ник
-│   │       ├── game.py        # Механика: лимит бесплатных бросков, переброс, проклятие, щит, очищение, бонусы
-│   │       ├── storage.py     # Запросы к rolls, rewards, roll_actions, roll_throws, roll_perks
-│   │       ├── command.py     # !roll и !rollstat
-│   │       ├── texts.py       # Общие куски сообщений: китежанин, проклятие, названия наград
-│   │       ├── redemption.py  # Выкуп награды: применить, сказать в чат, подтвердить или вернуть баллы
-│   │       ├── rewards.py     # Награды в Twitch: создание, подписка, статусы, пауза
-│   │       ├── perks.py       # Итоги прошлого стрима: объявить бонусы, запустить отсчёт
-│   │       └── announce.py    # Оповещение о снятии проклятия
+│   │       └── render.py      # Пиксели в символы Брайля, ровно на одно сообщение
+│   ├── twitch/              # Всё, что завязано на Twitch
+│   │   ├── bot.py           # Класс Bot (twitchio): жизненный цикл, EventSub, отправка в чат, состояние эфира
+│   │   ├── core/            # Каркас Twitch-бота
+│   │   │   ├── component.py   # ChatComponent: диспетчер event_message, регистрация команд всех фич
+│   │   │   ├── commands.py    # CommandRegistry, CommandContext, CommandEntry – описание команд
+│   │   │   ├── replies.py     # Ответ в чат, который не падает, и распознавание ответа боту
+│   │   │   ├── stream.py      # Сессия = эфир: StreamTracker, перезапуск и обрыв стрима
+│   │   │   ├── chat_socket.py # Сторож подписок на чат и на награды, проверка приватных полей twitchio
+│   │   │   ├── tokens.py      # Токены Twitch: токен канала, сохранение, OAuth-ссылки, мёртвый токен
+│   │   │   ├── limits.py      # PerStreamLimit: общий лимит за эфир для !ask, !who, !versus, !summary, !ascii и !clip
+│   │   │   ├── port.py        # Что фичам нужно от бота: протоколы BotPort и StreamBot
+│   │   │   ├── viewer.py      # Лестница статусов зрителя: Tier, tier_of(), by_tier(), приписка про сабку
+│   │   │   └── followers.py   # FollowerCache: фолловер ли зритель, по Helix с TTL-кешем
+│   │   ├── gemini/          # Twitch-обработчики ответов, сгенерированных в src/gemini
+│   │   │   ├── commands.py    # Болталка, !ask, !summary, !who, !versus, лимиты за эфир
+│   │   │   ├── responder.py   # Конвейер ответа: очистка, стоп-лист, CAPS, эмот, отправка
+│   │   │   ├── picture.py     # !ascii: скачать, нарисовать, показать, подписать
+│   │   │   └── proactive.py   # Реплики бота от себя раз в интервал
+│   │   └── local/           # Возможности Twitch-бота без Gemini
+│   │       ├── commands.py    # !help, !bot, !stat
+│   │       ├── channel.py     # Команды канала (!tg …) из секции channel в CONTENT.md, !channel
+│   │       ├── clip.py        # !clip: клип последних секунд эфира, ожидание, ссылка в чат
+│   │       ├── follow.py      # Ответ на новый фолов
+│   │       ├── emote_spam.py  # Спам эмотами раз в интервал
+│   │       ├── help_announce.py # Напоминание о командах раз в интервал
+│   │       ├── mascot/        # Оверлей маскота в OBS по настроению чата
+│   │       │   ├── mood.py      # Правило: разные пишущие за окно – поза, спад по ступеням
+│   │       │   └── feed.py      # SSE для страницы в OBS и цикл пересчёта
+│   │       └── roll/          # Игра «залупа стрима»
+│   │           ├── rules.py     # Правила чистыми функциями: бросок, проклятие, минуты, ник
+│   │           ├── game.py      # Механика: лимит бесплатных бросков, переброс, проклятие, щит, очищение, бонусы
+│   │           ├── storage.py   # Запросы к rolls, rewards, roll_actions, roll_throws, roll_perks
+│   │           ├── command.py   # !roll и !rollstat
+│   │           ├── texts.py     # Общие куски сообщений: китежанин, проклятие, названия наград
+│   │           ├── redemption.py # Выкуп награды: применить, сказать в чат, подтвердить или вернуть баллы
+│   │           ├── rewards.py   # Награды в Twitch: создание, подписка, статусы, пауза
+│   │           ├── perks.py     # Итоги прошлого стрима: объявить бонусы, запустить отсчёт
+│   │           └── announce.py  # Оповещение о снятии проклятия
+│   ├── discord/             # Всё, что завязано на Discord
+│   │   ├── bot.py           # Клиент discord.py: голосовой канал за владельцем, !join, !leave, !tts
+│   │   └── local/
+│   │       └── voice/         # Ответы бота голосом в голосовом канале
+│   │           ├── text.py      # Текст для синтеза: ники, эмоты, капс, числа, обрезка
+│   │           ├── tts.py       # Клиент TTS-сервера: речь потоком по мере генерации
+│   │           ├── audio.py     # 24 кГц моно → 48 кГц стерео, источник кадров для discord.py
+│   │           └── speaker.py   # Очередь: по одной реплике, запас речи перед началом
 │   └── cli/                 # bot.py --…: бот при этом не запускается
 │       ├── main.py          # --upload-lore, --clear-lore, --lore-sources, --list-facts, --build-memory, --probe-context, --backup, --vacuum, --sync-emotes
 │       ├── memory.py        # --build-memory: память по всей истории
 │       ├── probe.py         # --probe-context: замер контекста на реальных обращениях
 │       ├── knowledge.py     # Лор: парсинг txt, импорт, очистка
 │       └── emotes.py        # Синк эмотов из Twitch API в CONTENT.md
-├── Dockerfile               # Двухстадийная сборка: зависимости в slim, итог на distroless
+├── Dockerfile               # Двухстадийная сборка: зависимости и libopus в slim, итог на distroless
 ├── docker-compose.yml       # Сервис бота: тома, политика перезапуска, ротация логов
 ├── .dockerignore            # Секреты и данные в образ не попадают
 ├── data/                    # Изменяемое состояние: база и токены (не коммитится)
-├── requirements.in          # Прямые зависимости, версии закреплены: twitchio, aiohttp, google-genai, python-dotenv, aiosqlite, httpx, Pillow
+├── requirements.in          # Прямые зависимости, версии закреплены: twitchio, discord.py[voice], aiohttp, google-genai, python-dotenv, aiosqlite, httpx, Pillow
 ├── requirements.txt         # Собран из .in (make lock): полный набор с хешами – его ставит образ
 ├── requirements-dev.in      # Инструменты разработки: pytest, pytest-asyncio, ruff, pip-audit, pip-tools
 ├── requirements-dev.txt     # Собран из requirements-dev.in с хешами, в версиях бота
@@ -638,4 +694,4 @@ docker compose run --rm bot /app/bot.py --lore-sources
 └── .gitignore               # Исключает .env, venv/, __pycache__/, data/ и файлы базы
 ```
 
-Куда класть новое: команда с генерацией – в `gemini/`, небольшая команда без Gemini – в `local/`, фича со своими таблицами, текстами и фоновыми задачами – в подпапку внутри своего пакета, как `local/roll/`. `core/` от фич не зависит, кроме диспетчера, который регистрирует их команды.
+Куда класть новое: сначала платформа, потом вид. Общее для всех платформ (база, конфиг, тексты, мозг Gemini, CLI) – в `src/core/`, `src/gemini/`, `src/cli/`, и оно не импортирует платформенный код; одно исключение – память бота читает итоги игры из `twitch/local/roll/storage.py`. Всё, что завязано на платформу, – в её пакете (`src/twitch/`, `src/discord/`); в Twitch команда с генерацией – в `twitch/gemini/`, небольшая команда без Gemini – в `twitch/local/`, фича со своими таблицами, текстами и фоновыми задачами – в подпапку внутри своего пакета, как `twitch/local/roll/`. `twitch/core/` от фич не зависит, кроме диспетчера, который регистрирует их команды.

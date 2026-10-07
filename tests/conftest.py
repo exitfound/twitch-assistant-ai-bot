@@ -32,18 +32,19 @@ import collections
 import pytest
 
 from fakes import FakeBot
-from src.core import content, database
+from src.core import content, database, speech
 from src.core.db import chat as db_chat
 from src.core.db import connection
 from src.core.db import knowledge as db_knowledge
 from src.core.config import Gemini
-from src.gemini import client, commands
+from src.gemini import client
+from src.twitch.gemini import commands
 from src.gemini.memory import build
-from src.gemini.picture import command as picture_command
-from src.local import clip, follow, help_announce
-from src.local.mascot import feed as mascot_feed
-from src.local.mascot import mood as mascot_mood
-from src.local.roll import game, perks
+from src.twitch.gemini import picture as picture_command
+from src.twitch.local import clip, follow, help_announce
+from src.twitch.local.mascot import feed as mascot_feed
+from src.twitch.local.mascot import mood as mascot_mood
+from src.twitch.local.roll import game, perks
 
 def content_text() -> str:
     """A CONTENT.md with every required key: the value is the key's own name, so a test
@@ -89,6 +90,7 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(mascot_mood, 'tracker', mascot_mood.MoodTracker())
     monkeypatch.setattr(mascot_feed, 'tracker', mascot_mood.tracker)
     monkeypatch.setattr(mascot_feed, '_clients', set())
+    monkeypatch.setattr(speech, '_listeners', [])
 
     def no_gemini():
         raise AssertionError('A test reached the real Gemini client: patch generate() where it is used')

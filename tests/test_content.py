@@ -138,4 +138,4 @@ def test_every_reward_outcome_fills_its_template(real_content, action):
 
 def test_the_chill_text_fills_its_template(real_content):
     text = Content.text('roll_too_fast', user='gop', minutes=3)
-    assert '3' in text and '{' not in text
+    assert 'gop' in text and '{' not in text

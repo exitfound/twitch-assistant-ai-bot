@@ -82,6 +82,7 @@ class Outcome:
     next_ceiling: int | None = None         # ceiling of the next one
     curse_minutes_left: int | None = None   # ceiling on the floor: minutes until it lifts
     protect_minutes_left: int | None = None # protection after a reroll: minutes left
+    pause_seconds: float | None = None      # too fast: seconds until the next own throw
     limit: int | None = None                # rerolls per window, other rewards per stream
 
     @property
@@ -244,8 +245,8 @@ async def free_throw(
         used = row.free_throws if row else 0
         if not unlimited and used >= limit:
             return Outcome(Status.NO_FREE_LEFT, target=user, free_left=0)
-        if not unlimited and (wait := await _burst_minutes_left(session_id, user)):
-            return Outcome(Status.TOO_FAST, target=user, protect_minutes_left=wait)
+        if not unlimited and (wait := await _burst_left(session_id, user)):
+            return _too_fast(user, wait)
         throw = await _throw_for(session_id, user, row, free_throw=True, limit=limit, tier=tier)
         await save_throw(session_id, user, time.time())
         standings = await _standings(session_id)
@@ -350,23 +351,27 @@ async def _extra(session_id: str, actor: str) -> Outcome:
         # Points for a throw that is free anyway are almost certainly a misclick
         return Outcome(Status.FREE_LEFT, target=actor, free_left=limit - used)
     # A redemption carries no badges: the broadcaster is known by the channel's login
-    if actor != (Twitch.CHANNEL or '').lower() and (wait := await _burst_minutes_left(session_id, actor)):
-        return Outcome(Status.TOO_FAST, target=actor, protect_minutes_left=wait)
+    if actor != (Twitch.CHANNEL or '').lower() and (wait := await _burst_left(session_id, actor)):
+        return _too_fast(actor, wait)
     throw = await _throw_for(session_id, actor, row, free_throw=False)
     await save_throw(session_id, actor, time.time())
     return _thrown(actor, row.value if row else None, throw, await _standings(session_id))
 
 
-async def _burst_minutes_left(session_id: str, user: str) -> int | None:
-    """Whole minutes the player waits after throwing too fast. None – they may throw now.
+async def _burst_left(session_id: str, user: str) -> float | None:
+    """Seconds the player waits after throwing too fast. None – they may throw now.
 
     Free !roll and paid extra rolls count together: Twitch has no per-viewer cooldown
     on a reward, and subscribers have no cooldown on !roll.
     """
     times = await last_throws(session_id, user, Roll.BURST_THROWS)
-    wait = rules.burst_pause_left(times, time.time(), Roll.BURST_THROWS, Roll.BURST_SECONDS,
+    return rules.burst_pause_left(times, time.time(), Roll.BURST_THROWS, Roll.BURST_SECONDS,
                                   Roll.BURST_PAUSE_MINUTES * 60)
-    return rules.whole_minutes(wait) if wait is not None else None
+
+
+def _too_fast(user: str, wait: float) -> Outcome:
+    return Outcome(Status.TOO_FAST, target=user, protect_minutes_left=rules.whole_minutes(wait),
+                   pause_seconds=wait)
 
 
 async def _shield(session_id: str, actor: str) -> Outcome:

@@ -1,16 +1,20 @@
 """!roll – a free throw from chat, !rollstat – how the game stands."""
 import logging
+import math
 
 from src.core.commands import CommandContext
 from src.core.config import Roll
 from src.core.content import Content
-from src.core.limits import deny
 from src.core.viewer import by_tier, sub_hint, tier_of
 from src.core.utils import reply
 from src.local.roll import game
 from src.local.roll.texts import champion_note, curse_note, input_preview, reward_title
 
 logger = logging.getLogger(__name__)
+
+# Cooldown scope of the «зачилься» refusal: said once, then every !roll is dropped
+# silently until the spam pause ends
+PAUSE_SCOPE = 'roll_pause'
 
 
 def free_limit_for(chatter) -> int:
@@ -56,10 +60,13 @@ async def handle_roll(ctx: CommandContext) -> None:
         await reply(ctx.message, text + sub_hint(ctx.message.chatter))
         return
     if result.status == game.Status.TOO_FAST:
-        # Nothing was thrown, so nothing to wait off; the refusal itself is braked, or
-        # a subscriber with no cooldown would get one for every message
+        # Nothing was thrown, so nothing to wait off. One refusal per pause: a subscriber
+        # has no cooldown and would otherwise get one for every message
         ctx.clear_cooldown()
-        await deny(ctx.bot, ctx.message, ctx.user, Content.text(
+        if ctx.bot.cooldown_remaining(ctx.user, PAUSE_SCOPE):
+            return
+        ctx.bot.set_cooldown(ctx.user, math.ceil(result.pause_seconds), PAUSE_SCOPE)
+        await reply(ctx.message, Content.text(
             'roll_too_fast', user=ctx.user, minutes=result.protect_minutes_left,
         ))
         return

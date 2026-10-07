@@ -749,6 +749,31 @@ async def test_roll_after_a_burst_says_chill_once(db):
     assert (await get_roll(S, 'sub')).free_throws == Roll.BURST_THROWS
 
 
+async def test_roll_is_silent_for_the_whole_pause_not_just_30_seconds(db, monkeypatch):
+    """The refusal is said once per pause: a second «зачилься» half a minute later
+    would only feed the spam."""
+    bot = FakeBot(session_id=S)
+    chatter = make_chatter('sub', subscriber=True)
+
+    async def roll():
+        message = make_message('!roll', chatter)
+        await handle_roll(CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
+                                         session_id=S, bot=bot))
+        return message.respond.await_args.args[0] if message.respond.await_args else None
+
+    start = time.time()
+    for _ in range(Roll.BURST_THROWS):
+        await roll()
+    assert await roll() == 'texts.roll_too_fast'
+    pause = Roll.BURST_PAUSE_MINUTES * 60
+    # Past the 30-second refusal brake, still inside the pause: silence
+    monkeypatch.setattr(time, 'time', lambda: start + pause - 5)
+    assert await roll() is None
+    # The pause is over: the throw goes through
+    monkeypatch.setattr(time, 'time', lambda: start + pause + 1)
+    assert await roll() not in (None, 'texts.roll_too_fast')
+
+
 async def test_the_status_of_a_chat_roll_reaches_the_reroll_limit(db):
     """Only a !roll from chat sees badges: if the handler stopped passing them, every
     buyer would count as a follower."""

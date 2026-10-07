@@ -186,6 +186,9 @@ class Cooldown:
     # configurable, this is a rule, not a parameter.
     VIP: int = _env_int('COOLDOWN_VIP', 10, 0, 3600)
     REGULAR: int = _env_int('COOLDOWN_REGULAR', 20, 0, 3600)
+    # Help and channel commands (!help, !bot, !channel, !tg …): one answer per command for
+    # the whole chat, no personal pause. The broadcaster is exempt; 0 – off
+    PUBLIC: int = _env_int('COOLDOWN_PUBLIC', 30, 0, 3600)
 
 
 class Quota:
@@ -402,7 +405,7 @@ class Help:
     # if somebody has written in chat: an empty chat has nothing to be reminded of.
     # The interval is fixed: this is help, people expect it predictably
     ANNOUNCE_ENABLED: bool = _env_bool('HELP_ANNOUNCE_ENABLED', True)
-    ANNOUNCE_INTERVAL_MINUTES: int = _env_int('HELP_ANNOUNCE_INTERVAL_MINUTES', 30, 1, 1440)
+    ANNOUNCE_INTERVAL_MINUTES: int = _env_int('HELP_ANNOUNCE_INTERVAL_MINUTES', 20, 1, 1440)
 
 
 class Proactive:

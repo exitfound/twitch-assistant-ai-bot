@@ -29,8 +29,10 @@ from src.gemini.commands import (
     handle_ask, handle_default, handle_summary, handle_versus, handle_who,
 )
 from src.gemini.picture.command import handle_ascii
+from src.local import channel
+from src.local.channel import handle_help_channel
 from src.local.clip import handle_clip
-from src.local.commands import handle_help, handle_stats
+from src.local.commands import handle_help, handle_help_index, handle_stats
 from src.local.follow import handle_follow
 from src.local.mascot import feed as mascot
 from src.local.roll.command import handle_roll, handle_rollstat
@@ -39,7 +41,9 @@ from src.local.roll.perks import on_chat as roll_perks_on_chat
 logger = logging.getLogger(__name__)
 
 STATS_TRIGGER = '!stat'
-HELP_TRIGGER = '!help-bot'
+HELP_INDEX_TRIGGER = '!help'
+HELP_TRIGGER = '!bot'
+HELP_CHANNEL_TRIGGER = '!channel'
 ASK_TRIGGER = '!ask'
 SUMMARY_TRIGGER = '!summary'
 WHO_TRIGGER = '!who'
@@ -52,6 +56,8 @@ CLIP_TRIGGER = '!clip'
 # Cooldown scope for the «follow the channel» hint: so the bot does not repeat it
 # on every message of a non-following viewer
 FOLLOW_HINT_SCOPE = 'follow_hint'
+# Cooldown scope of help and channel commands: one per trigger for the whole chat
+PUBLIC_SCOPE = 'public'
 
 # EventSub may deliver a message more than once, and a second chat subscription doubles
 # everything: ids of this many recent messages are remembered to drop the repeat
@@ -123,7 +129,9 @@ class ChatComponent(commands.Component):
         add = self._registry.add
         # All commands work as bare text, without addressing the bot.
         # Order matters: longer triggers are registered first.
-        add(HELP_TRIGGER,      handle_help)
+        add(HELP_INDEX_TRIGGER, handle_help_index, public=True)
+        add(HELP_TRIGGER,      handle_help,      public=True)
+        add(HELP_CHANNEL_TRIGGER, handle_help_channel, public=True)
         add(STATS_TRIGGER,     handle_stats,     prefix=True)
         # Longer trigger first, by the rule above. !roll takes a prefix only to answer
         # «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out
@@ -139,6 +147,10 @@ class ChatComponent(commands.Component):
             add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI)
         if Clip.ENABLED:
             add(CLIP_TRIGGER,  handle_clip,  prefix=True)
+        # The channel's own commands come from CONTENT.md and change while the bot runs
+        self._channel = channel.ChannelCommands(lambda trigger: self._registry.resolve_own(trigger) is not None)
+        self._registry.set_fallback(self._channel.resolve)
+        self._channel.check()
 
     def _repeated(self, message_id: str) -> bool:
         """True for a message already seen; no await, so two deliveries cannot both pass."""
@@ -216,10 +228,13 @@ class ChatComponent(commands.Component):
         tier = tier_of(message.chatter)
         seconds = _cooldown_seconds(tier)
 
-        # Without a follow the bot does not answer: the exception is help, which
-        # is how a viewer learns what following is for
+        # Without a follow the bot does not answer: the exception is help and the
+        # channel's own commands, which is how a viewer learns about the channel
         if tier == Tier.REGULAR and not await self._allowed_without_follow(message, user, entry):
             return False
+
+        if entry is not None and entry.public:
+            return self._public_free(entry, tier)
 
         if seconds:
             remaining = self.bot.cooldown_remaining(user, kind)
@@ -248,12 +263,26 @@ class ChatComponent(commands.Component):
                 return False
         return True
 
+    def _public_free(self, entry: CommandEntry, tier: Tier) -> bool:
+        """Help and channel commands: once per COOLDOWN_PUBLIC for the whole chat, silently.
+
+        The answer is the same for everyone and is still in chat, so a repeat is dropped
+        without a refusal. No personal cooldown: !tg must not hold back !roll or the other
+        way round. No await between the check and the set, as with the personal cooldown.
+        """
+        if not Cooldown.PUBLIC or tier == Tier.BROADCASTER:
+            return True
+        if self.bot.cooldown_remaining(entry.trigger, PUBLIC_SCOPE) > 0:
+            return False
+        self.bot.set_cooldown(entry.trigger, Cooldown.PUBLIC, PUBLIC_SCOPE)
+        return True
+
     async def _allowed_without_follow(self, message: twitchio.ChatMessage, user: str,
                                       entry: CommandEntry | None) -> bool:
         """Whether to let a non-following viewer in. False – they have already been refused."""
         if not Follow.REQUIRED:
             return True
-        if entry is not None and entry.trigger == HELP_TRIGGER:
+        if entry is not None and entry.public:
             return True
         if await self._followers.is_follower(self.bot, message.chatter.id):
             return True
@@ -261,7 +290,7 @@ class ChatComponent(commands.Component):
         # spam would turn into refusal spam
         if not self.bot.cooldown_remaining(user, FOLLOW_HINT_SCOPE):
             self.bot.set_cooldown(user, Follow.HINT_MINUTES * 60, FOLLOW_HINT_SCOPE)
-            await reply(message, Content.text('follow_required', user=user, command=HELP_TRIGGER))
+            await reply(message, Content.text('follow_required', user=user, command=HELP_INDEX_TRIGGER))
         return False
 
     async def _within_channel_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:

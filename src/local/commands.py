@@ -1,4 +1,4 @@
-"""Commands without Gemini: !help-bot, !stat."""
+"""Commands without Gemini: !help, !bot, !stat."""
 import asyncio
 
 from src.core.commands import CommandContext
@@ -7,6 +7,12 @@ from src.core.content import Content
 from src.core.utils import clean_nick, reply
 from src.local import help_announce
 from src.core.database import get_session_stats, get_total_stats, get_user_stats
+
+
+async def handle_help_index(ctx: CommandContext) -> None:
+    """!help – the reminder's text: where the command lists are and how to call the bot."""
+    help_announce.note_help_shown()
+    await reply(ctx.message, Content.text('help_announce'))
 
 
 async def handle_help(ctx: CommandContext) -> None:

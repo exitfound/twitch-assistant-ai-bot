@@ -1,6 +1,7 @@
 """Bot features that do not use Gemini.
 
-    commands.py    !help-bot, !stat
+    commands.py    !help, !bot, !stat
+    channel.py     the channel's own commands (!tg …) from CONTENT.md, !channel
     clip.py        !clip – a clip of the stream's last seconds
     follow.py      reply to a new follow
     emote_spam.py  a batch of emotes in chat once per interval

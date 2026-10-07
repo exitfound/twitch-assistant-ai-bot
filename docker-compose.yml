@@ -12,8 +12,6 @@ services:
     environment:
       BOT_DB_PATH: /data/chat_history.db
       MASCOT_HOST: 0.0.0.0
-    # SSE feed of the mascot overlay; MASCOT_PUBLISH (from .env) is the host address,
-    # 127.0.0.1 unless set, so nothing is reachable from outside by default
     ports:
       - "${MASCOT_PUBLISH:-127.0.0.1}:${MASCOT_PORT:-8787}:${MASCOT_PORT:-8787}"
     volumes:

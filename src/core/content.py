@@ -46,7 +46,8 @@ REQUIRED = {
         'prev_stream', 'people', 'chronicle', 'replied',
     ),
     'texts': (
-        'help', 'help_announce', 'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
+        'help', 'help_channel', 'help_channel_empty', 'help_announce',
+        'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
         'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',
         'cooldown_local', 'cooldown_gemini', 'per_stream_no_left', 'per_stream_trial_used', 'sub_hint',
         'follow_required', 'quota_exceeded', 'quota_channel',
@@ -84,6 +85,10 @@ REQUIRED = {
     ),
     'lists': ('emotes', 'follow', 'banned'),
 }
+
+# The channel's own commands: `### !tg` and its reply. The keys are whatever the owner
+# adds, so the section is optional and its keys are not checked against REQUIRED
+CHANNEL_SECTION = 'channel'
 
 
 def parse(raw: str) -> dict[str, dict[str, str]]:
@@ -221,6 +226,12 @@ class Content:
         return _value('texts', name, values)
 
     @staticmethod
+    def channel_commands() -> dict[str, str]:
+        """The channel's own commands, `!tg` → its reply, in file order."""
+        raw = _content.get().get(CHANNEL_SECTION, {})
+        return {key.lower(): value for key, value in raw.items() if key.startswith('!') and value}
+
+    @staticmethod
     def items(name: str) -> list[str]:
         raw = _content.get().get('lists', {}).get(name)
         if raw is None:
@@ -255,7 +266,9 @@ def validate_content() -> None:
     if missing:
         raise ValueError(f'{CONTENT_PATH.name}: не хватает ключей: {", ".join(missing)}')
 
-    unknown = [f'## {s}' for s in data if s not in REQUIRED]
+    unknown = [f'## {s}' for s in data if s not in REQUIRED and s != CHANNEL_SECTION]
+    # A channel command is typed with its «!»; a key without one is never matched
+    unknown += [f'{CHANNEL_SECTION}.{key}' for key in data.get(CHANNEL_SECTION, {}) if not key.startswith('!')]
     unknown += [
         f'{section}.{key}'
         for section, keys in REQUIRED.items()

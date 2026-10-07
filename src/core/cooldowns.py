@@ -10,7 +10,7 @@ PRUNE_AT = 500
 
 
 class Cooldowns:
-    """Scopes are independent: waiting out a Gemini command does not block !help-bot.
+    """Scopes are independent: waiting out a Gemini command does not block !bot.
 
     The scope is the command's class (Kind.LOCAL / Kind.GEMINI), or a scope of its own
     for the follow hint and the refusals, always passed explicitly.

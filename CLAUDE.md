@@ -198,10 +198,10 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **discord** (BOT.md «Голос в Discord»)
 - `bot.py` – `DiscordBot(discord.Client)`: loads libopus and starts the `Speaker` in `setup_hook`, `presence()` (the pure rule: join the owner, never sit alone, `!leave` holds off until the owner rejoins), `on_voice_state_update`, the owner's `!join` / `!leave` / `!tts` answered with a reaction; `run_discord()`
-- `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, emotes, links, CAPS, numbers, `trim_to_sentence()`)
+- `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, emotes, links, CAPS, numbers, addressees at the start dropped, `trim_to_sentence()`)
 - `local/voice/tts.py` – `TTSClient.stream()`: streaming PCM from `/v1/audio/speech`, `TTSUnavailable`
 - `local/voice/audio.py` – `Upsampler` (24 kHz mono → 48 kHz stereo across chunk borders), `StreamSource` (silence on underrun, end only after `finish()`)
-- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time), `speak()` (prebuffer, then play)
+- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time), `speak()` (prebuffer by the answer's expected length – `prebuffer_seconds()` – then play, underruns logged)
 
 **cli**
 - `main.py` – argparse, `_with_db`, `_check_combination()` (one command per run, modifiers only with their command)
@@ -234,7 +234,7 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (138 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (139 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 

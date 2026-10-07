@@ -11,7 +11,7 @@ from src.core.config import Voice
 from src.discord.bot import Move, presence
 from src.discord.local.voice import speaker as speaker_module
 from src.discord.local.voice.audio import FRAME_BYTES, SILENCE, StreamSource, Upsampler
-from src.discord.local.voice.speaker import Speaker
+from src.discord.local.voice.speaker import Speaker, prebuffer_seconds
 from src.discord.local.voice.text import number_words, parse_nicks, prepare
 from src.discord.local.voice.tts import TTSUnavailable
 
@@ -24,8 +24,13 @@ def say(text: str, max_chars: int = 300) -> str:
 
 # --- text -------------------------------------------------------------------
 
-def test_a_reply_starts_with_the_nick_said_in_russian_and_a_pause():
-    assert say('@exitfound тест это то, что мы делаем') == 'Эксит-фаунд, тест это то, что мы делаем'
+def test_the_addressees_at_the_start_are_not_read():
+    assert say('@exitfound тест это то, что мы делаем') == 'Тест это то, что мы делаем'
+    assert say('@exitfound @m1ndsh1ft_? ЭТО ТОТ ТИП') == 'Это тот тип'
+
+
+def test_a_nick_inside_a_sentence_is_read_without_the_at():
+    assert say('@exitfound или @m1ndsh1ft_ опять проиграл') == 'Или Майнд-шифт опять проиграл'
 
 
 def test_known_nicks_come_from_the_dictionary_whatever_their_case():
@@ -84,6 +89,13 @@ def test_a_sample_split_across_chunks_is_not_lost():
     assert parts == Upsampler().convert(whole)
 
 
+def test_a_long_answer_waits_for_a_share_of_its_length_a_short_one_for_the_floor(monkeypatch):
+    monkeypatch.setattr(Voice, 'PREBUFFER_SECONDS', 2.0)
+    monkeypatch.setattr(Voice, 'PREBUFFER_SHARE', 0.25)
+    assert prebuffer_seconds('а' * 50) == 2.0
+    assert prebuffer_seconds('а' * 290) == pytest.approx(5.0)
+
+
 def test_a_missing_frame_plays_as_silence_until_the_answer_ends():
     source = StreamSource()
     assert source.read() == SILENCE
@@ -93,6 +105,8 @@ def test_a_missing_frame_plays_as_silence_until_the_answer_ends():
     source.finish()
     assert source.read() == (b'\x01' * 10).ljust(FRAME_BYTES, b'\0')
     assert source.read() == b''
+    # Two frames went out as silence before the end: what the prebuffer is tuned by
+    assert source.underruns == 2
 
 
 # --- speaker ----------------------------------------------------------------

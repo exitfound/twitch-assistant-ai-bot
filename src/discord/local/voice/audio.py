@@ -63,6 +63,9 @@ class StreamSource(discord.AudioSource):
         self._buffer = bytearray()
         self._lock = threading.Lock()
         self._finished = False
+        # Frames played as silence because speech had not arrived: the measure of a
+        # prebuffer that was too short
+        self.underruns = 0
 
     def feed(self, frames: bytes) -> None:
         with self._lock:
@@ -94,6 +97,7 @@ class StreamSource(discord.AudioSource):
                 frame = bytes(self._buffer).ljust(FRAME_BYTES, b'\0')
                 self._buffer.clear()
                 return frame
+            self.underruns += 1
         return SILENCE
 
     def is_opus(self) -> bool:

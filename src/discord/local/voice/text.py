@@ -26,6 +26,7 @@ HUNDREDS = ['', 'сто', 'двести', 'триста', 'четыреста', 
 LINK_RE = re.compile(r'https?://\S+|www\.\S+')
 EMOJI_RE = re.compile(r'[\U0001F000-\U0001FAFF☀-➿️]')
 LATIN_RE = re.compile(r'@?[A-Za-z][A-Za-z0-9_]*')
+LEADING_MENTIONS_RE = re.compile(r'^(?:@\w+[\s,.:;!?]*)+')
 
 
 def _under_1000(n: int, female: bool = False) -> list[str]:
@@ -96,8 +97,9 @@ def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) 
     text = ' '.join(word for word in text.split() if word not in emotes)
     text = EMOJI_RE.sub('', text)
     text = _decaps(text)
-    # «@nick text» → «nick, text»: a pause after the name, as in speech
-    text = re.sub(r'^(@[A-Za-z0-9_]+)\s+(?![,.!?])', r'\1, ', text)
+    # The addressees at the start are not read: chat shows whom the answer is for, and a
+    # nick read aloud before every answer is noise. A nick inside a sentence is part of it
+    text = LEADING_MENTIONS_RE.sub('', text)
 
     def latin(m: re.Match) -> str:
         word = m.group(0)

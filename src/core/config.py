@@ -483,11 +483,14 @@ class Voice:
     # The state of !tts after a start, and whether the Twitch answers are voiced at all
     ENABLED: bool = _env_bool('VOICE_ENABLED', True)
     TWITCH: bool = _env_bool('VOICE_TWITCH', True)
-    # A longer answer is voiced up to the last sentence end within this many characters
-    MAX_CHARS: int = _env_int('VOICE_MAX_CHARS', 300, 20, 2000)
-    # Speech gathered before playback starts: the server is about as fast as speech
-    # while OBS runs, and without a reserve a long answer stutters
+    # A longer answer is voiced up to the last sentence end within this many characters:
+    # 500 covers one whole Twitch message (450 and the nick)
+    MAX_CHARS: int = _env_int('VOICE_MAX_CHARS', 500, 20, 2000)
+    # Speech gathered before playback starts: at least PREBUFFER_SECONDS, and for a long
+    # answer this share of its expected length. With OBS running the server needs 1.07–1.29 s
+    # per second of speech, so playback started too early runs dry before the end
     PREBUFFER_SECONDS: float = _env_float('VOICE_PREBUFFER_SECONDS', 2.0, 0.0, 30.0)
+    PREBUFFER_SHARE: float = _env_percent('VOICE_PREBUFFER_SHARE', 25)
     # Answers waiting to be voiced; a new one beyond this is dropped
     QUEUE: int = _env_int('VOICE_QUEUE', 5, 1, 50)
     # One answer from the request to the last byte of speech

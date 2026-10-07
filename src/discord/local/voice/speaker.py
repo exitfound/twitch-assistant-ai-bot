@@ -16,6 +16,15 @@ logger = logging.getLogger(__name__)
 
 # A server that is off fails every answer: say so in the log once per this many seconds
 UNAVAILABLE_LOG_SECONDS = 300
+# How fast the voice speaks, for the expected length of an answer: 280–290 characters
+# took 17–20 s. A faster voice only makes the estimate, and so the prebuffer, generous
+CHARS_PER_SECOND = 14.5
+FRAME_SECONDS = 0.02
+
+
+def prebuffer_seconds(phrase: str) -> float:
+    """Speech to gather before playback: a share of the expected length, never below the floor."""
+    return max(Voice.PREBUFFER_SECONDS, len(phrase) / CHARS_PER_SECOND * Voice.PREBUFFER_SHARE)
 
 
 class Speaker:
@@ -74,7 +83,7 @@ class Speaker:
             return
         source = StreamSource()
         ready = asyncio.Event()
-        fetch = asyncio.create_task(self._fetch(phrase, source, ready))
+        fetch = asyncio.create_task(self._fetch(phrase, source, ready, prebuffer_seconds(phrase)))
         try:
             await ready.wait()
             client = self._connected()
@@ -87,7 +96,8 @@ class Speaker:
             loop = asyncio.get_running_loop()
             client.play(source, after=lambda _error: loop.call_soon_threadsafe(played.set))
             await played.wait()
-            logger.info('Озвучка: %d симв., %.1f с', len(phrase), time.monotonic() - started)
+            logger.info('Озвучка: %d симв., %.1f с, провалов %.1f с', len(phrase),
+                        time.monotonic() - started, source.underruns * FRAME_SECONDS)
             await fetch
         finally:
             if not fetch.done():
@@ -95,12 +105,12 @@ class Speaker:
                 with contextlib.suppress(asyncio.CancelledError):
                     await fetch
 
-    async def _fetch(self, phrase: str, source: StreamSource, ready: asyncio.Event) -> None:
+    async def _fetch(self, phrase: str, source: StreamSource, ready: asyncio.Event, prebuffer: float) -> None:
         upsampler = Upsampler()
         try:
             async for chunk in self._tts.stream(phrase):
                 source.feed(upsampler.convert(chunk))
-                if source.buffered_seconds >= Voice.PREBUFFER_SECONDS:
+                if source.buffered_seconds >= prebuffer:
                     ready.set()
         finally:
             source.finish()

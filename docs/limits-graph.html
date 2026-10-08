@@ -1,0 +1,627 @@
+<title>Граф структуры бота</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Unbounded:wght@500;700&family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: a dark mind map – the role in the centre, white section plates around it, coloured capability nodes on the outside; a vertical tree on phones */
+:root {
+  color-scheme: dark;
+  --bg: #0d0c13;
+  --panel: #16151f;
+  --node: #1d1c28;
+  --ink: #f1f0f6;
+  --muted: #9b97ad;
+  --dim: #5c586c;
+  --plate: #f4f3f8;
+  --plate-ink: #0d0c13;
+  --s-help: #4dd4ff;
+  --s-roll: #ff9f43;
+  --s-gemini: #b18cff;
+  --s-general: #9aa0b4;
+  --st-none: #8a8698; --st-follower: #33c5c7; --st-vip: #ff6eae; --st-mod: #4fd474; --st-sub: #a98bff; --st-streamer: #ff6b6b;
+  --role: var(--st-follower);
+  --font-display: "Unbounded", "Golos Text", system-ui, sans-serif;
+  --font-body: "Golos Text", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px; line-height: 1.5; }
+.wrap { max-width: 1550px; margin: 0 auto; padding-inline: 16px; padding-block: 20px 32px; display: flex; flex-direction: column; gap: 20px; }
+h1 { font-family: var(--font-display); font-weight: 700; font-size: clamp(24px, 4.4vw, 38px); line-height: 1.1; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 96ch; }
+.muted { color: var(--muted); }
+.hint { font-size: 13px; color: var(--muted); margin-bottom: -10px; max-width: none; white-space: nowrap; }
+@media (max-width: 860px) { .hint { white-space: normal; } }
+.eyebrow { font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+.roles { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip { display: inline-flex; align-items: center; gap: 8px; border: 1px solid #2c2a3a; background: var(--panel); color: var(--ink);
+  border-radius: 999px; padding: 8px 15px 8px 12px; font: 600 14px var(--font-body); cursor: pointer; transition: background 0.2s, border-color 0.2s; }
+.chip .dot { width: 11px; height: 11px; border-radius: 50%; background: var(--c); box-shadow: 0 0 10px var(--c); }
+.chip[aria-pressed="true"] { border-color: var(--c); background: color-mix(in srgb, var(--c) 18%, var(--panel)); }
+.chip:focus-visible { outline: 2px solid var(--c); outline-offset: 2px; }
+
+.map { background: radial-gradient(ellipse at center, color-mix(in srgb, var(--role) 9%, var(--panel)) 0%, var(--panel) 60%); border: 1px solid #262433; border-radius: 16px; padding: 10px; position: relative; transition: background 0.4s; }
+.map svg { display: block; width: 100%; height: auto; overflow: visible; }
+
+/* svg */
+.link { fill: none; stroke-width: 2; opacity: 0.55; transition: opacity 0.3s, stroke 0.3s; }
+.link.main { stroke-width: 3.5; opacity: 0.85; }
+.link.off { stroke: var(--dim) !important; stroke-dasharray: 4 5; opacity: 0.5; }
+.center-ring { fill: var(--bg); stroke: var(--role); stroke-width: 4; transition: stroke 0.3s; }
+.center-glow { fill: var(--role); opacity: 0.16; transition: fill 0.3s; }
+.center-name { font: 700 19px var(--font-display); fill: var(--role); transition: fill 0.3s; }
+.plate rect { fill: var(--plate); }
+.plate .bar { stroke: none; }
+.plate.muted rect:not(.bar) { fill: #b4b1c2; }
+.plate text { font: 700 13px var(--font-body); fill: var(--plate-ink); letter-spacing: 0.02em; }
+.leaf rect.bg { fill: var(--node); stroke: #34314a; stroke-width: 1; transition: stroke 0.3s, fill 0.3s; }
+.leaf rect.stripe { stroke: none; transition: fill 0.3s; }
+.leaf text.label { font: 500 13px var(--font-body); fill: var(--ink); transition: fill 0.3s; }
+.leaf text.val { font: 700 13.5px var(--font-mono); transition: fill 0.3s; }
+.leaf.off rect.bg { fill: transparent; stroke: var(--dim); stroke-dasharray: 4 4; }
+.leaf.off rect.stripe { fill: var(--dim) !important; }
+.leaf.off text.label { fill: var(--dim); text-decoration: line-through; }
+.leaf.off text.val { fill: var(--dim) !important; }
+.leaf.neutral text.val { fill: var(--muted) !important; }
+.leaf.neutral rect.stripe { opacity: 0.35; }
+.leaf { cursor: help; }
+.leaf:hover rect.bg { stroke: #6a6680; }
+.leaf.flash rect.bg { animation: flash 0.6s ease; }
+@keyframes flash { from { fill: color-mix(in srgb, var(--role) 30%, var(--node)); } to { fill: var(--node); } }
+@media (prefers-reduced-motion: reduce) { .leaf.flash rect.bg { animation: none; } * { transition: none !important; } }
+
+.tip { position: absolute; z-index: 5; width: min(440px, calc(100% - 16px)); background: var(--plate); color: var(--plate-ink); font-size: 14px; line-height: 1.5;
+  border-radius: 10px; padding: 12px 15px 13px; pointer-events: none; box-shadow: 0 10px 32px rgb(0 0 0 / 0.55); border-top: 4px solid var(--sec); }
+.tip-sec { font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-weight: 700; color: #6b6780; }
+.tip-title { font-weight: 700; font-size: 16px; margin: 2px 0 6px; }
+.tip-title span { font-family: var(--font-mono); }
+.tip p { margin: 0 0 6px; max-width: none; }
+.tip .tip-why { font-weight: 600; }
+.tip .tip-ex { margin: 8px 0 0; padding: 7px 10px; background: #e6e4ee; border-radius: 6px; font-size: 13px; }
+.tip .tip-ex b { display: block; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; color: #6b6780; margin-bottom: 1px; }
+.leaf.pinned rect.bg { stroke: var(--role); stroke-width: 2; }
+.tip.pinned { pointer-events: auto; padding-right: 40px; }
+.tip-x { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border: 0; border-radius: 7px; background: transparent; color: #6b6780;
+  font-size: 22px; line-height: 1; cursor: pointer; display: grid; place-items: center; padding: 0 0 3px; }
+.tip-x:hover, .tip-x:focus-visible { background: #dddbe6; color: var(--plate-ink); outline: none; }
+
+</style>
+
+<div class="wrap">
+  <header style="display:flex;flex-direction:column;gap:10px">
+    <h1>Граф структуры бота</h1>
+    <p class="muted">Доступ, лимиты и паузы бота по статусу зрителя. В центре – выбранный статус, от него расходятся разделы, на концах ветвей – отдельные функции со значением для этого статуса. Статусы упорядочены по возрастанию: чем выше статус, тем больше лимиты и короче паузы.</p>
+    <div class="roles" id="roles" role="group" aria-label="Статус"></div>
+  </header>
+
+  <p class="hint">Описание функции – при наведении курсора; нажатие закрепляет окно до клика по пустому месту или по другой функции.</p>
+
+  <section class="map" id="map">
+    <svg id="svg" role="group" aria-label="Граф возможностей выбранного статуса"></svg>
+    <div class="tip" id="tip" hidden></div>
+  </section>
+
+</div>
+
+<script>
+(function () {
+  var INF = Infinity;
+  var ROLES = [
+    { id: 'follower', name: 'Фолловер', c: '--st-follower', cd: 15, quota: 25, cmds: 1, rolls: 3, rw: 3, hint: true },
+    { id: 'vip', name: 'VIP', c: '--st-vip', cd: 5, quota: 50, cmds: 5, rolls: 5, rw: 5, hint: true },
+    { id: 'mod', name: 'Модер', c: '--st-mod', cd: 0, quota: 75, cmds: 7, rolls: 7, rw: 7, hint: true, staff: true },
+    { id: 'sub', name: 'Саб', c: '--st-sub', cd: 0, quota: 100, cmds: 10, rolls: 10, rw: 10 },
+    { id: 'streamer', name: 'Стример', c: '--st-streamer', cd: 0, quota: INF, cmds: INF, rolls: INF, rw: INF, staff: true },
+  ];
+  var byId = {}; ROLES.forEach(function (r) { byId[r.id] = r; });
+  function closed(r) { return r.cd === undefined; }
+  function n(v) { return v === INF ? '∞' : String(v); }
+
+  function at(sec) { return '12:00:' + (sec < 10 ? '0' : '') + sec; }
+  function unl(r) { return r.quota === INF; }
+  var UNLIMITED = 'Без ограничений.';
+
+  // ---------------------------------------------------------------------------
+  // Texts of the graph. Every node:
+  //   label – text on the node
+  //   d     – description in the window
+  //   ex    – example in the window: a string, or a function of the status r
+  //   val   – function of the status r: { v: value on the node, why: line for this status }
+  //           s: 'neutral' greys the value, s: 'off' greys and strikes the node
+  // r carries the numbers of the status: r.cd, r.quota, r.cmds, r.rolls, r.rw, r.staff, r.hint
+  // ---------------------------------------------------------------------------
+
+  // The six per-stream commands share one template
+  function cmd(name, d, use) {
+    return {
+      label: name + ':',
+      d: d + ' Лимит за стрим считается отдельно для каждой команды. Засчитывается только ответ, отправленный в чат. Отказ по исчерпанному лимиту отправляется не чаще одного раза в 30 сек., с припиской «С сабкой лимиты шире.», если подписка повысила бы лимит.',
+      ex: function (r) {
+        if (unl(r)) return 'Команда ' + use + ' – ответ без учёта лимита.';
+        return 'Команда ' + use + ' – вызов № ' + r.cmds + ' за стрим получает ответ, вызов № ' + (r.cmds + 1) + ' – отказ до следующего стрима.';
+      },
+      val: function (r) {
+        if (unl(r)) return { v: '∞', why: UNLIMITED };
+        return { v: n(r.cmds), why: r.cmds + ' ' + pl(r.cmds, 'вызов', 'вызова', 'вызовов') + ' за стрим.' };
+      },
+    };
+  }
+
+  // Help and channel commands: one shared pause per command for the whole chat
+  function publicCmd(label, d, first, second) {
+    return {
+      label: label,
+      d: d + ' Доступны без фоллов на канал. Пауза в 30 секунд общая для всего чата и индивидуальная для каждой команды. Повтор команды в рамках паузы остается без ответа. Личную паузу между командами не запускает.',
+      ex: function (r) {
+        if (r.staff) return 'Пока для чата действует пауза, ' + first + ' от модератора или стримера всё равно получает ответ.';
+        return first + ' в 12:00:00 – ответ; ' + second + ' в 12:00:05 – ответ; повтор ' + first + ' от любого зрителя в 12:00:20 – без ответа; в 12:00:31 – ответ.';
+      },
+      val: function (r) {
+        if (r.staff) return { v: 'Без паузы', why: 'На стримера или модераторов эффект паузы не распространяется.' };
+        return { v: '30 сек.', why: 'Действует общая пауза.' };
+      },
+    };
+  }
+
+  // Russian plural: pl(3, 'покупка', 'покупки', 'покупок') -> 'покупки'
+  function pl(k, one, few, many) {
+    var m10 = k % 10, m100 = k % 100;
+    if (m10 === 1 && m100 !== 11) return one;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+    return many;
+  }
+
+  // Reward purchase limits: per stream, or per 30 minutes for the reroll
+  function rewardLimit(r, per) {
+    if (r.rw === INF) return { v: '∞', why: UNLIMITED };
+    var why = 'Лимит – ' + r.rw + ' ' + pl(r.rw, 'успешная покупка', 'успешные покупки', 'успешных покупок') + ' ' + per;
+    return { v: r.rw + ' ' + per, why: /\.$/.test(why) ? why : why + '.' };
+  }
+
+  // The same value for every status
+  function fixed(v) { return function () { return { v: v }; }; }
+
+  var SECTIONS = [
+
+    // ===== Справка по командам =====
+    {
+      id: 'help', title: 'Справка по командам', side: 'L',
+      leaves: [
+        publicCmd('Команды справки:', 'Команды справки (!help, !bot, !channel).', '!help', '!bot'),
+        publicCmd('Ссылки канала:', 'Команды канала со ссылками и информацией (!tg, !discord и др.).', '!tg', '!discord'),
+      ],
+    },
+
+    // ===== Общее =====
+    {
+      id: 'general', title: 'Общее', side: 'L', muted: true,
+      leaves: [
+        {
+          label: 'Доступ к боту:',
+          d: 'Бот отвечает фолловерам и зрителям со статусом. Фоллов проверяется через Twitch, результат кэшируется на 15 мин., новый фоллов сбрасывает запись сразу. Без фоллова доступны только команды канала, покупка награды отменяется с возвратом баллов.',
+          ex: '«@ник, я общаюсь только с фолловерами и выше по статусу.» – зрителю без фоллова, не чаще одного раза в 10 мин.',
+          val: function (r) {
+            if (r.id === 'follower') return { v: 'Есть', why: 'Доступ после фоллов на канал.' };
+            return { v: 'Есть', why: 'Доступ по статусу, проверка фоллова не выполняется.' };
+          },
+        },
+        {
+          label: 'Пауза между командами:',
+          d: 'Персональный кулдаун после команд бота (!roll, !rollstat, !stat, !clip). Счётчик отдельный от запросов к AI. Сообщение о паузе отправляется один раз в течение всей паузы, последующие команды до её окончания пропускаются без ответа.',
+          ex: function (r) {
+            if (r.cd) return 'Команда !roll в 12:00:00 – следующая команда бота не раньше ' + at(r.cd) + '. Запрос к AI доступен сразу.';
+            return 'Команда !roll и следующий !stat подряд – оба обрабатываются.';
+          },
+          val: function (r) {
+            if (r.cd) return { v: r.cd + ' сек.', why: r.cd + ' сек. до следующей команды бота.' };
+            return { v: '0 сек.', why: 'Кулдауна нет.' };
+          },
+        },
+        {
+          label: 'Статистика чата:',
+          d: 'Команда !stat сообщает о числе сообщений и обращений к боту – своё, за стрим, по каналу.',
+          ex: 'Команда !stat @ник – статистика другого зрителя.',
+          val: function () {
+            return { v: 'Есть' };
+          },
+        },
+        {
+          label: 'Обрыв эфира:',
+          d: 'Эфир, возобновлённый в течение 15 мин. после окончания, считается тем же стримом. Роллы, лимиты, щиты и проклятия сохраняются.',
+          ex: 'Эфир прервался в 20:00 и возобновился в 20:10 – лимиты за стрим продолжают считаться.',
+          val: fixed('До 15 мин.'),
+        },
+        {
+          label: 'Память о разговоре:',
+          d: 'Разговор считается завершённым после 3 ч. без сообщений. После этого бот записывает его хронику и обновляет профили участников.',
+          ex: 'Последнее сообщение в 23:00 – хроника записывается после 02:00.',
+          val: fixed('После 3 ч. тишины'),
+        },
+        {
+          label: 'Реплика бота:',
+          d: 'Сообщение бота без обращения к нему, через случайный интервал от 5 до 30 мин. Отправляется только во время эфира и только если с прошлой реплики в чате были сообщения.',
+          ex: 'В половине случаев реплика адресована одному из недавно писавших зрителей.',
+          val: fixed('5–30 мин.'),
+        },
+        {
+          label: 'Напоминание о командах:',
+          d: 'Сообщение с указанием на !bot и !channel. Отправляется раз в 20 мин. во время эфира, если в чате были сообщения. Пропускается, если за этот период кто-то вызывал команду.',
+          ex: 'Команда !help в 12:15 отменяет напоминание, запланированное на 12:20.',
+          val: fixed('20 мин.'),
+        },
+        {
+          label: 'Спам эмотами:',
+          d: 'Сообщение из 1–5 эмотов канала через случайный интервал от 5 до 20 мин. Отправляется только во время эфира и только если с прошлой порции в чате были сообщения.',
+          ex: '',
+          val: fixed('5–20 мин.'),
+        },
+        {
+          label: 'Спасибо за фоллов:',
+          d: 'Приветствие нового фолловера. Отправляется один раз на зрителя за всё время, не более 3 приветствий в минуту.',
+          ex: 'Массовый фоллов ботами даёт не больше 3 приветствий в минуту.',
+          val: fixed('До 3 в минуту'),
+        },
+      ],
+    },
+
+    // ===== AI возможности =====
+    {
+      id: 'gemini', title: 'AI возможности', side: 'R',
+      leaves: [
+        {
+          label: 'Свободный текст:',
+          d: 'Ответ на сообщение без команды со словом «сосурян» и его вариантами, с упоминанием @бота или в ответ на сообщение бота. Лимита за стрим нет, ограничением служит часовая квота.',
+          ex: '«сосурян, кто сегодня залупа?»',
+          val: function () {
+            return { v: 'По квоте' };
+          },
+        },
+        {
+          label: 'Пауза между запросами:',
+          d: 'Персональный кулдаун после запроса к AI (обращение или команда). Счётчик отдельный от команд бота. Сообщение о паузе отправляется один раз в течение всей паузы, последующие запросы до её окончания пропускаются без ответа.',
+          ex: function (r) {
+            if (r.cd) return 'Запрос в 12:00:00, повтор в 12:00:03 – «@ник, гуляй, отвечу повторно через ' + (r.cd - 3) + ' сек.». Следующий запрос не раньше ' + at(r.cd) + '; команды бота доступны сразу.';
+            return 'Запрос к AI и следующий запрос подряд – оба обрабатываются.';
+          },
+          val: function (r) {
+            if (r.cd) return { v: r.cd + ' сек.', why: r.cd + ' сек. до следующего запроса к AI.' };
+            return { v: '0 сек.', why: 'Кулдауна нет.' };
+          },
+        },
+        {
+          label: 'Обращения за час:',
+          d: 'Личная квота запросов к AI за скользящие 60 мин (команды и обращения). Счётчик хранится в базе и не сбрасывается при перезапуске бота. Запрос, отклонённый из-за ошибки ввода, не учитывается. Отказ по квоте отправляется не чаще одного раза в 30 сек., с припиской «С сабкой лимиты шире.», если подписка повысила бы лимит.',
+          ex: function (r) {
+            if (unl(r)) return '';
+            return 'Запрос № ' + (r.quota + 1) + ' за час – «@ник, на час хватит: ' + r.quota + ' обращений уже потрачено. Следующее через 14 мин…». Команды бота продолжают работать.';
+          },
+          val: function (r) {
+            if (unl(r)) return { v: '∞', why: UNLIMITED };
+            return { v: n(r.quota), why: r.quota + ' запросов за любые 60 мин.' };
+          },
+        },
+        {
+          label: 'Потолок канала 200/ч:',
+          d: 'Общий лимит запросов к AI для всего чата за скользящие 60 мин. При превышении закрываются только AI-команды. Команды !roll, !rollstat и !stat продолжают работать.',
+          ex: function (r) {
+            if (unl(r)) return '';
+            return '201-й запрос чата за час – «обращения к нейронке закрыты до конца часа».';
+          },
+          val: function (r) {
+            if (unl(r)) return { v: 'Не считается', s: 'neutral', why: 'Запросы стримера не учитываются и не ограничиваются.' };
+            return { v: 'Общий', why: 'Запросы учитываются в общем лимите канала.' };
+          },
+        },
+        cmd('!ask', 'Команда !ask – вопрос боту.', '!ask когда следующий стрим'),
+        cmd('!who', 'Команда !who – факты о зрителе по истории чата.', '!who ник'),
+        cmd('!versus', 'Команда !versus – сравнение двух зрителей.', '!versus ник1 ник2'),
+        cmd('!summary', 'Команда !summary – пересказ текущего или прошлого стрима.', '!summary'),
+        cmd('!ascii', 'Команда !ascii – картинка по ссылке, нарисованная символами Брайля.', '!ascii ссылка'),
+        cmd('!clip', 'Команда !clip – клип последних секунд эфира. Запросом к AI не считается: пауза общая с командами бота, в часовую квоту и потолок канала не входит.', '!clip название'),
+      ],
+    },
+
+    // ===== Игра !roll =====
+    {
+      id: 'roll', title: 'Игра !roll', side: 'R',
+      leaves: [
+        {
+          label: 'Броски !roll:',
+          d: 'Команда !roll – это бросок от 1 до 100 в игре «Залупа Стримовая». Игрок с наименьшим результатом получает соответствующий титул в конце стрима. Число бесплатных бросков за стрим зависит от статуса, после них доступен доп. ролл за баллы. После достижения лимитов идет сообщение о том, с сабкой лимиты шире.',
+          ex: function (r) {
+            if (unl(r)) return 'Команда !roll – бросок без учёта лимита.';
+            return '!roll № ' + r.rolls + ' – бросок; № ' + (r.rolls + 1) + ' – «бесплатные броски на этот стрим кончились (' + r.rolls + ' из ' + r.rolls + ')».';
+          },
+          val: function (r) {
+            if (unl(r)) return { v: '∞', why: UNLIMITED };
+            return { v: n(r.rolls), why: r.rolls + ' за стрим.' };
+          },
+        },
+        {
+          label: 'Ограничение бросков:',
+          d: 'Ограничение частоты во избежание спама. 5 бросков и больше (!roll и доп. роллы) в течение 60 сек. включают паузу на 1 минуту после последнего. Бросок во время паузы не выполняется, бесплатный бросок не расходуется.',
+          ex: function (r) {
+            if (unl(r)) return '';
+            return '5 бросков за 40 сек. – «Ты сильно разогнался. Зачилься на минутку.» – следующий бросок через минуту.';
+          },
+          val: function (r) {
+            if (unl(r)) return { v: 'Нет', s: 'neutral', why: 'Не применяется.' };
+            return { v: 'Пауза 1 мин.' };
+          },
+        },
+        {
+          label: 'Статус в игре:',
+          d: 'Команда !rollstat – статус в игре без броска: ролл, остаток бесплатных бросков, проклятие, щит, текущие титулы. Работает только во время эфира.',
+          ex: 'Команда !rollstat после двух бросков – текущий ролл, остаток бесплатных бросков и титулы стрима.',
+          val: function () {
+            return { v: 'Есть' };
+          },
+        },
+        {
+          label: 'Бонусы прошлого эфира:',
+          d: 'В начале эфира лучший китежанин прошлого стрима получает щит от перебросов, тогда как залупа стрима – проклятие. Отсчёт 60 мин. начинает работать с первого сообщения игрока в чате нового стрима.',
+          ex: 'Китежанин прошлого стрима пишет в чат в 20:30 – щит действует до 21:30.',
+          val: fixed('60 мин.'),
+        },
+        {
+          label: 'Доп. ролл за 100 баллов:',
+          d: 'Дополнительный бросок сверх бесплатных. Доступен после окончания бесплатных бросков. Лимита по статусу нет, действует ограничение бросков.',
+          ex: 'Покупка при оставшихся бесплатных бросках отменяется, баллы возвращаются.',
+          val: function () {
+            return { v: 'После бесплатных' };
+          },
+        },
+        {
+          label: 'Переброс за 250 баллов:',
+          d: 'Бросок за другого игрока. Лимит зависит от статуса и считается за окно в 30 мин., которое открывает первый успешный переброс. После переброса цель защищена от новых перебросов на 3 мин., проклятие эту защиту пробивает. Купленный щит переброс блокирует.',
+          ex: function (r) {
+            if (r.rw === INF) return 'Игрока перебросили в 12:00 – следующий переброс по нему возможен с 12:03.';
+            return 'Лимит в ' + r.rw + ' ' + pl(r.rw, 'переброс', 'переброса', 'перебросов') + ' исчерпан к 12:10 при окне с 12:00 – следующий переброс до 12:30 отменяется с возвратом баллов.';
+          },
+          val: function (r) {
+            return rewardLimit(r, 'за 30 мин.');
+          },
+        },
+        {
+          label: 'Щит за 500 баллов:',
+          d: 'Защита от перебросов на 30 мин. с момента покупки, действует только на себя. Проклятие щит не блокирует. Лимит зависит от статуса и считается за стрим.',
+          ex: 'Переброс по игроку со щитом отменяется, покупатель получает баллы назад.',
+          val: function (r) {
+            return rewardLimit(r, 'за стрим');
+          },
+        },
+        {
+          label: 'Проклятие за 750 баллов:',
+          d: 'Проклятие игрока, у которого есть ролл в этом стриме. Потолок следующего броска – 75, каждый бросок по проклятому снижает потолок на 10, до минимума 25. На минимуме проклятие держится 30 мин., затем снимается – бот проверяет это раз в минуту и объявляет снятие в чате. Щит от проклятия не защищает. Лимит зависит от статуса и считается за стрим.',
+          ex: 'Потолки бросков проклятого: 75 → 65 → 55 → 45 → 35 → 25, затем 30 мин. на 25 и объявление о снятии.',
+          val: function (r) {
+            return rewardLimit(r, 'за стрим');
+          },
+        },
+        {
+          label: 'Очищение за 1000 баллов:',
+          d: 'Снятие проклятия с любого игрока, включая себя. После очищения цель нельзя проклясть в течение 30 мин. Лимит зависит от статуса и считается за стрим.',
+          ex: 'Очищение игрока без проклятия отменяется, баллы возвращаются.',
+          val: function (r) {
+            return rewardLimit(r, 'за стрим');
+          },
+        },
+      ],
+    },
+  ];
+
+  var svgNS = 'http://www.w3.org/2000/svg';
+  var svg = document.getElementById('svg'), map = document.getElementById('map'), tipEl = document.getElementById('tip');
+  function E(tag, attrs, parent) { var n = document.createElementNS(svgNS, tag); for (var k in attrs) n.setAttribute(k, attrs[k]); if (parent) parent.appendChild(n); return n; }
+
+  var nodes = [], current = 'follower', narrow = false, pinned = null;
+
+  function layout() {
+    narrow = map.clientWidth < 860;
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    nodes = []; pinned = null;
+    var links = E('g', {}, svg), plates = E('g', {}, svg), leaves = E('g', {}, svg);
+    var SECS = SECTIONS;
+    var LH = 30, LH2 = 48, STEP = 36, GAP = 26, PADL = 15, PADR = 10, SPACE = 16;
+    // Every chip holds its whole label and value: widths are measured over all roles of this view
+    var roles = ROLES;
+    var mg = E('g', { class: 'leaf', visibility: 'hidden' }, svg), ml = E('text', { class: 'label' }, mg), mv = E('text', { class: 'val' }, mg);
+    SECS.forEach(function (s) {
+      s.leaves.forEach(function (lf) {
+        ml.textContent = lf.label;
+        var lw = ml.getComputedTextLength(), vw = 0;
+        roles.forEach(function (r) { mv.textContent = lf.val(r).v; vw = Math.max(vw, mv.getComputedTextLength()); });
+        lf.one = Math.ceil(PADL + lw + SPACE + vw + PADR);
+        lf.two = Math.ceil(PADL + Math.max(lw, vw) + PADR);
+      });
+    });
+    svg.removeChild(mg);
+    // Section plates are as wide as the longest title
+    var mp = E('g', { class: 'plate', visibility: 'hidden' }, svg), mt = E('text', {}, mp), tw = 0;
+    SECS.forEach(function (s) { mt.textContent = s.title.toUpperCase(); tw = Math.max(tw, mt.getComputedTextLength()); });
+    svg.removeChild(mp);
+    function widest(list) { return list.reduce(function (w, s) { return s.leaves.reduce(function (w2, lf) { return Math.max(w2, lf.one); }, w); }, 0); }
+    function curve(x1, y1, x2, y2) { var mx = (x1 + x2) / 2; return 'M' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2; }
+
+    if (!narrow) {
+      var R = 82, HUBW = Math.max(184, Math.ceil(18 + tw + 16)), HUB_OFF = 150, LEAF_OFF = HUB_OFF + HUBW + 46, M = 8;
+      var sides = { L: SECS.filter(function (s) { return s.side === 'L'; }), R: SECS.filter(function (s) { return s.side === 'R'; }) };
+      var WL = widest(sides.L), WR = widest(sides.R);
+      var VW = Math.max(1180, 2 * (LEAF_OFF + Math.max(WL, WR) + M)), cx = VW / 2;
+      function height(list) { return list.reduce(function (h, s) { return h + s.leaves.length * STEP; }, 0) + (list.length - 1) * GAP; }
+      var H = Math.max(height(sides.L), height(sides.R)) + 40, cy = H / 2;
+      svg.setAttribute('viewBox', '0 0 ' + VW + ' ' + H);
+      ['L', 'R'].forEach(function (side) {
+        var list = sides[side], y = cy - height(list) / 2, dir = side === 'R' ? 1 : -1;
+        list.forEach(function (s) {
+          var top = y, bottom = y + s.leaves.length * STEP - (STEP - LH), hy = (top + bottom) / 2;
+          var hubX = side === 'R' ? cx + HUB_OFF : cx - HUB_OFF - HUBW;
+          var hubIn = side === 'R' ? hubX : hubX + HUBW, hubOut = side === 'R' ? hubX + HUBW : hubX;
+          E('path', { d: curve(cx + dir * R, cy, hubIn, hy), class: 'link main', stroke: 'var(--s-' + s.id + ')' }, links);
+          plate(plates, hubX, hy - 16, HUBW, 32, s);
+          s.leaves.forEach(function (lf, i) {
+            var LEAFW = side === 'R' ? WR : WL;
+            var ly = y + i * STEP, lx = side === 'R' ? cx + LEAF_OFF : cx - LEAF_OFF - LEAFW;
+            var lin = side === 'R' ? lx : lx + LEAFW;
+            var path = E('path', { d: curve(hubOut, hy, lin, ly + LH / 2), class: 'link', stroke: 'var(--s-' + s.id + ')' }, links);
+            leaf(leaves, lx, ly, LEAFW, LH, s, lf, path, false);
+          });
+          y += s.leaves.length * STEP + GAP;
+        });
+      });
+      center(E('g', {}, svg), cx, cy, R);
+    } else {
+      var W = map.clientWidth - 20, x0 = 4, y = 6;
+      var Hc = 86, aw = W - (x0 + 14 + 36) - 22;
+      // A chip too narrow for label and value on one line puts the value under the label
+      function rows(s) { return s.leaves.reduce(function (h, lf) { return h + (lf.one > aw ? LH2 : LH) + (STEP - LH); }, 0); }
+      var heights = SECS.reduce(function (h, s) { return h + 40 + rows(s) + 14; }, 0);
+      var Ht = Hc + 20 + heights;
+      svg.setAttribute('viewBox', '0 0 ' + W + ' ' + Ht);
+      var cg = E('g', {}, svg);
+      centerPill(cg, x0, y, W - 8, Hc - 10);
+      y = Hc + 10;
+      var trunkX = x0 + 14;
+      E('path', { d: 'M' + trunkX + ' ' + (Hc - 4) + ' V ' + (Ht - 20), class: 'link main', stroke: 'var(--role)' }, links);
+      SECS.forEach(function (s) {
+        var hy = y + 16;
+        E('path', { d: 'M' + trunkX + ' ' + hy + ' H ' + (trunkX + 18), class: 'link main', stroke: 'var(--s-' + s.id + ')' }, links);
+        plate(plates, trunkX + 18, y, Math.min(Math.max(220, Math.ceil(18 + tw + 16)), W - 40), 32, s);
+        y += 40;
+        var branchX = trunkX + 36;
+        var ly = y;
+        s.leaves.forEach(function (lf) {
+          var two = lf.one > aw, h = two ? LH2 : LH;
+          var path = E('path', { d: 'M' + branchX + ' ' + (hy + 16) + ' V ' + (ly + h / 2) + ' H ' + (branchX + 14), class: 'link', stroke: 'var(--s-' + s.id + ')' }, links);
+          leaf(leaves, branchX + 14, ly, aw, h, s, lf, path, two);
+          ly += h + (STEP - LH);
+        });
+        y += rows(s) + 14;
+      });
+    }
+    update(false);
+  }
+
+  function plate(parent, x, y, w, h, s) {
+    var g = E('g', { class: 'plate' + (s.muted ? ' muted' : ''), transform: 'translate(' + x + ',' + y + ')' }, parent);
+    E('rect', { width: w, height: h, rx: 8 }, g);
+    E('rect', { class: 'bar', x: 0, y: 0, width: 8, height: h, rx: 4, style: 'fill: var(--s-' + s.id + ')' }, g);
+    var t = E('text', { x: 18, y: h / 2 + 5 }, g); t.textContent = s.title.toUpperCase();
+  }
+
+  function leaf(parent, x, y, w, h, s, lf, path, two) {
+    var g = E('g', { class: 'leaf', transform: 'translate(' + x + ',' + y + ')', tabindex: '0' }, parent);
+    E('rect', { class: 'bg', width: w, height: h, rx: 7 }, g);
+    E('rect', { class: 'stripe', width: 4, height: h - 8, x: 4, y: 4, rx: 2, fill: 'var(--s-' + s.id + ')' }, g);
+    var label = E('text', { class: 'label', x: 15, y: two ? 19 : h / 2 + 4.5 }, g); label.textContent = lf.label;
+    var val = two
+      ? E('text', { class: 'val', x: 15, y: 38, fill: 'var(--s-' + s.id + ')' }, g)
+      : E('text', { class: 'val', x: w - 10, y: h / 2 + 5, 'text-anchor': 'end', fill: 'var(--s-' + s.id + ')' }, g);
+    var node = { g: g, lf: lf, s: s, val: val, path: path, w: w, label: label };
+    nodes.push(node);
+    // Hover previews the description; a click pins one window, and hover is ignored while it is pinned
+    g.addEventListener('pointerenter', function (e) { if (!pinned) showTip(e, node); });
+    g.addEventListener('pointermove', function (e) { if (!pinned) moveTip(e); });
+    g.addEventListener('pointerleave', function () { if (!pinned) hideTip(); });
+    g.addEventListener('click', function (e) { e.stopPropagation(); pin(node); });
+    g.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); pin(node); } });
+    g.addEventListener('focus', function () { if (!pinned) showTip(anchor(node), node); });
+    g.addEventListener('blur', function () { if (!pinned) hideTip(); });
+  }
+
+  var centerEls = {};
+  function center(g, cx, cy, R) {
+    E('circle', { class: 'center-glow', cx: cx, cy: cy, r: R + 22 }, g);
+    E('circle', { class: 'center-ring', cx: cx, cy: cy, r: R }, g);
+    centerEls.name = E('text', { class: 'center-name', x: cx, y: cy + 7, 'text-anchor': 'middle' }, g);
+  }
+  function centerPill(g, x, y, w, h) {
+    E('rect', { x: x, y: y, width: w, height: h, rx: 16, class: 'center-ring' }, g);
+    centerEls.name = E('text', { class: 'center-name', x: x + 18, y: y + h / 2 + 7 }, g);
+  }
+
+  function update(flash) {
+    var r = byId[current];
+    document.documentElement.style.setProperty('--role', 'var(' + r.c + ')');
+    centerEls.name.textContent = r.name;
+    nodes.forEach(function (nd) {
+      var v = nd.lf.val(r), before = nd.val.textContent;
+      nd.val.textContent = v.v;
+      nd.g.setAttribute('class', 'leaf' + (v.s === 'off' ? ' off' : v.s === 'neutral' ? ' neutral' : ''));
+      nd.path.setAttribute('class', 'link' + (v.s === 'off' ? ' off' : ''));
+      nd.cur = v;
+      if (flash && before !== v.v) { nd.g.classList.remove('flash'); void nd.g.getBBox(); nd.g.classList.add('flash'); }
+    });
+  }
+
+  function el(tag, cls, text) { var x = document.createElement(tag); if (cls) x.className = cls; if (text) x.textContent = text; return x; }
+  function showTip(e, nd) {
+    var v = nd.cur || {}, ex = typeof nd.lf.ex === 'function' ? nd.lf.ex(byId[current]) : nd.lf.ex;
+    tipEl.innerHTML = '';
+    tipEl.classList.toggle('pinned', nd === pinned);
+    if (nd === pinned) {
+      var x = el('button', 'tip-x', '×'); x.type = 'button'; x.setAttribute('aria-label', 'Закрыть');
+      x.addEventListener('click', function (ev) { ev.stopPropagation(); pin(null); });
+      tipEl.appendChild(x);
+    }
+    tipEl.style.setProperty('--sec', 'var(--s-' + nd.s.id + ')');
+    tipEl.appendChild(el('div', 'tip-sec', nd.s.title + ' · ' + byId[current].name));
+    var t = el('div', 'tip-title', nd.lf.label.replace(/:\s*$/, '') + ': '); t.appendChild(el('span', '', v.v || '')); tipEl.appendChild(t);
+    tipEl.appendChild(el('p', '', nd.lf.d));
+    if (v.why) tipEl.appendChild(el('p', 'tip-why', v.why));
+    if (ex) { var b = el('div', 'tip-ex'); b.appendChild(el('b', '', 'Пример')); b.appendChild(document.createTextNode(ex)); tipEl.appendChild(b); }
+    tipEl.hidden = false; moveTip(e);
+  }
+  function moveTip(e) {
+    if (tipEl.hidden) return;
+    var b = map.getBoundingClientRect(), w = tipEl.offsetWidth, h = tipEl.offsetHeight;
+    var x = e.clientX - b.left + 14, y = e.clientY - b.top + 16;
+    if (x + w > b.width - 8) x = Math.max(8, e.clientX - b.left - w - 14);
+    // keep the box inside the viewport: flip above the cursor near the bottom edge
+    if (e.clientY + 16 + h > window.innerHeight - 8) y = Math.max(8 - b.top, e.clientY - b.top - h - 12);
+    tipEl.style.left = x + 'px'; tipEl.style.top = y + 'px';
+  }
+  function hideTip() { tipEl.hidden = true; tipEl.classList.remove('pinned'); }
+  // A click inside the pinned window keeps it open
+  tipEl.addEventListener('click', function (e) { e.stopPropagation(); });
+  function anchor(nd) { var b = nd.g.getBoundingClientRect(); return { clientX: b.left, clientY: b.bottom - 10 }; }
+  function pin(nd) {
+    if (pinned) pinned.g.classList.remove('pinned');
+    pinned = nd;
+    if (nd) { nd.g.classList.add('pinned'); showTip(anchor(nd), nd); } else hideTip();
+  }
+  document.addEventListener('click', function () { pin(null); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && pinned) pin(null); });
+
+  var rolesEl = document.getElementById('roles');
+  ROLES.forEach(function (r) {
+    var b = document.createElement('button');
+    b.type = 'button'; b.className = 'chip'; b.dataset.id = r.id; b.style.setProperty('--c', 'var(' + r.c + ')');
+    b.innerHTML = '<span class="dot"></span>' + r.name;
+    b.addEventListener('click', function (e) { e.stopPropagation(); setRole(r.id, true); });
+    rolesEl.appendChild(b);
+  });
+  rolesEl.addEventListener('keydown', function (e) {
+    if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
+    var i = ROLES.findIndex(function (r) { return r.id === current; });
+    i = (i + (e.key === 'ArrowRight' ? 1 : ROLES.length - 1)) % ROLES.length;
+    setRole(ROLES[i].id, true);
+    rolesEl.querySelector('[data-id="' + ROLES[i].id + '"]').focus();
+  });
+  function setRole(id, flash) {
+    current = id;
+    try { localStorage.setItem('graf-role', id); } catch (e) {}
+    rolesEl.querySelectorAll('.chip').forEach(function (b) { b.setAttribute('aria-pressed', String(b.dataset.id === id)); });
+    pin(null);
+    update(flash);
+  }
+  try { var saved = localStorage.getItem('graf-role'); if (saved && byId[saved]) current = saved; } catch (e) {}
+  if (location.hash && byId[location.hash.slice(1)]) current = location.hash.slice(1);
+
+  layout(); setRole(current, false);
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { layout(); });
+  var rt, lastW = map.clientWidth;
+  window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(function () { if (map.clientWidth !== lastW) { lastW = map.clientWidth; layout(); } }, 150); });
+})();
+</script>

@@ -502,15 +502,16 @@ class Voice:
     # A longer answer is voiced up to the last sentence end within this many characters:
     # 500 covers one whole Twitch message (450 and the nick)
     MAX_CHARS: int = _env_int('VOICE_MAX_CHARS', 500, 20, 2000)
-    # Speech gathered before playback starts: at least PREBUFFER_SECONDS, and for a long
-    # answer this share of its expected length. With OBS running the server needs 1.07–1.29 s
-    # per second of speech, so playback started too early runs dry before the end
+    # Speech gathered before playback starts: at least PREBUFFER_SECONDS and this share of
+    # the answer's expected length; the speaker raises it to match the server speed it
+    # measures (0.8–1.8 s per second of speech), so playback does not run dry before the end
     PREBUFFER_SECONDS: float = _env_float('VOICE_PREBUFFER_SECONDS', 2.0, 0.0, 30.0)
     PREBUFFER_SHARE: float = _env_percent('VOICE_PREBUFFER_SHARE', 25)
-    # Answers waiting to be voiced; a new one beyond this is dropped. The server is a bit
-    # slower than speech, so a busy chat builds a queue, and an answer that waited longer
-    # than MAX_WAIT_SECONDS is dropped when its turn comes
+    # Answers waiting to be voiced; a new one beyond this is dropped. The server speaks
+    # about as fast as speech, so a busy chat builds a queue, and an answer that waited
+    # longer than MAX_WAIT_SECONDS is dropped when its turn comes
     QUEUE: int = _env_int('VOICE_QUEUE', 15, 1, 100)
     MAX_WAIT_SECONDS: int = _env_int('VOICE_MAX_WAIT_SECONDS', 180, 10, 3600)
-    # One answer from the request to the last byte of speech
+    # One answer from the request to the last byte of speech; a long phrase gets more
+    # (its expected length × 3 + 30 s), since numbers and Latin are spelled out after the trim
     TIMEOUT: int = _env_int('VOICE_TIMEOUT', 120, 5, 600)

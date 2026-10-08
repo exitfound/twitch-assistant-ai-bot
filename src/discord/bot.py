@@ -1,4 +1,4 @@
-"""The Discord side of the bot: the voice channel and the owner's commands."""
+"""The Discord side of the bot: the voice channel and the voice commands."""
 import asyncio
 import contextlib
 import logging
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 # A voice connection that has not come up by then is given up; the next check retries
 CONNECT_TIMEOUT = 20
-# How often the voice channel is checked against the owner's choice: a connection that
+# How often the voice channel is checked against the saved choice: a connection that
 # dropped for good fires no event, and the bot would otherwise stay out until a restart.
 # While the connection is unsettled (lost, or in another channel) it is checked more often,
 # so the grace periods below are counted from close to the real moment
@@ -31,7 +31,7 @@ UNSETTLED_CHECK_SECONDS = 10
 # before the bot acts: two connect flows at once fight over the channel
 RECONNECT_GRACE_SECONDS = 90
 MOVE_GRACE_SECONDS = 10
-# bot_state keys of the owner's choices, 'on' / 'off': the voice channel (!join / !leave)
+# bot_state keys of the saved choices, 'on' / 'off': the voice channel (!join / !leave)
 # and the voice itself (!voice; until the first one – VOICE_ENABLED)
 VOICE_STATE_KEY = 'discord_voice'
 VOICE_ENABLED_KEY = 'discord_voice_enabled'
@@ -63,7 +63,7 @@ class Where(StrEnum):
 
 
 def presence(wanted: bool, where: Where) -> Move:
-    """In the voice channel exactly while the owner wants it there, and in that channel."""
+    """In the voice channel exactly while !join says so, and in that channel."""
     if not wanted:
         return Move.STAY if where is Where.OUT else Move.LEAVE
     return Move.STAY if where in (Where.HERE, Where.RECOVERING) else Move.JOIN
@@ -210,7 +210,7 @@ class DiscordBot(discord.Client):
             logger.exception('Discord: выбор %s не сохранён – действует до перезапуска', key)
 
     async def _reconcile(self) -> None:
-        """Put the bot where the owner's choice says: in the channel or out of it."""
+        """Put the bot where the saved choice says: in the channel or out of it."""
         if self.speaker is None or self._closing:
             return
         async with self._presence_lock:

@@ -18,7 +18,7 @@ docker compose up -d     # собрать и поднять бота
 make oauth               # один раз: войти под бот-аккаунтом
 ```
 
-Документация: [docs/BOT.md](docs/BOT.md) – как устроена каждая механика, [docs/CONTENT.md](docs/CONTENT.md) – все тексты и промпты, [CLAUDE.md](CLAUDE.md) – правила для кода. Лицензия – [MIT](LICENSE).
+Документация: [docs/BOT.md](docs/BOT.md) – как устроена каждая механика, [docs/CONTENT.md](docs/CONTENT.md) – все тексты и промпты, [docs/TTS.md](docs/TTS.md) – TTS-сервер для голоса в Discord: установка, запуск, диагностика, [CLAUDE.md](CLAUDE.md) – правила для кода. Лицензия – [MIT](LICENSE).
 
 Стек:
 - Python 3.11
@@ -181,7 +181,7 @@ cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py
 3. Чтобы бота мог добавить только владелец: **Installation** → Install Link = **None** → Save, затем **Bot** → выключить **Public Bot**
 4. **OAuth2** → **URL Generator**: области `bot` и `applications.commands`, тип интеграции **Guild Install**; права View Channels, Send Messages, Read Message History, Add Reactions, Connect, Speak, Use Voice Activity. Открыть ссылку и добавить бота на свой сервер. Если каналы закрыты ролями – дать роли бота доступ к нужному текстовому и голосовому
 5. В Discord включить **Настройки → Расширенные → Режим разработчика**, затем правой кнопкой → **Копировать ID**: текстовый канал для команд → `DISCORD_TEXT_CHANNEL_ID`, голосовой канал → `DISCORD_VOICE_CHANNEL_ID`, свой ник → `DISCORD_OWNER_ID`. Если команды голоса нужны не только тебе – ID ролей (Настройки сервера → Роли → правой кнопкой) через запятую в `DISCORD_COMMAND_ROLE_IDS`
-6. Голос: адрес TTS-сервера с OpenAI-совместимым `/v1/audio/speech` и потоковым PCM 24 кГц (например, Qwen3-TTS-Openai-Fastapi на машине с видеокартой) – в `VOICE_TTS_URL`, голос на нём – в `VOICE_TTS_VOICE`
+6. Голос: адрес TTS-сервера с OpenAI-совместимым `/v1/audio/speech` и потоковым PCM 24 кГц – в `VOICE_TTS_URL`, голос на нём – в `VOICE_TTS_VOICE`. Установка и запуск сервера – [docs/TTS.md](docs/TTS.md)
 
 После правки `.env` – `docker compose up -d`. В логе появится «Discord: вошёл как …». В голосовой канал бот заходит по команде `!join` (см. «Голос в Discord») – «Discord: зашёл в …»; если Discord на старте недоступен, бот повторяет попытку сам. Сервер TTS выключен – бот отвечает только текстом. Как это устроено – BOT.md, «Голос в Discord».
 
@@ -600,7 +600,8 @@ docker compose run --rm bot /app/bot.py --lore-sources
 ├── LICENSE                # MIT
 ├── docs/
 │   ├── BOT.md             # Подробный справочник: как устроена каждая механика
-│   └── CONTENT.md         # Всё, что произносит бот: промпты, ответы в чат, эмоты, фоловы, стоп-лист (hot-reload)
+│   ├── CONTENT.md         # Всё, что произносит бот: промпты, ответы в чат, эмоты, фоловы, стоп-лист (hot-reload)
+│   └── TTS.md             # TTS-сервер для голоса в Discord: модель, установка, профили, запуск, API, диагностика
 ├── src/
 │   ├── core/                # Общий каркас для всех платформ
 │   │   ├── activity.py      # ChatWatch: писал ли кто-то в чате с прошлого раза – бот говорит только в живой разговор

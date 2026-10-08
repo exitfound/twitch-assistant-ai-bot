@@ -14,6 +14,7 @@ Twitch chat bot powered by Gemini 2.5 Flash. Commands (`!who`, `!ask`, …) work
 | `docs/BOT.md` | the one detailed reference: every mechanic, its numbers and the failure modes it guards against | Russian |
 | `CLAUDE.md` | this file: rules, layout, module map, invariants | English |
 | `docs/CONTENT.md` | everything the bot says, read by the code; `<!-- … -->` notes explain keys | Russian |
+| `docs/TTS.md` | the TTS server the Discord voice uses: model, install, profiles, launch, API, performance, diagnostics – it runs on another machine and is not part of this code | Russian |
 | `.env.example` | every environment variable with a comment | Russian |
 
 `BOT.md` and `CONTENT.md` below mean the files in `docs/`.

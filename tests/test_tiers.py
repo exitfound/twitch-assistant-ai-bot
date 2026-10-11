@@ -1,16 +1,16 @@
 """The viewer status ladder, implemented in several places that must agree.
 
-Broadcaster above everyone, moderator and subscriber (founder included) together,
-then VIP, then everyone else; a subscribing VIP gets the subscriber's terms.
+Broadcaster above everyone, then subscriber (founder included), moderator, VIP and
+everyone else; a subscribing VIP or moderator gets the subscriber's terms.
 """
 import pytest
 
 from fakes import make_chatter
-from src.core import component
+from src.twitch.core import component
 from src.core.config import Cooldown, PerStream, Quota, Roll
-from src.core.limits import limit_for
-from src.core.viewer import Tier, sub_hint, tier_of
-from src.local.roll.command import free_limit_for
+from src.twitch.core.limits import limit_for
+from src.twitch.core.viewer import Tier, sub_hint, tier_of
+from src.twitch.local.roll.command import free_limit_for
 
 BADGES = {
     'broadcaster': {'broadcaster': True},
@@ -18,6 +18,7 @@ BADGES = {
     'subscriber': {'subscriber': True},
     'founder': {'founder': True},
     'sub_vip': {'subscriber': True, 'vip': True},
+    'sub_mod': {'subscriber': True, 'moderator': True},
     'vip': {'vip': True},
     'regular': {},
 }
@@ -28,6 +29,7 @@ TIER = {
     'subscriber': Tier.SUB,
     'founder': Tier.SUB,
     'sub_vip': Tier.SUB,
+    'sub_mod': Tier.SUB,
     'vip': Tier.VIP,
     'regular': Tier.REGULAR,
 }
@@ -40,8 +42,9 @@ def test_tier(who_):
 
 @pytest.mark.parametrize(('who_', 'cooldown', 'quota'), [
     ('broadcaster', 0, 0),
-    ('moderator', 0, 0),
-    ('subscriber', 0, 0),
+    ('moderator', 0, Quota.MOD_PER_HOUR),
+    ('sub_mod', 0, Quota.SUB_PER_HOUR),
+    ('subscriber', 0, Quota.SUB_PER_HOUR),
     ('vip', Cooldown.VIP, Quota.VIP_PER_HOUR),
     ('regular', Cooldown.REGULAR, Quota.FOLLOWER_PER_HOUR),
 ])
@@ -53,7 +56,8 @@ def test_cooldown_and_quota(who_, cooldown, quota):
 
 @pytest.mark.parametrize(('who_', 'limit'), [
     ('broadcaster', Roll.FREE_PER_SESSION),
-    ('moderator', Roll.FREE_SUB),
+    ('moderator', Roll.FREE_MOD),
+    ('sub_mod', Roll.FREE_SUB),
     ('subscriber', Roll.FREE_SUB),
     ('founder', Roll.FREE_SUB),
     ('sub_vip', Roll.FREE_SUB),
@@ -66,7 +70,8 @@ def test_free_throws(who_, limit):
 
 @pytest.mark.parametrize(('who_', 'limit'), [
     ('broadcaster', 0),
-    ('moderator', PerStream.SUB),
+    ('moderator', PerStream.MOD),
+    ('sub_mod', PerStream.SUB),
     ('subscriber', PerStream.SUB),
     ('founder', PerStream.SUB),
     ('sub_vip', PerStream.SUB),
@@ -79,7 +84,8 @@ def test_per_stream_limits(who_, limit):
 
 @pytest.mark.parametrize(('who_', 'hinted'), [
     ('broadcaster', False),
-    ('moderator', False),
+    ('moderator', True),
+    ('sub_mod', False),
     ('subscriber', False),
     ('founder', False),
     ('sub_vip', False),
@@ -87,4 +93,15 @@ def test_per_stream_limits(who_, limit):
     ('regular', True),
 ])
 def test_sub_hint_only_where_a_subscription_helps(who_, hinted):
-    assert bool(sub_hint(make_chatter(**BADGES[who_]))) is hinted
+    assert bool(sub_hint(make_chatter(**BADGES[who_]), 3, 10)) is hinted
+
+
+@pytest.mark.parametrize(('limit', 'sub_limit', 'hinted'), [
+    (7, 10, True),
+    (10, 10, False),
+    (12, 10, False),
+    (7, 0, True),
+])
+def test_sub_hint_only_where_the_sub_limit_is_higher(limit, sub_limit, hinted):
+    """A moderator whose limit a subscription would not raise is not offered one; 0 – no limit."""
+    assert bool(sub_hint(make_chatter(**BADGES['moderator']), limit, sub_limit)) is hinted

@@ -5,10 +5,10 @@ import pytest
 
 from fakes import FakeBot, make_chatter, make_message
 from src.core.activity import ChatWatch
-from src.core.component import ChatComponent
+from src.twitch.core.component import ChatComponent
 from src.core.config import Follow
 from src.core.database import save_chat_message
-from src.local import help_announce
+from src.twitch.local import help_announce
 
 
 async def _talk(bot: FakeBot) -> None:

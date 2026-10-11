@@ -9,11 +9,12 @@ import aiohttp
 import pytest
 import twitchio
 
-import bot as bot_module
 from fakes import FakeBot
-from src.core import chat_socket, cooldowns, database, logging_setup, stream, tokens
+from src.core import cooldowns, database, logging_setup
+from src.twitch import bot as bot_module
+from src.twitch.core import chat_socket, stream, tokens
 from src.core.tasks import BackgroundTasks
-from src.core.port import BotPort, StreamBot
+from src.twitch.core.port import BotPort, StreamBot
 
 
 @pytest.mark.parametrize(('error', 'hint'), [

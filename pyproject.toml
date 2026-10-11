@@ -35,4 +35,6 @@ asyncio_default_fixture_loop_scope = "function"
 filterwarnings = [
     # twitchio's OAuth adapter subclasses aiohttp's Application; nothing to act on here
     "ignore:Inheritance class AiohttpAdapter:DeprecationWarning",
+    # discord.py's player imports audioop; the image runs Python 3.11, where it still exists
+    "ignore:'audioop' is deprecated:DeprecationWarning",
 ]

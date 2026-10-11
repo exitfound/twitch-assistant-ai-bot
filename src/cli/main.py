@@ -1,6 +1,8 @@
 import argparse
 import asyncio
 import functools
+import sys
+from pathlib import Path
 
 from src.cli.emotes import SOURCES, SyncError, fetch, merge
 from src.cli.knowledge import (
@@ -152,13 +154,13 @@ async def clear_lore(source: str | None, dry_run: bool):
 async def build_memory(dry_run: bool, limit: int, clear: bool):
     if clear and not dry_run:
         await memory.clear()
-        print('Память очищена (хроники, события, профили)')
+        print('Память очищена (хроники, события, досье)')
     await memory.build_memory(dry_run, limit)
 
 
 @_with_db
-async def probe_context(ids: list[int], limit: int, samples: int):
-    await probe.probe(ids, limit, samples)
+async def probe_context(ids: list[int], limit: int, samples: int, candidate: probe.Candidate | None):
+    await probe.probe(ids, limit, samples, candidate)
 
 
 @_with_db
@@ -169,7 +171,7 @@ async def clear_memory(dry_run: bool):
         print('Dry run: было бы удалено ' + ', '.join(f'{t} {n}' for t, n in counts.items()))
         return
     await memory.clear()
-    print('Память очищена (хроники, события, профили)')
+    print('Память очищена (хроники, события, досье)')
 
 
 @_with_db
@@ -215,6 +217,10 @@ def _check_combination(parser: argparse.ArgumentParser, args: argparse.Namespace
         ('--format', args.format != 'lines', {lore}),
         ('--limit', args.limit is not None, {'--build-memory', '--probe-context'}),
         ('--samples', args.samples != parser.get_default('samples'), {'--probe-context'}),
+        ('--temperature', args.temperature is not None, {'--probe-context'}),
+        ('--thinking', args.thinking is not None, {'--probe-context'}),
+        ('--system', args.system is not None, {'--probe-context'}),
+        ('--model', args.model is not None, {'--probe-context'}),
         ('--replace-emotes', args.replace_emotes, {'--sync-emotes'}),
     ) if given]
     if modifiers and not actions:
@@ -230,6 +236,10 @@ def _check_combination(parser: argparse.ArgumentParser, args: argparse.Namespace
                      'источника: укажи --source ИМЯ, а если стереть всё и задумано – --all')
     if args.all and (not args.clear_lore or args.source is not None):
         parser.error('--all – только с --clear-lore и без --source')
+    if args.temperature is not None and not 0 <= args.temperature <= 2:
+        parser.error('--temperature – от 0 до 2')
+    if args.thinking is not None and not -1 <= args.thinking <= 32768:
+        parser.error('--thinking – от -1 до 32768: 0 выключен, -1 решает модель')
     # --limit trims only the preview: a real build takes the whole history and pays for it
     if args.build_memory and not args.dry_run and args.limit is not None:
         parser.error('--limit у --build-memory работает только с --dry-run: без него память '
@@ -276,7 +286,7 @@ def main(argv: list[str] | None = None) -> bool:
     )
     parser.add_argument(
         '--build-memory', action='store_true',
-        help='Память бота по всей истории: хроники сессий и профили зрителей. '
+        help='Память бота по всей истории: хроники сессий и досье зрителей. '
              'Повторный запуск дописывает недостающее. С --dry-run ничего не пишет',
     )
     parser.add_argument(
@@ -286,16 +296,33 @@ def main(argv: list[str] | None = None) -> bool:
     parser.add_argument(
         '--probe-context', nargs='*', type=int, metavar='ID',
         help='Замер контекста: реальные обращения к боту (id из chat_messages, по умолчанию '
-             '--limit последних) в вариантах now (узкое окно чата) и new (то, что бот отправляет). Стоит денег',
+             '--limit последних) в вариантах now (узкое окно чата) и new (то, что бот отправляет); '
+             'с --temperature / --thinking / --system / --model – bot и candidate на одном контексте. Стоит денег',
     )
     parser.add_argument(
         '--samples', type=int, default=1, metavar='N',
         help='С --probe-context: сколько ответов на каждый вариант (температура высокая)',
     )
+    parser.add_argument(
+        '--temperature', type=float, metavar='T',
+        help='С --probe-context: температура варианта candidate рядом с ответом бота',
+    )
+    parser.add_argument(
+        '--thinking', type=int, metavar='N',
+        help='С --probe-context: бюджет thinking варианта candidate (0 выключен, -1 решает модель)',
+    )
+    parser.add_argument(
+        '--system', metavar='FILE',
+        help='С --probe-context: текст персоны варианта candidate из файла вместо prompts.system',
+    )
+    parser.add_argument(
+        '--model', metavar='NAME',
+        help='С --probe-context: модель Gemini варианта candidate',
+    )
     # No default in argparse: a --limit equal to it must still be seen by _check_combination()
     parser.add_argument(
         '--limit', type=int, metavar='N',
-        help='С --build-memory --dry-run: сколько хроник и профилей показать; '
+        help='С --build-memory --dry-run: сколько хроник и досье показать; '
              'с --probe-context: сколько последних обращений взять (по умолчанию 3)',
     )
     parser.add_argument(
@@ -326,12 +353,28 @@ def main(argv: list[str] | None = None) -> bool:
     return True
 
 
+def _candidate(args: argparse.Namespace) -> probe.Candidate | None:
+    """The settings --probe-context compares with the bot's, or None – compare contexts."""
+    if all(v is None for v in (args.temperature, args.thinking, args.system, args.model)):
+        return None
+    system = None
+    if args.system is not None:
+        try:
+            system = Path(args.system).read_text(encoding='utf-8').strip()
+        except (OSError, UnicodeDecodeError) as e:
+            sys.exit(f'Ошибка: не прочитать персону {args.system}: {e}')
+        if not system:
+            sys.exit(f'Ошибка: файл персоны {args.system} пуст')
+    return probe.Candidate(args.temperature, args.thinking, system, args.model)
+
+
 def _command(args: argparse.Namespace):
     """The coroutine of the chosen maintenance command, or None – no command, start the bot."""
     if args.list_facts:
         return list_facts()
     if args.probe_context is not None:
-        return probe_context(args.probe_context, max(1, args.limit or LIMIT), max(1, args.samples))
+        return probe_context(args.probe_context, max(1, args.limit or LIMIT), max(1, args.samples),
+                             _candidate(args))
     if args.build_memory:
         return build_memory(args.dry_run, max(1, args.limit or LIMIT), args.clear_memory)
     if args.clear_memory:

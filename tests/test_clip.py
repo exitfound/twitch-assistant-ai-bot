@@ -6,11 +6,11 @@ import pytest
 import twitchio
 
 from fakes import FakeBot, make_chatter, make_message
-from src.core.commands import CommandContext, Kind
-from src.core.component import ChatComponent
+from src.twitch.core.commands import CommandContext, Kind
+from src.twitch.core.component import ChatComponent
 from src.core.config import Clip, Follow, PerStream
 from src.core.database import count_bot_uses, record_bot_use
-from src.local import clip
+from src.twitch.local import clip
 
 
 @pytest.mark.parametrize(('args', 'parsed'), [

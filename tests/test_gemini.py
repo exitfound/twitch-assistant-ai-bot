@@ -8,13 +8,15 @@ import pytest
 from google.genai import errors, types
 
 from fakes import FakeBot, make_chatter, make_message
-from src.core.commands import CommandContext, Kind
+from src.twitch.core.commands import CommandContext, Kind
+from src.core import speech
 from src.core.config import Caps, Emote, Gemini, PerStream
 from src.core.database import count_bot_uses, get_db, record_bot_use
-from src.core import limits
-from src.gemini import client, commands, ladder, responder
+from src.twitch.core import limits
+from src.gemini import client, ladder
+from src.twitch.gemini import commands, responder
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR
-from src.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
+from src.twitch.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
 from src.gemini.who import WHO_KIND
 
 # --- generate_checked -------------------------------------------------------
@@ -44,6 +46,29 @@ def gemini(monkeypatch):
 async def test_text_comes_back(gemini):
     gemini.return_value = _response('ответ')
     assert await client.generate_checked('q', types.GenerateContentConfig()) == ('ответ', None)
+
+
+async def test_using_model_reaches_only_its_own_task(gemini):
+    """The probe's candidate model: a request of another task running meanwhile keeps
+    GEMINI_MODEL, and the model is given back after the block."""
+    gemini.return_value = _response('ответ')
+    started, release = asyncio.Event(), asyncio.Event()
+
+    async def bot():
+        await started.wait()
+        await client.generate_checked('q', types.GenerateContentConfig())
+        release.set()
+
+    async def candidate():
+        with client.using_model('other'):
+            started.set()
+            await release.wait()
+            await client.generate_checked('q', types.GenerateContentConfig())
+
+    await asyncio.gather(bot(), candidate())
+    await client.generate_checked('q', types.GenerateContentConfig())
+    models = [call.kwargs['model'] for call in gemini.await_args_list]
+    assert models == [Gemini.MODEL, 'other', Gemini.MODEL]
 
 
 async def test_input_block(gemini):
@@ -177,6 +202,12 @@ def test_config_carries_the_thinking_budget():
     assert config.thinking_config.thinking_budget == Gemini.THINKING_BUDGET
 
 
+def test_config_takes_its_own_thinking_budget():
+    """The context probe compares budgets: an override still lands in thinking_config."""
+    assert client.make_gen_config(thinking_budget=512).thinking_config.thinking_budget == 512
+    assert client.make_gen_config(thinking_budget=-1).thinking_config is None
+
+
 # --- walk: the fallback ladder ----------------------------------------------
 
 RUNGS = [('r1', 'p1'), ('r2', 'p2'), ('r3', 'p3')]
@@ -288,6 +319,23 @@ async def test_answer_goes_out_as_a_reply_and_is_saved(db, ctx):
     assert await _saved('привет') == ['Привет!']
 
 
+async def test_an_answer_that_reached_chat_is_handed_to_the_voice(db, ctx):
+    heard = []
+    speech.listen(lambda text, source: heard.append((text, source)))
+    assert await respond_and_save(ctx, 'Привет!', 'привет')
+    assert await respond_and_save(ctx, 'Предложение номер раз и два. ' * 40, '[versus] a vs b', max_chunks=2)
+    assert heard[0] == ('@gop Привет!', 'twitch')
+    assert heard[1][0].startswith('@gop Предложение') and len(heard) == 2
+
+
+async def test_an_answer_that_did_not_reach_chat_is_not_voiced(db, ctx):
+    heard = []
+    speech.listen(lambda text, source: heard.append(text))
+    ctx.message.respond.side_effect = RuntimeError('twitch down')
+    assert not await respond_and_save(ctx, 'Привет!', 'привет')
+    assert heard == []
+
+
 async def test_empty_answer_sends_nothing(db, ctx):
     assert not await respond_and_save(ctx, '', 'привет')
     ctx.message.respond.assert_not_awaited()
@@ -391,15 +439,27 @@ async def test_per_stream_limit_counts_only_what_reached_chat(db, ctx, monkeypat
     (make_chatter('gop'), 'texts.per_stream_trial_used'),
     (make_chatter('gop', vip=True), 'texts.per_stream_no_left texts.sub_hint'),
     (make_chatter('gop', subscriber=True, vip=True), 'texts.per_stream_no_left'),
-    (make_chatter('gop', moderator=True), 'texts.per_stream_no_left'),
+    (make_chatter('gop', moderator=True), 'texts.per_stream_no_left texts.sub_hint'),
+    (make_chatter('gop', subscriber=True, moderator=True), 'texts.per_stream_no_left'),
 ])
 async def test_the_refusal_depends_on_the_status(db, ctx, monkeypatch, chatter, text):
-    for field in ('FOLLOWER', 'VIP', 'SUB'):
+    for field in ('FOLLOWER', 'VIP', 'MOD'):
         monkeypatch.setattr(PerStream, field, 1)
+    monkeypatch.setattr(PerStream, 'SUB', 2)
     ctx.message.chatter = chatter
-    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
-    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    # A subscriber's limit is 2: the third call is refused; past 1 the repeat is braked
+    for _ in range(3):
+        await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
     ctx.message.respond.assert_awaited_once_with(text)
+
+
+async def test_no_sub_hint_when_a_subscription_would_not_raise_the_limit(db, ctx, monkeypatch):
+    monkeypatch.setattr(PerStream, 'MOD', 1)
+    monkeypatch.setattr(PerStream, 'SUB', 1)
+    ctx.message.chatter = make_chatter('gop', moderator=True)
+    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    await commands.LIMITS[WHO_KIND].run(ctx, AsyncMock(return_value=True))
+    ctx.message.respond.assert_awaited_once_with('texts.per_stream_no_left')
 
 
 async def test_refusals_past_the_limit_are_braked(db, ctx, monkeypatch):
@@ -450,11 +510,12 @@ def _ask_ctx(chatter) -> CommandContext:
 @pytest.mark.parametrize(('chatter', 'answered'), [
     (make_chatter('vip', vip=True), 5),
     (make_chatter('sub', subscriber=True), 10),
-    (make_chatter('mod', moderator=True), 10),
+    (make_chatter('mod', moderator=True), 7),
+    (make_chatter('mod', moderator=True, subscriber=True), 10),
     (make_chatter('streamer', broadcaster=True), 12),
 ])
 async def test_ask_is_limited_per_stream_by_status(db, ctx, monkeypatch, chatter, answered):
-    """VIP 5, subscriber and moderator 10, broadcaster unlimited, as every per-stream command."""
+    """VIP 5, moderator 7, subscriber 10, broadcaster unlimited, as every per-stream command."""
     monkeypatch.setattr(commands, 'generate', AsyncMock(return_value='Ответ.'))
     replies = [_ask_ctx(chatter) for _ in range(12)]
     for ask_ctx in replies:
@@ -471,3 +532,11 @@ async def test_a_failed_ask_is_not_counted(db, ctx, monkeypatch):
     await commands.handle_ask(ask_ctx)
     ask_ctx.message.respond.assert_awaited_once_with('texts.ask_error')
     assert await count_bot_uses('fan', commands.ASK_KIND, 60) == 0
+
+
+def test_cost_is_estimated_at_the_models_price(monkeypatch):
+    monkeypatch.setattr(Gemini, 'MODEL', 'gemini-2.5-flash')
+    assert client.cost_estimate(1_000_000, 1_000_000) == 2.80
+    assert client.cost_estimate(1_000_000, 0, 'gemini-3.8-flash') == 0.75
+    assert client.cost_estimate(1, 1, 'gemini-9-ultra') is None
+    assert client.cost_text(None) == 'цена модели неизвестна'

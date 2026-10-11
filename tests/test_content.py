@@ -6,7 +6,8 @@ import pytest
 
 from src.core import content
 from src.core.content import Content, parse, validate_content
-from src.local.roll import game, redemption, rewards
+from src.gemini.memory import build
+from src.twitch.local.roll import game, redemption, rewards
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -132,10 +133,15 @@ def test_every_reward_outcome_fills_its_template(real_content, action):
     for outcome in outcomes:
         text = redemption._render(action, 'gop', 'victim', outcome)
         assert text and '{' not in text, (outcome.status, text)
-    for key in ('reward_refund_offline', 'reward_error'):
+    for key in ('reward_refund_offline', 'reward_refund_follow', 'reward_error'):
         assert '{' not in Content.text(key, user='gop', reward=rewards.reward_title(action))
 
 
 def test_the_chill_text_fills_its_template(real_content):
     text = Content.text('roll_too_fast', user='gop', minutes=3)
-    assert '3' in text and '{' not in text
+    assert 'gop' in text and '{' not in text
+
+
+def test_the_dossier_prompt_names_the_new_facts_cap(real_content):
+    """The model is told the cap the code cuts at, or the facts over it are lost unseen."""
+    assert f'не больше {build.MAX_NEW_FACTS} за раз' in content._content.get()['prompts']['memory_dossier']

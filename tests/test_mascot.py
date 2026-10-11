@@ -6,14 +6,22 @@ import socket
 
 import aiohttp
 import pytest
+from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-import bot as bot_module
+from src.twitch import bot as bot_module
 from fakes import FakeBot, make_chatter, make_message
-from src.core.component import ChatComponent
+from src.twitch.core.component import ChatComponent
 from src.core.config import Mascot
-from src.local.mascot import feed, mood
-from src.local.mascot.mood import MoodTracker, target
+from src.twitch.core import sse
+from src.twitch.local.mascot import feed, mood
+from src.twitch.local.mascot.mood import MoodTracker, target
+
+
+def _app() -> web.Application:
+    app = web.Application()
+    feed.add_routes(app)
+    return app
 
 
 def _chat(tracker: MoodTracker, count: int, at: float, prefix: str = 'viewer') -> None:
@@ -131,8 +139,8 @@ def test_chat_is_not_counted_while_the_overlay_is_off(monkeypatch):
 
 def test_a_change_goes_to_every_listener(monkeypatch):
     monkeypatch.setattr(Mascot, 'ENABLED', True)
-    queue = asyncio.Queue(feed.QUEUE_SIZE)
-    feed._clients.add(queue)
+    queue = asyncio.Queue(sse.QUEUE_SIZE)
+    feed.feed.clients.add(queue)
     for nick in ('a', 'b', 'c'):
         feed.on_chat(nick)
     assert json.loads(queue.get_nowait()) == {'mood': 'bored', 'rate': 1.0, 'chatters': 3}
@@ -141,7 +149,7 @@ def test_a_change_goes_to_every_listener(monkeypatch):
 
 async def test_the_feed_sends_the_current_mood_on_connect_and_every_change(monkeypatch):
     monkeypatch.setattr(Mascot, 'ENABLED', True)
-    async with TestClient(TestServer(feed.make_app())) as client:
+    async with TestClient(TestServer(_app())) as client:
         response = await client.get('/mascot/events')
         assert response.headers['Content-Type'] == 'text/event-stream'
         # the overlay is a local file in OBS: a cross-origin listener
@@ -156,7 +164,7 @@ async def test_the_feed_sends_the_current_mood_on_connect_and_every_change(monke
 
 async def test_the_state_endpoint_answers_once_with_json(monkeypatch):
     monkeypatch.setattr(Mascot, 'ENABLED', True)
-    async with TestClient(TestServer(feed.make_app())) as client:
+    async with TestClient(TestServer(_app())) as client:
         response = await client.get('/mascot/state')
         assert await response.json() == {'mood': 'sad', 'rate': 1.0, 'chatters': 0}
 
@@ -220,8 +228,8 @@ def test_a_new_target_during_the_wait_does_not_restart_it():
 
 def test_every_listener_gets_the_change(monkeypatch):
     monkeypatch.setattr(Mascot, 'ENABLED', True)
-    first, second = asyncio.Queue(feed.QUEUE_SIZE), asyncio.Queue(feed.QUEUE_SIZE)
-    feed._clients.update({first, second})
+    first, second = asyncio.Queue(sse.QUEUE_SIZE), asyncio.Queue(sse.QUEUE_SIZE)
+    feed.feed.clients.update({first, second})
     for nick in ('a', 'b', 'c'):
         feed.on_chat(nick)
     assert json.loads(first.get_nowait())['mood'] == json.loads(second.get_nowait())['mood'] == 'bored'
@@ -229,18 +237,18 @@ def test_every_listener_gets_the_change(monkeypatch):
 
 def test_a_stuck_listener_keeps_only_the_newest_states():
     """A listener that stopped reading loses the oldest states and never blocks the rest."""
-    queue = asyncio.Queue(feed.QUEUE_SIZE)
-    feed._clients.add(queue)
-    for i in range(feed.QUEUE_SIZE + 5):
-        feed._broadcast(str(i))
+    queue = asyncio.Queue(sse.QUEUE_SIZE)
+    feed.feed.clients.add(queue)
+    for i in range(sse.QUEUE_SIZE + 5):
+        feed.feed.broadcast(str(i))
     kept = [queue.get_nowait() for _ in range(queue.qsize())]
-    assert kept == [str(i) for i in range(5, feed.QUEUE_SIZE + 5)]
+    assert kept == [str(i) for i in range(5, sse.QUEUE_SIZE + 5)]
 
 
 async def test_a_silent_feed_sends_pings(monkeypatch):
     """The overlay reconnects after a long silence, so a quiet chat must not look dead."""
-    monkeypatch.setattr(feed, 'PING_SECONDS', 0.05)
-    async with TestClient(TestServer(feed.make_app())) as client:
+    monkeypatch.setattr(sse, 'PING_SECONDS', 0.05)
+    async with TestClient(TestServer(_app())) as client:
         response = await client.get('/mascot/events')
         await _event(response)
         assert (await _raw_event(response))[0] == 'event: ping'
@@ -258,7 +266,7 @@ async def test_the_bot_stops_at_once_with_an_overlay_connected(monkeypatch):
     docker gives the whole bot to stop, and the rewards would stay open."""
     monkeypatch.setattr(Mascot, 'HOST', '127.0.0.1')
     monkeypatch.setattr(Mascot, 'PORT', _free_port())
-    task = asyncio.create_task(feed.mascot_loop())
+    task = asyncio.create_task(sse.serve(_app(), [feed.feed], Mascot.HOST, Mascot.PORT))
     async with aiohttp.ClientSession() as session:
         for _ in range(50):
             try:
@@ -279,7 +287,7 @@ async def test_a_busy_port_leaves_the_rest_of_the_bot_alone(monkeypatch, caplog)
         taken.listen()
         monkeypatch.setattr(Mascot, 'HOST', '127.0.0.1')
         monkeypatch.setattr(Mascot, 'PORT', taken.getsockname()[1])
-        await asyncio.wait_for(feed.mascot_loop(), 3)
+        await asyncio.wait_for(sse.serve(_app(), [feed.feed], Mascot.HOST, Mascot.PORT), 3)
     assert 'не открылся' in caplog.text
     assert 'Traceback' not in caplog.text
 
@@ -306,19 +314,21 @@ async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
     assert mood.tracker.chatters == 1
 
 
-@pytest.mark.parametrize('enabled', [True, False])
-async def test_the_feed_starts_only_when_enabled(monkeypatch, enabled):
-    monkeypatch.setattr(Mascot, 'ENABLED', enabled)
-    started = asyncio.Event()
+@pytest.mark.parametrize('mascot, roll', [(True, False), (False, True), (False, False)])
+async def test_the_overlays_start_only_when_enabled(monkeypatch, mascot, roll):
+    """The server runs for either overlay; the mood recount only for the mascot."""
+    monkeypatch.setattr(Mascot, 'ENABLED', mascot)
+    monkeypatch.setattr(bot_module.Roll, 'OVERLAY_ENABLED', roll)
 
-    async def loop():
-        started.set()
+    async def loop(*_args):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(bot_module, 'mascot_loop', loop)
+    monkeypatch.setattr(bot_module.sse, 'serve', loop)
     bot = bot_module.Bot()
-    bot._start_mascot()
-    assert bot._tasks.running('mascot') is enabled
+    bot._start_overlays()
+    assert bot._tasks.running('mascot') is mascot
+    assert bot._tasks.running('overlays') is (mascot or roll)
     await bot.stop_background_tasks()
 
 

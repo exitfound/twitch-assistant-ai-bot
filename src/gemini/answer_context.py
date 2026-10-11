@@ -1,25 +1,21 @@
 """What the bot sees when someone talks to it in free text, and the fallback ladder.
 
-During a stream the bot gets the whole current stream and the whole previous one,
-together at most CONTEXT_STREAM_MAX_CHARS (the start of the previous one is cut first),
-plus its memory – the profiles of the asker and of the people named, and the previous
-stream's chronicle. Offline (the session is a date) the chat is the day's last
-CONTEXT_CHAT_MESSAGES.
+The bot gets the gist of the chat, not the chat itself: the pulse (src/gemini/pulse.py –
+what the chat is about right now, retold), the last CONTEXT_CHAT_MESSAGES as the thread
+it answers in, the dossiers of the asker and of the people named, and the previous
+stream's chronicle. From raw lines the model pastes pieces back in quotes.
 
 Gemini's input filter cannot be switched off and judges the whole request by
-combinations of messages, blocking roughly every fifth request that carries two
-streams. A blocked request is asked again with less, one rung at a time:
-  1. current stream + previous stream
-  2. the whole current stream
-  3. the last CONTEXT_CHAT_MESSAGES of it, still with memory
-  4. the same without memory, search and «language»
+combinations of messages. A blocked request is asked again with less, one rung at a time:
+  1. everything
+  2. without search and «language»
+  3. the thread and the question alone
 A block comes back in ~0.3 s, so a rung costs almost no time. The output filter is
 random rather than about the size, so an answer it stopped is asked once more on the
 same rung; an answer with nothing in it goes straight to the last rung, and no answer
 at all (timeout, network) ends the walk.
 
-The ladder only decides how much of the stored data goes into one request. The context
-probe (src/cli/probe.py) uses this module too, so what is measured is what is sent.
+The context probe (src/cli/probe.py) uses this module too, so what is measured is what is sent.
 """
 import asyncio
 import logging
@@ -28,24 +24,19 @@ from dataclasses import dataclass
 
 from google.genai import types
 
-from src.core.config import Context, Memory
+from src.core.config import Context
 from src.core.content import Content
-from src.core.database import (
-    get_previous_chat_session, get_random_knowledge, get_recent_chat, get_relevant_facts,
-    search_context,
-)
+from src.core.database import get_random_knowledge, get_recent_chat, get_relevant_facts, search_context
 from src.core.utils import clean_nick
-from src.gemini.context import ContextBuilder, chat_chars, tail_within
+from src.gemini import dossier
+from src.gemini.context import ContextBuilder
 from src.gemini.ladder import Rung, unique_rungs, walk
 from src.gemini.memory import storage
 
 logger = logging.getLogger(__name__)
 
-# Profiles in one answer: the asker plus up to three people named in the question
+# Dossiers in one answer: the asker plus up to three people named in the question
 MAX_PEOPLE = 4
-# Over the character budget a stream loses its start in steps of this many messages:
-# a cut moving with every new message would break the prefix Gemini caches
-CUT_STEP = 50
 # A Twitch login: 4–25 Latin letters, digits and underscores, standing as a whole word.
 # Russian words are never logins, so they are not looked up
 _NICK = re.compile(r'(?<!\w)[a-z0-9_]{4,25}(?!\w)', re.IGNORECASE)
@@ -63,6 +54,8 @@ class Question:
     # Treat the session as a stream whatever its id says: a date-shaped id may still
     # cover the chat of one stream (probe only)
     stream: bool | None = None
+    # What the chat is about right now (src/gemini/pulse.py); None – not built yet
+    pulse: str | None = None
 
 
 def is_stream_session(session_id: str) -> bool:
@@ -71,34 +64,19 @@ def is_stream_session(session_id: str) -> bool:
 
 
 async def _people(user: str, prompt: str) -> list[str]:
-    """Profiles of the asker and of the chatters named in the question."""
+    """Dossiers of the asker and of the chatters named in the question. The cap counts
+    dossiers, not words: «dota» and «pubg» are looked up and take no place."""
     named = [clean_nick(w) for w in _NICK.findall(prompt)]
-    nicks = list(dict.fromkeys([user, *named]))
-    profiles = await storage.get_profiles(nicks)
-    lines = []
-    for nick in nicks:
-        if len(lines) >= MAX_PEOPLE:
-            break
-        profile = profiles.get(nick)
-        if profile is None:
-            continue
-        relations = '; '.join(f'{r["nick"]} – {r["note"]}' for r in profile.relations)
-        lines.append(f'{nick}: {profile.portrait}' + (f' Отношения: {relations}' if relations else ''))
-    return lines
+    return await dossier.people([user, *named], prompt, Context.DOSSIER_FACTS, Context.DOSSIER_FACTS // 2,
+                                limit=MAX_PEOPLE)
 
 
 async def ladder(q: Question) -> list[Rung]:
     """(rung name, prompt), richest first; each next one is what to send when the
-    previous was blocked. Identical rungs (a short stream, no previous one) are dropped."""
+    previous was blocked. Identical rungs are dropped."""
     stream = q.stream if q.stream is not None else is_stream_session(q.session_id)
-    chat_limit = Context.STREAM_MAX_MESSAGES if stream else Context.CHAT_MESSAGES
-    previous_session = (
-        await get_previous_chat_session(q.session_id, Memory.CONVERSATION_MIN_MESSAGES)
-        if stream else None
-    )
-    current, previous, facts, found, language, people, chronicle = await asyncio.gather(
-        get_recent_chat(q.session_id, chat_limit, q.before_id),
-        get_recent_chat(previous_session, Context.STREAM_MAX_MESSAGES) if previous_session else _nothing(),
+    thread, facts, found, language, people, chronicle = await asyncio.gather(
+        get_recent_chat(q.session_id, Context.CHAT_MESSAGES, q.before_id),
         get_relevant_facts(q.user, q.prompt),
         search_context(q.prompt, Context.SEARCH_RESULTS),
         get_random_knowledge(Context.KNOWLEDGE_RANDOM),
@@ -106,44 +84,30 @@ async def ladder(q: Question) -> list[Rung]:
         # Offline the previous stream is simply the latest one
         storage.chronicle_before(q.session_id if stream else None),
     )
-    # Over the budget the start of the previous stream goes first, then of the current one
-    current = tail_within(current, Context.STREAM_MAX_CHARS, CUT_STEP)
-    previous = tail_within(previous, Context.STREAM_MAX_CHARS - chat_chars(current), CUT_STEP)
-    recent = current[-Context.CHAT_MESSAGES:]
     question = Content.prompt('user_question', user=q.user, prompt=q.prompt)
 
-    def build(chat: list, prev: list, *, memory: bool = True, extras: bool = True) -> str:
-        # What stays the same for a whole stream goes first and the chat only grows at
-        # its end, so consecutive answers share a long prefix and Gemini's implicit
-        # cache serves it; what depends on the asker and the question comes last
+    def build(*, memory: bool = True, extras: bool = True) -> str:
         b = ContextBuilder()
         if memory:
             b.add_lines(Content.label('chronicle'), [chronicle] if chronicle else [])
-        b.add_pairs(Content.label('prev_stream'), prev)
-        b.add_pairs(Content.label('chat'), chat)
-        b.add_pairs(Content.label('facts'), facts)
+            b.add_lines(Content.label('pulse'), [q.pulse] if q.pulse else [])
+        b.add_pairs(Content.label('chat'), thread)
         if memory:
-            b.add_lines(Content.label('people'), people)
+            b.add_pairs(Content.label('facts'), facts)
+            b.add_lines(Content.label('dossier'), people)
         if extras:
             b.add_lines(Content.label('channel'), found)
             b.add_lines(Content.label('language'), language)
         b.add_lines(Content.label('replied'), [q.replied] if q.replied else [])
-        if memory and (people or chronicle):
+        if memory and (people or chronicle or q.pulse):
             b.add_raw(Content.prompt('memory_hint'))
         return b.add_raw(question).build()
 
-    rungs = []
-    if stream:
-        rungs += [('два стрима', build(current, previous)), ('весь стрим', build(current, []))]
-    rungs += [
-        (f'последние {Context.CHAT_MESSAGES}', build(recent, [])),
-        ('без памяти и поиска', build(recent, [], memory=False, extras=False)),
-    ]
-    return unique_rungs(rungs)
-
-
-async def _nothing() -> list:
-    return []
+    return unique_rungs([
+        ('всё', build()),
+        ('без поиска и языка', build(extras=False)),
+        ('только чат', build(memory=False, extras=False)),
+    ])
 
 
 async def answer(q: Question, config: types.GenerateContentConfig) -> tuple[str | None, str]:

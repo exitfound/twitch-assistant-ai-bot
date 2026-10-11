@@ -9,8 +9,9 @@ import pytest
 
 from src.core import logging_setup
 from src.core.utils import (
-    NICK_MAX, clean_nick, defuse, find_banned, gather_cancelling, reply, reply_to_bot, safe_format,
+    NICK_MAX, clean_nick, defuse, find_banned, gather_cancelling, safe_format,
 )
+from src.twitch.core.replies import reply, reply_to_bot
 from src.gemini.output import (
     EM_DASH, EN_DASH, cleanup_response, fix_dashes, split_into_chunks, strip_links, strip_markdown,
     strip_pings, trim_to_sentence,

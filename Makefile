@@ -1,7 +1,7 @@
 # Everyday commands. There is no CI: `make check` is what runs before a merge.
 PY := ./venv/bin/python3
 
-.PHONY: venv lint fix test check audit lock up restart logs backup oauth
+.PHONY: venv lint fix test check audit lock up restart logs backup oauth pages
 
 LOCK := $(PY) -m piptools compile --generate-hashes --strip-extras --no-emit-index-url
 
@@ -22,8 +22,18 @@ test:
 
 check: lint test
 
+# CVE-2025-69277 in PyNaCl 1.5.0 (two PYSEC ids): libsodium's ed25519 point check, which
+# the Discord voice does not use – it encrypts with secretbox. discord.py 2.7.1 pins
+# PyNaCl<1.6, so 1.6.2 cannot be installed; drop the ignore once discord.py allows it
+AUDIT_IGNORE := --ignore-vuln PYSEC-2026-1448 --ignore-vuln PYSEC-2026-3002
+# transformers 4.57.6 (six ids): loading foreign models from the Hub, Trainer with torch,
+# save_pretrained, remote code. ruaccent takes only a tokenizer from it, read from the
+# files baked into the image, offline (HF_HUB_OFFLINE); it fails with transformers 5
+AUDIT_IGNORE += --ignore-vuln PYSEC-2025-217 --ignore-vuln PYSEC-2026-2288 --ignore-vuln PYSEC-2026-2289 \
+	--ignore-vuln PYSEC-2026-2290 --ignore-vuln PYSEC-2026-3929 --ignore-vuln PYSEC-2026-4174
+
 audit:
-	$(PY) -m pip_audit -r requirements.txt -r requirements-dev.txt
+	$(PY) -m pip_audit -r requirements.txt -r requirements-dev.txt $(AUDIT_IGNORE)
 
 lock:
 	$(LOCK) -o requirements.txt requirements.in
@@ -52,3 +62,17 @@ oauth:
 	@echo "Открой ссылку из лога, войди нужным аккаунтом, затем Ctrl+C – контейнер поднимется сам."
 	docker compose stop bot
 	@trap "true" INT; cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py; cd .. && docker compose up -d bot
+
+# The bot map on GitHub Pages, served from docs/ of the branch checked out here: commits
+# only the map, pushes the branch and points Pages at it. .nojekyll keeps Jekyll off docs/,
+# whose Markdown is not meant to be built into pages
+PAGES := docs/index.html docs/.nojekyll
+
+pages:
+	@touch docs/.nojekyll
+	git add $(PAGES)
+	git diff --cached --quiet -- $(PAGES) || git commit -m "docs: карта бота" -- $(PAGES)
+	git push -u origin HEAD
+	gh api -X PUT repos/{owner}/{repo}/pages -f "source[branch]=$$(git branch --show-current)" -f "source[path]=/docs" \
+		|| gh api -X POST repos/{owner}/{repo}/pages -f "source[branch]=$$(git branch --show-current)" -f "source[path]=/docs"
+	@echo "Карта: https://$$(gh api user --jq .login).github.io/$$(gh repo view --json name --jq .name)/"

@@ -1,6 +1,7 @@
 """!who / !versus material: what the model is told about the target."""
 from src.core.database import get_db
 from src.gemini import who
+from src.gemini.memory import storage
 
 
 async def _fact(author: str, fact: str) -> None:
@@ -26,7 +27,7 @@ async def test_a_nick_prefix_is_not_the_nick(db):
 
 def _material(n: int) -> who.Material:
     lines = [f'строка{i:02d}' for i in range(n)]
-    return who.Material('gop', [('a', f'факт{i:02d}') for i in range(n)], lines, lines, lines,
+    return who.Material('gop', [('a', f'факт{i:02d}') for i in range(n)], lines, lines,
                         lines, lines, [f'диалог{i:02d}' for i in range(n)])
 
 
@@ -56,3 +57,15 @@ async def test_versus_takes_half_the_dialogues(db):
     await db_.commit()
     assert len((await who.material('gop', 1, 10)).dialogue) == 10
     assert len((await who.material('gop', 0.5, 10)).dialogue) == 5
+
+
+async def test_material_samples_the_dossier(db, monkeypatch):
+    """The headline leads, then a fresh random sample of facts and the catchphrases;
+    !versus gets half the facts per person."""
+    monkeypatch.setattr(who.Context, 'WHO_FACTS', 4)
+    facts = [('who', f'факт {i}') for i in range(10)]
+    await storage.apply_dossier(storage.Profile('gop', 'шапка', [], 'k', 1, ('ну че',)), facts, [], [], 40)
+    full = (await who.material('gop', 1, 10)).dossier
+    assert full[0] == 'шапка' and full[-1].endswith('ну че')
+    assert len(full) == 6 and all(line.startswith('факт') for line in full[1:5])
+    assert len((await who.material('gop', 0.5, 10)).dossier) == 4

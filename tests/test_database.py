@@ -13,7 +13,7 @@ from src.core.database import (
 )
 from src.core.db import connection, schema
 from src.core.db.knowledge import _sanitize_fts_query
-from src.local.roll.storage import get_session_loser, save_roll
+from src.twitch.local.roll.storage import get_session_loser, save_roll
 
 
 async def _tables(db) -> set[str]:
@@ -110,6 +110,14 @@ async def test_channel_ceiling_counts_only_the_dispatcher_kind(db):
     await record_bot_use('a', 'who')
     await record_bot_use('b', 'gemini')
     assert await count_channel_bot_uses('gemini', 60) == 2
+
+
+async def test_channel_ceiling_leaves_out_the_broadcaster(db):
+    """The streamer's own requests must not close the bot to chat."""
+    await record_bot_use('streamer', 'gemini')
+    await record_bot_use('viewer', 'gemini')
+    assert await count_channel_bot_uses('gemini', 60, exclude='Streamer') == 1
+    assert await count_channel_bot_uses('gemini', 60, exclude=None) == 2
 
 
 async def test_user_interactions_skip_every_tagged_row(db):
@@ -235,21 +243,6 @@ async def test_a_cancelled_begin_does_not_block_every_later_write(db):
 async def _chat(session_id: str, count: int) -> None:
     for i in range(count):
         await database.save_chat_message(session_id, 'gop', f'сообщение {i}')
-
-
-async def test_previous_session_survives_new_chat(db):
-    await _chat('2026-09-18 20:00', 3)
-    await _chat('2026-09-19 20:00', 1)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
-    await _chat('2026-09-19 20:00', 5)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
-
-
-async def test_previous_session_of_a_silent_stream_is_looked_up_again(db):
-    await _chat('2026-09-18 20:00', 3)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) is None
-    await _chat('2026-09-19 20:00', 1)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
 
 
 async def test_last_session_follows_a_new_stream(db):

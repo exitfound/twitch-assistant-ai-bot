@@ -7,11 +7,11 @@ import pytest
 
 from fakes import FakeBot, make_chatter, make_message
 from src.core import content
-from src.core.component import ChatComponent
+from src.twitch.core.component import ChatComponent
 from src.core.config import Cooldown, Follow
 from src.core.content import Content, validate_content
-from src.local.channel import MESSAGE_MAX
-from src.local.roll.command import handle_roll
+from src.twitch.local.channel import MESSAGE_MAX
+from src.twitch.local.roll.command import handle_roll
 
 
 def _channel(*lines: str) -> None:

@@ -32,18 +32,21 @@ import collections
 import pytest
 
 from fakes import FakeBot
-from src.core import content, database
+from src.core import content, database, speech
 from src.core.db import chat as db_chat
 from src.core.db import connection
 from src.core.db import knowledge as db_knowledge
 from src.core.config import Gemini
-from src.gemini import client, commands
+from src.discord.local.voice import stress
+from src.gemini import client, pulse
+from src.twitch.gemini import commands
 from src.gemini.memory import build
-from src.gemini.picture import command as picture_command
-from src.local import clip, follow, help_announce
-from src.local.mascot import feed as mascot_feed
-from src.local.mascot import mood as mascot_mood
-from src.local.roll import game, perks
+from src.twitch.gemini import picture as picture_command
+from src.twitch.local import clip, follow, help_announce
+from src.twitch.local.mascot import feed as mascot_feed
+from src.twitch.local.mascot import mood as mascot_mood
+from src.twitch.local.roll import game, perks, tiers
+from src.twitch.local.roll import overlay as roll_overlay
 
 def content_text() -> str:
     """A CONTENT.md with every required key: the value is the key's own name, so a test
@@ -72,23 +75,32 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(connection, '_db_lock', asyncio.Lock())
     monkeypatch.setattr(connection, '_write_lock', asyncio.Lock())
     monkeypatch.setattr(db_knowledge, '_knowledge_ids', None)
-    monkeypatch.setattr(db_chat, '_previous_sessions', {})
     monkeypatch.setattr(db_chat, '_last_sessions', {})
     monkeypatch.setattr(client, '_semaphore', asyncio.Semaphore(Gemini.CONCURRENCY))
     monkeypatch.setattr(game, '_lock', asyncio.Lock())
-    monkeypatch.setattr(build, '_slots', asyncio.Semaphore(build.MEMORY_CONCURRENCY))
+    monkeypatch.setattr(client, '_background', asyncio.Semaphore(client.BACKGROUND_CONCURRENCY))
     monkeypatch.setattr(build, '_lock', asyncio.Lock())
+    monkeypatch.setattr(pulse, '_pulse', None)
     for limit in [*commands.LIMITS.values(), picture_command.LIMIT, clip.LIMIT]:
         monkeypatch.setattr(limit, 'busy', set())
     monkeypatch.setattr(picture_command, '_cache', collections.OrderedDict())
     monkeypatch.setattr(perks, '_pending', {})
+    monkeypatch.setattr(tiers, '_written', {})
     monkeypatch.setattr(help_announce, '_help_shown_at', 0.0)
     monkeypatch.setattr(follow, '_sent_at', collections.deque(maxlen=follow.GREETINGS_PER_MINUTE))
     monkeypatch.setattr(follow, '_greeted', set())
     monkeypatch.setattr(client, 'usage', {'prompt': 0, 'cached': 0, 'output': 0})
     monkeypatch.setattr(mascot_mood, 'tracker', mascot_mood.MoodTracker())
     monkeypatch.setattr(mascot_feed, 'tracker', mascot_mood.tracker)
-    monkeypatch.setattr(mascot_feed, '_clients', set())
+    monkeypatch.setattr(mascot_feed.feed, 'clients', set())
+    monkeypatch.setattr(roll_overlay.feed, 'clients', set())
+    monkeypatch.setattr(roll_overlay, '_state',
+                        {'type': 'state', 'live': False, 'titles': {'best': None, 'worst': None}})
+    monkeypatch.setattr(roll_overlay, '_active_at', None)
+    monkeypatch.setattr(speech, '_listeners', [])
+    # ruaccent is not loaded in tests: a test that needs stresses sets a fake accentuator
+    monkeypatch.setattr(stress, '_accentuator', None)
+    monkeypatch.setattr(stress, 'load', lambda path: None)
 
     def no_gemini():
         raise AssertionError('A test reached the real Gemini client: patch generate() where it is used')

@@ -7,9 +7,10 @@ from unittest.mock import AsyncMock
 
 def make_chatter(name: str = 'viewer', *, broadcaster=False, moderator=False,
                  subscriber=False, founder=False, vip=False) -> SimpleNamespace:
-    """The five badges the bot reads, plus a name and an id."""
+    """The five badges the bot reads, plus a name and an id. As in twitchio, the
+    broadcaster counts as a moderator."""
     return SimpleNamespace(
-        name=name, id=f'id-{name}', broadcaster=broadcaster, moderator=moderator,
+        name=name, id=f'id-{name}', broadcaster=broadcaster, moderator=moderator or broadcaster,
         subscriber=subscriber, founder=founder, vip=vip,
     )
 

@@ -154,17 +154,36 @@ async def test_a_redemption_gets_the_status_of_its_outcome(db, twitch, monkeypat
     await service.start('chan', open_=True)
     seen = {}
 
-    async def decide(bot_, action, redemption_id, user, user_input):
+    async def decide(bot_, action, redemption_id, user, user_input, *, follows):
         seen.update(action=action, user=user)
         return decision
     monkeypatch.setattr(rewards, 'handle_redemption', decide)
     reward_id, action = next(iter(service._actions.items()))
     payload = SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
-                              user=SimpleNamespace(name='GoP'), user_input='')
+                              user=SimpleNamespace(name='GoP', id='id-gop'), user_input='')
     await service.on_redemption(payload)
 
     assert seen == {'action': action, 'user': 'gop'}
     assert _statuses(bot) == ({'r-1': status} if status else {})
+
+
+async def test_the_follow_question_goes_to_the_shared_cache_by_user_id(db, twitch, monkeypatch):
+    """The chat's cache: a follow event clears it there, and the buyer is asked by id."""
+    _, bot, _ = twitch
+    followers = SimpleNamespace(is_follower=AsyncMock(return_value=False))
+    service = RewardService(bot, followers)
+    await service.start('chan', open_=True)
+    answers = []
+
+    async def decide(bot_, action, redemption_id, user, user_input, *, follows):
+        answers.append(await follows())
+        return False
+    monkeypatch.setattr(rewards, 'handle_redemption', decide)
+    reward_id = next(iter(service._actions))
+    await service.on_redemption(SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
+                                                user=SimpleNamespace(name='gop', id='42'), user_input=''))
+    assert answers == [False]
+    followers.is_follower.assert_awaited_once_with(bot, '42')
 
 
 async def test_a_reward_of_another_app_is_not_touched(db, twitch, monkeypatch):

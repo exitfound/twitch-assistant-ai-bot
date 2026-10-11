@@ -22,6 +22,7 @@ from twitchio.ext import commands
 
 from src.core.config import Rewards, Roll
 from src.core.content import Content
+from src.twitch.core.followers import FollowerCache
 from src.twitch.local.roll import game
 from src.twitch.local.roll.redemption import handle_redemption
 from src.twitch.local.roll.storage import get_action_status, get_reward_ids, save_reward_id
@@ -97,8 +98,10 @@ def _changes(reward: twitchio.CustomReward, spec: RewardSpec) -> dict:
 
 class RewardService:
 
-    def __init__(self, bot) -> None:
+    def __init__(self, bot, followers: FollowerCache | None = None) -> None:
         self._bot = bot
+        # The chat's cache: a follow event clears it there, and a new follower may redeem at once
+        self._followers = followers if followers is not None else FollowerCache()
         self._channel_id: str | None = None
         self._actions: dict[str, str] = {}      # Twitch reward id → action
         # Whether the rewards should be open, i.e. the stream is live. Written by set_open()
@@ -190,6 +193,7 @@ class RewardService:
             return                  # a reward of another app, not the bot's
         decision = await handle_redemption(
             self._bot, action, payload.id, (payload.user.name or '').lower(), payload.user_input,
+            follows=lambda: self._followers.is_follower(self._bot, payload.user.id),
         )
         if decision is None:
             return

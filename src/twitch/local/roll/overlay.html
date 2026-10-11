@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Roll – оверлей</title>
+<!--
+  Оверлей игры Roll для OBS (Browser Source, 1920×1080). Бот отдаёт страницу на /roll/
+  и события на /roll/events. Параметры адреса:
+    layout=feed|left|card|hud  вид: лента справа (по умолчанию), левый верхний угол (титулы и под
+                           ними одна карточка, новая сменяет старую), карточка по центру, плашка снизу
+    scale=0.8              размер оверлея от обычного (0.3–3), рисуется заново, а не растягивается
+    titles=5               титулы гаснут через столько минут после последнего хода игры и возвращаются
+                           с новым; 0 – видны всегда
+    nicks=0                ники заменяются на «Игрок 1, 2…»
+    demo=1                 страница сама играет – проверить вид без эфира и без бота
+    server=http://host:8787  адрес бота, если страница открыта как локальный файл
+  Тексты карточек – в TEXT ниже. Подробно – BOT.md, «Оверлей игры в OBS».
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Not render-blocking: without the network the overlay runs on system fonts at once -->
+<link rel="stylesheet" media="print" onload="this.media='all'" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@500;700&family=Ruslan+Display&family=Unbounded:wght@700;900&display=swap">
+<style>
+/* rgba before each color-mix: Chromium before 111 (the browser of OBS 30 and older) drops color-mix;
+   each rgba is the same --o-* colour at the same share, so a palette change edits both */
+/* The page is the whole OBS frame: a size container, so every size is in cqw and the
+   overlay scales with the Browser Source width. ?scale= narrows or widens the container,
+   anchored on the side the layout sits on, so a resize is laid out again rather than resampled */
+html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+.stage {
+  position: fixed; top: 0; bottom: 0; left: 0; width: calc(100% * var(--scale, 1)); container-type: inline-size;
+  /* Dusky lavender with one tone per spell: bright lavender Roll, turquoise reroll, dark violet curse,
+     blue shield, light gold for everything holy; the titles are burgundy and dark blue */
+  --o-bg: rgba(36, 30, 56, .88); --o-fg: #f7f4ff; --o-muted: #c2b8dc; --o-line: #a493d9;
+  --o-accent: #b9a0ff; --o-reroll: #3fd9c8; --o-curse: #9a63f5; --o-curse-bg: rgba(46, 20, 86, .92);
+  --o-shield: #5c9dff; --o-light: #ffe0a0; --o-good: #e0587c; --o-bad: #5270e8;
+  --o-bad-ink: #8aa0ff; /* the dark blue frames the plate; numbers and the icon take a lighter blue to stay legible */
+  --o-display: 'Ruslan Display', 'Golos Text', serif; --o-body: 'Golos Text', system-ui, sans-serif;
+  --o-num: 'Unbounded', 'Golos Text', sans-serif;
+  --o-radius: .5cqw; --o-border: .12cqw solid var(--o-line); --o-shadow: 0 .6cqw 2cqw #0009;
+  color: var(--o-fg); font-family: var(--o-body);
+}
+.stage[data-layout="feed"] { left: auto; right: 0; }
+.stage[data-layout="card"] { right: 0; margin: 0 auto; }
+* { box-sizing: border-box; }
+
+/* ---------- card ---------- */
+.card {
+  background: var(--o-bg); color: var(--o-fg); border: var(--o-border); border-radius: var(--o-radius);
+  box-shadow: var(--o-shadow); position: relative; overflow: hidden;
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: .8cqw;
+  padding: .6cqw .9cqw;
+  animation: card-in .45s cubic-bezier(.2, .9, .3, 1.2) both;
+}
+.card.out { animation: card-out .5s ease-in forwards; }
+/* A card is set like a title plate: the move in the display face, small and tinted by its
+   colour, the nick under it, the number on the right */
+.card .ico { width: 1.9cqw; height: 1.9cqw; color: var(--tone, var(--o-accent)); }
+.card .ico svg { width: 100%; height: 100%; display: block; }
+.card .body { min-width: 0; }
+.card .what { font: 1cqw/1.2 var(--o-display); letter-spacing: .02em; color: var(--o-muted);
+  color: color-mix(in srgb, var(--tone, var(--o-accent)) 40%, var(--o-fg)); }
+/* «@actor → @target» with two long nicks takes a second line rather than losing the target */
+.card .who { font: 700 1.15cqw/1.2 var(--o-body); overflow: hidden; overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.card .sub { font: 500 .85cqw/1.35 var(--o-body); color: var(--o-muted); }
+.card .num { font: 900 1.7cqw/1 var(--o-num); font-variant-numeric: tabular-nums; text-align: right; min-width: 3.4cqw; }
+.card .num small { display: block; font: 600 .8cqw/1.2 var(--o-body); color: var(--o-muted); letter-spacing: .03em; margin-top: .25cqw; white-space: nowrap; }
+.num.low { color: var(--o-bad-ink); }
+.num.high { color: var(--o-good); }
+.num.spin { opacity: .75; }
+.num.land { animation: land .35s ease-out; }
+.strike { text-decoration: line-through; opacity: .6; }
+
+.card.t-curse, .card.t-sglaz { --tone: var(--o-curse); background: var(--o-curse-bg); }
+.card.t-shield, .card.t-blocked { --tone: var(--o-shield); }
+.card.t-bless, .card.t-cleanse, .card.t-lift { --tone: var(--o-light); }
+.card.t-reroll { --tone: var(--o-reroll); }
+/* The frame takes the card's tone; a browser without color-mix keeps the plain frame */
+.card { border-color: color-mix(in srgb, var(--tone, var(--o-accent)) 75%, transparent); }
+.card.t-curse::after, .card.t-sglaz::after { /* a chain sweeping across a fresh curse */
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: repeating-linear-gradient(115deg, transparent 0 1.6cqw, rgba(154, 99, 245, .5) 1.6cqw 2cqw);
+  background: repeating-linear-gradient(115deg, transparent 0 1.6cqw, color-mix(in srgb, var(--o-curse) 50%, transparent) 1.6cqw 2cqw);
+  animation: chain 1.4s ease-out both;
+}
+.card.t-shield::after, .card.t-bless::after, .card.t-blocked::after { /* a bubble around a protected nick */
+  content: ''; position: absolute; left: .4cqw; top: 50%; width: 2.9cqw; height: 2.9cqw; margin-top: -1.45cqw;
+  border-radius: 50%; border: .18cqw solid var(--tone); pointer-events: none; animation: bubble 1.2s ease-out both;
+}
+.card.t-blocked { animation: card-in .45s cubic-bezier(.2,.9,.3,1.2) both, shake .4s .45s ease-in-out; }
+.card.t-cleanse::after, .card.t-lift::after { /* the curse breaking */
+  content: ''; position: absolute; inset: -20%; pointer-events: none;
+  background: radial-gradient(circle at 12% 50%, rgba(255, 224, 160, .55) 0 8%, transparent 30%);
+  background: radial-gradient(circle at 12% 50%, color-mix(in srgb, var(--o-light) 55%, transparent) 0 8%, transparent 30%);
+  animation: burst 1s ease-out both;
+}
+.bar { position: absolute; left: 0; right: 0; bottom: 0; height: .3cqw; background: rgba(154, 99, 245, .25); background: color-mix(in srgb, var(--o-curse) 25%, transparent); overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--o-curse); width: var(--from); animation: drop 1.1s .4s ease-in-out forwards; }
+
+@keyframes card-in { from { opacity: 0; transform: translateY(1.2cqw) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes card-out { to { opacity: 0; transform: translateY(-1cqw) scale(.97); } }
+@keyframes land { 0% { transform: scale(1.35); } 100% { transform: scale(1); } }
+@keyframes chain { from { transform: translateX(-100%); opacity: 1; } 70% { opacity: 1; } to { transform: translateX(10%); opacity: .25; } }
+@keyframes bubble { 0% { transform: scale(.3); opacity: 0; } 40% { opacity: 1; } 100% { transform: scale(1.25); opacity: 0; } }
+@keyframes shake { 25% { transform: translateX(-.5cqw); } 50% { transform: translateX(.5cqw); } 75% { transform: translateX(-.3cqw); } }
+@keyframes burst { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
+@keyframes drop { to { width: var(--to); } }
+@keyframes flash { 0% { box-shadow: 0 0 0 0 var(--tone); } 100% { box-shadow: 0 0 0 1.2cqw transparent; } }
+
+/* ---------- titles ---------- */
+.titles { display: grid; gap: .5cqw; transition: opacity .6s; }
+.titles.empty { opacity: 0; }
+.title {
+  background: var(--o-bg); color: var(--o-fg); border: var(--o-border); border-radius: var(--o-radius); box-shadow: var(--o-shadow);
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; column-gap: .8cqw; padding: .6cqw .9cqw; min-width: 0;
+}
+.title .ico { width: 1.9cqw; height: 1.9cqw; }
+.title .ico svg { width: 100%; height: 100%; display: block; }
+.title.best { --tone: var(--o-good); }
+.title.worst { --tone: var(--o-bad); --ink: var(--o-bad-ink); }
+/* A title plate is lit from the side of its icon in its own colour; without color-mix it stays plain */
+.title {
+  border-color: color-mix(in srgb, var(--tone) 75%, transparent);
+  background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 22%, transparent), transparent 70%), var(--o-bg);
+}
+.title .ico { color: var(--ink, var(--tone)); }
+.title .lbl { font: 1cqw/1.2 var(--o-display); letter-spacing: .02em; color: var(--o-muted); color: color-mix(in srgb, var(--tone) 40%, var(--o-fg)); }
+.title .nick { font: 700 1.15cqw/1.2 var(--o-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title .val { font: 900 1.7cqw/1 var(--o-num); font-variant-numeric: tabular-nums; }
+.title .val { color: var(--ink, var(--tone)); }
+.title.changed { animation: flash .9s ease-out; }
+
+/* ---------- layout: feed on the right ---------- */
+.overlay { position: absolute; inset: 0; pointer-events: none; }
+.overlay[data-layout="feed"] .titles { position: absolute; right: 1.6cqw; top: 1.6cqw; width: 25cqw; }
+.overlay[data-layout="feed"] .list { position: absolute; right: 1.6cqw; bottom: 1.6cqw; width: 25cqw; display: flex; flex-direction: column; gap: .7cqw; }
+
+/* A card is three lines at most: with two lines of nicks or a hint that wraps, the hint gives
+   way (fit()); a card without a number keeps an invisible one, so every card is one height */
+.card.tight .sub { display: none; }
+/* Every heading – the move on a card, the title on a plate – ends with a colon */
+.card .what::after, .title .lbl::after { content: ':'; }
+.card .what, .title .lbl { white-space: nowrap; }
+
+/* ---------- layout: titles in the top left corner, one event slot right under them ---------- */
+/* An empty titles plate keeps its place, so the slot never jumps when it appears; the outgoing
+   and the incoming card share one grid cell and cross-fade */
+.overlay[data-layout="left"] { display: flex; flex-direction: column; align-items: flex-start; gap: 1.8cqw; padding: 1.6cqw; }
+.overlay[data-layout="left"] .titles, .overlay[data-layout="left"] .list { width: 26.5cqw; }
+.overlay[data-layout="left"] .list { display: grid; }
+.overlay[data-layout="left"] .list .card { grid-area: 1 / 1; }
+/* Three lines tall whatever the card holds – heading, nick, hint – so a plain Roll is as high
+   as a card with a hint and the slot does not jump; the title plates take the same height */
+.overlay[data-layout="left"] .card, .overlay[data-layout="feed"] .card,
+.overlay[data-layout="left"] .title, .overlay[data-layout="feed"] .title { grid-template-rows: minmax(3.75cqw, auto); }
+
+/* ---------- layout: one big card in the centre ---------- */
+.overlay[data-layout="card"] .titles { display: none; }
+.overlay[data-layout="card"] .list { position: absolute; left: 50%; top: 14%; width: 40cqw; transform: translateX(-50%); display: grid; }
+.overlay[data-layout="card"] .list .card { grid-area: 1 / 1; padding: 1.6cqw 2cqw; column-gap: 1.6cqw; }
+.overlay[data-layout="card"] .card .ico { width: 4.4cqw; height: 4.4cqw; }
+.overlay[data-layout="card"] .card .what { font-size: 1.1cqw; }
+.overlay[data-layout="card"] .card .who { font-size: 2.1cqw; }
+.overlay[data-layout="card"] .card .sub { font-size: 1.3cqw; }
+.overlay[data-layout="card"] .card .num { font-size: 5.6cqw; min-width: 8cqw; }
+
+/* ---------- layout: titles bar at the bottom + short lines ---------- */
+.overlay[data-layout="hud"] .titles { position: absolute; left: 22.4cqw; bottom: 1.6cqw; width: 46cqw; grid-template-columns: 1fr 1fr; }
+.overlay[data-layout="hud"] .list { position: absolute; left: 22.4cqw; bottom: 7.4cqw; width: 30cqw; display: flex; flex-direction: column; gap: .5cqw; }
+.overlay[data-layout="hud"] .card { padding: .55cqw .8cqw; column-gap: .7cqw; }
+.overlay[data-layout="hud"] .card .ico { width: 1.9cqw; height: 1.9cqw; }
+.overlay[data-layout="hud"] .card .who { font-size: 1.05cqw; }
+.overlay[data-layout="hud"] .card .what { font-size: .66cqw; }
+.overlay[data-layout="hud"] .card .sub { font-size: .8cqw; }
+.overlay[data-layout="hud"] .card .num { font-size: 2cqw; min-width: 3.6cqw; }
+.overlay[data-layout="hud"] .card .num small { display: none; }
+/* After the layouts: the invisible number of a card without one takes no width in any of them */
+.overlay .card .num.blank { visibility: hidden; min-width: 0; width: 0; overflow: hidden; }
+</style>
+</head>
+<body>
+<div class="stage" id="stage">
+  <div class="overlay" id="overlay" data-layout="feed">
+    <div class="titles empty" id="titles"></div>
+    <div class="list" id="list"></div>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // Everything the overlay says. {n} – a number, {who} – a nick
+  var TEXT = {
+    roll: 'Roll', extra: 'Доп. Roll', reroll: 'Переброс', curse: 'Проклятие', shield: 'Щит',
+    blocked: 'Переброс отбит', cleanse: 'Очищение', lift: 'Проклятие спало',
+    perks: 'Прошлый стрим', bless: 'Благословение', sglaz: 'Сглаз',
+    best: 'Достойнейший китежанин', worst: 'Подзалупный китежанин',
+    newBest: 'Новый достойнейший китежанин', newWorst: 'Новый подзалупный китежанин',
+    outOf: 'из {n}',
+    paid: 'за баллы канала',
+    cursedNext: 'дальше максимум {n}',
+    cursedHold: 'проклятие · ещё {n} мин.',
+    firstRoll: 'ещё не бросал, первый Roll',
+    curseHit: 'дальше максимум {n}, до {floor}',
+    shieldUp: '{n} мин. перебросы не берут',
+    blockedShield: 'у цели щит · баллы вернулись',
+    blockedBless: 'у цели Благословение · баллы вернулись',
+    cleanseBack: 'Roll вернулся · оберег {n} мин.',
+    cleanseFree: 'Roll снова до {max} · оберег {n} мин.',
+    liftFree: 'Roll снова до {n}',
+    perkBless: 'Благословение на {n} мин.',
+    perkSglaz: 'Сглаз · первый Roll не выше {n}',
+    blessOn: 'перебросы не берут {n} мин.',
+    sglazOn: 'таймер пошёл · первый Roll не выше {ceiling}',
+  };
+
+  var ICON = {
+    dice: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3.5" y="3.5" width="17" height="17" rx="3.5"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="15.5" cy="15.5" r="1.3" fill="currentColor"/><circle cx="12" cy="12" r="1.3" fill="currentColor"/></svg>',
+    swap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 8h13l-3.5-3.5M20 16H7l3.5 3.5"/></svg>',
+    chain: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2.5" y="8" width="10" height="8" rx="4" transform="rotate(-35 7.5 12)"/><rect x="11.5" y="8" width="10" height="8" rx="4" transform="rotate(-35 16.5 12)"/></svg>',
+    shield: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.6-3.2 8-7.5 9.5-4.3-1.5-7.5-4.9-7.5-9.5V6z"/></svg>',
+    spark: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.8 6.2L20 10l-6.2 1.8L12 18l-1.8-6.2L4 10l6.2-1.8z"/><circle cx="19" cy="19" r="1.6"/><circle cx="5" cy="18" r="1.1"/></svg>',
+    crown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 18.5h17M4.5 16l-1-9 5 4 3.5-6 3.5 6 5-4-1 9z"/></svg>',
+    down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v15m-6-6l6 6 6-6"/></svg>',
+    halo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M7 21c0-3.6 2.2-6.5 5-6.5s5 2.9 5 6.5"/><circle cx="12" cy="11.5" r="2.6"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>',
+  };
+
+  var params = new URLSearchParams(location.search);
+  var LAYOUT = ['feed', 'left', 'card', 'hud'].indexOf(params.get('layout')) >= 0 ? params.get('layout') : 'feed';
+  var SCALE = Math.min(Math.max(parseFloat(params.get('scale')) || 1, 0.3), 3);
+  // Chromium before 105 (the browser of OBS 30 and older) has no container units: every size
+  // is rewritten into vw, which is the same width once the scale is folded in
+  if (!(window.CSS && CSS.supports('width', '1cqw'))) {
+    var sheet = document.querySelector('style');
+    sheet.textContent = sheet.textContent.replace(/(-?\d*\.?\d+)cqw/g, function (_, n) { return +(n * SCALE).toFixed(4) + 'vw'; });
+  }
+  var HIDE_NICKS = params.get('nicks') === '0';
+  var DEMO = params.get('demo') === '1';
+  // Minutes the titles stay after the last game event; 0 keeps them on all the time
+  var TITLES_MS = (params.get('titles') === null ? 5 : Math.max(0, parseFloat(params.get('titles')) || 0)) * 60000;
+  var overlay = document.getElementById('overlay'), list = document.getElementById('list');
+  var titlesEl = document.getElementById('titles');
+  overlay.setAttribute('data-layout', LAYOUT);
+  var stage = document.getElementById('stage');
+  stage.setAttribute('data-layout', LAYOUT);
+  stage.style.setProperty('--scale', SCALE);
+
+  function fill(template, values) {
+    return template.replace(/\{(\w+)\}/g, function (_, k) { return values[k] === undefined || values[k] === null ? '' : values[k]; });
+  }
+  function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  var aliases = {};
+  function nick(n) {
+    if (!HIDE_NICKS || !n) return n || '';
+    if (!aliases[n]) aliases[n] = 'Игрок ' + (Object.keys(aliases).length + 1);
+    return aliases[n];
+  }
+  function pair(actor, who) { return actor && actor !== who ? '@' + nick(actor) + ' → @' + nick(who) : nick(who); }
+  function rnd(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+  function pct(v, max) { return Math.round(100 * v / (max || 100)) + '%'; }
+
+  // ---------- event -> cards ----------
+  function curseSub(ev) {
+    if (ev.ceiling === null || ev.ceiling === undefined) return null;
+    return ev.hold !== null && ev.hold !== undefined ? fill(TEXT.cursedHold, { n: ev.hold }) : fill(TEXT.cursedNext, { n: ev.next });
+  }
+  function curseBar(ev) {
+    return ev.ceiling !== null && ev.ceiling !== undefined && ev.next !== null && ev.next !== undefined
+      ? { from: pct(ev.ceiling, ev.max), to: pct(ev.next, ev.max) } : null;
+  }
+
+  function cards(ev) {
+    switch (ev.type) {
+      case 'roll':
+      case 'extra':
+        return [{ type: ev.type, icon: 'dice', what: TEXT[ev.type], who: nick(ev.who), num: ev.value, of: ev.ceiling || ev.max,
+          sub: curseSub(ev) || (ev.type === 'extra' ? TEXT.paid : null), bar: curseBar(ev), titles: ev.titles }];
+      case 'reroll':
+        return [{ type: 'reroll', icon: 'swap', what: TEXT.reroll, who: pair(ev.actor, ev.who), num: ev.value, old: ev.old,
+          of: ev.ceiling || ev.max, sub: ev.old === null ? TEXT.firstRoll : curseSub(ev), bar: curseBar(ev), titles: ev.titles }];
+      case 'curse':
+        return [{ type: 'curse', icon: 'chain', what: TEXT.curse, who: pair(ev.actor, ev.who),
+          num: ev.value, of: ev.ceiling, sub: fill(TEXT.curseHit, { n: ev.next, floor: ev.floor }), bar: curseBar(ev), titles: ev.titles }];
+      case 'shield':
+        return [{ type: 'shield', icon: 'shield', what: TEXT.shield, who: nick(ev.who), sub: fill(TEXT.shieldUp, { n: ev.minutes }) }];
+      case 'blocked':
+        return [{ type: 'blocked', icon: 'shield', what: TEXT.blocked, who: pair(ev.actor, ev.who),
+          sub: ev.by === 'bless' ? TEXT.blockedBless : TEXT.blockedShield }];
+      case 'cleanse':
+        return [{ type: 'cleanse', icon: 'spark', what: TEXT.cleanse, who: pair(ev.actor, ev.who), num: ev.value, old: ev.old,
+          sub: ev.value !== null ? fill(TEXT.cleanseBack, { n: ev.minutes }) : fill(TEXT.cleanseFree, { n: ev.minutes, max: ev.max }),
+          titles: ev.titles }];
+      case 'lift':
+        return [{ type: 'lift', icon: 'spark', what: TEXT.lift, who: nick(ev.who), sub: fill(TEXT.liftFree, { n: ev.max }) }];
+      case 'perks':
+        var out = [];
+        if (ev.best) out.push({ type: 'bless', icon: 'halo', what: TEXT.perks, who: nick(ev.best), sub: fill(TEXT.perkBless, { n: ev.minutes }) });
+        if (ev.worst) out.push({ type: 'sglaz', icon: 'eye', what: TEXT.perks, who: nick(ev.worst), sub: fill(TEXT.perkSglaz, { n: ev.ceiling }) });
+        return out;
+      case 'perk':
+        return ev.perk === 'bless'
+          ? [{ type: 'bless', icon: 'halo', what: TEXT.bless, who: nick(ev.who), sub: fill(TEXT.blessOn, { n: ev.minutes }) }]
+          : [{ type: 'sglaz', icon: 'eye', what: TEXT.sglaz, who: nick(ev.who), sub: fill(TEXT.sglazOn, ev) }];
+    }
+    return [];
+  }
+
+  // The roll scale is the bot's (ROLL_MIN–ROLL_MAX): low is the bottom fifth, high the top one
+  var scale = { min: 1, max: 100 };
+  function tone(v) {
+    if (v === null || v === undefined) return '';
+    var span = scale.max - scale.min;
+    return v <= Math.floor(scale.min + span * 0.2) ? 'low' : v >= Math.floor(scale.min + span * 0.8) ? 'high' : '';
+  }
+
+  function cardEl(c) {
+    var el = document.createElement('div');
+    el.className = 'card t-' + c.type;
+    var num = '<div class="num blank">0<small>0</small></div>';
+    if (c.num !== null && c.num !== undefined) {
+      var small = c.old !== null && c.old !== undefined
+        ? '<small><span class="strike">' + c.old + '</span> → ' + c.num + '</small>'
+        : c.of ? '<small>' + esc(fill(TEXT.outOf, { n: c.of })) + '</small>' : '';
+      num = '<div class="num ' + tone(c.num) + '" data-final="' + c.num + '" data-of="' + (c.of || scale.max) + '">' + c.num + small + '</div>';
+    }
+    el.innerHTML = '<div class="ico">' + ICON[c.icon] + '</div>'
+      + '<div class="body"><div class="what">' + esc(c.what) + '</div><div class="who">' + esc(c.who) + '</div>'
+      + (c.sub ? '<div class="sub">' + esc(c.sub) + '</div>' : '') + '</div>' + num
+      + (c.bar ? '<div class="bar"><i style="--from:' + c.bar.from + ';--to:' + c.bar.to + '"></i></div>' : '');
+    return el;
+  }
+
+  // The number spins before it lands: a dice feel without hiding the result for long
+  function spin(el, fast) {
+    var n = el.querySelector('.num[data-final]');
+    if (!n) return;
+    var final = n.getAttribute('data-final'), of = Number(n.getAttribute('data-of')) || scale.max;
+    var small = n.querySelector('small'), smallHtml = small ? small.outerHTML : '';
+    var t = 0, total = fast ? 6 : 12;
+    n.classList.add('spin');
+    var iv = setInterval(function () {
+      t++;
+      if (t >= total) { clearInterval(iv); n.classList.remove('spin'); n.innerHTML = final + smallHtml; n.classList.add('land'); return; }
+      n.innerHTML = rnd(Math.min(scale.min, of), of) + smallHtml;
+    }, 55);
+  }
+
+  // ---------- titles ----------
+  var titles = { best: null, worst: null }, live = true;
+  function same(a, b) { return (a && a.nick) === (b && b.nick); }
+  function renderTitles(next, flash) {
+    var changes = [];
+    ['best', 'worst'].forEach(function (k) {
+      if (flash && next[k] && titles[k] && !same(next[k], titles[k])) changes.push({ kind: k, title: next[k] });
+    });
+    titles = { best: next.best || null, worst: next.worst || null };
+    function row(kind) {
+      var t = titles[kind], changed = changes.some(function (c) { return c.kind === kind; });
+      return '<div class="title ' + kind + (changed ? ' changed' : '') + '"><div class="ico">' + ICON[kind === 'best' ? 'crown' : 'down'] + '</div>'
+        + '<div style="min-width:0"><div class="lbl">' + esc(TEXT[kind]) + '</div>'
+        + '<div class="nick">' + (t ? esc(nick(t.nick)) : '–') + '</div></div><div class="val">' + (t ? t.value : '') + '</div></div>';
+    }
+    titlesEl.innerHTML = row('best') + row('worst');
+    showTitles();
+    return changes;
+  }
+
+  // The plate fades once the game has been quiet for TITLES_MS and returns with the next move
+  var awakeUntil = 0, sleepTimer = null;
+  function showTitles() {
+    var asleep = TITLES_MS > 0 && Date.now() >= awakeUntil;
+    titlesEl.classList.toggle('empty', !live || (!titles.best && !titles.worst) || asleep);
+  }
+  function wake(ms) {
+    awakeUntil = Date.now() + ms;
+    clearTimeout(sleepTimer);
+    if (TITLES_MS > 0) sleepTimer = setTimeout(showTitles, ms + 50);
+    showTitles();
+  }
+
+  // ---------- queue: one card at a time, faster when events pile up ----------
+  var queue = [], busy = false;
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+  function push(ev) { cards(ev).forEach(function (c) { queue.push(c); }); if (!busy) run(); }
+
+  // The left slot: the last card stays SLOT_HOLD_MS after its number lands; in a series each card
+  // stays SERIES_MS before the next takes its place – nothing is skipped, ten !roll are ten cards
+  var SLOT_HOLD_MS = 5000, SERIES_MS = 3000, LAND_MS = 700, slotTimer = null;
+
+  // Outside the big centre card the hint line gives way to a nick pair on two lines or to its own
+  // wrap, so every card keeps the height of a plain Roll; the number and the curse bar carry the result.
+  // Measured again once the web fonts arrive: the first cards are laid out in the system font
+  function fit(el) {
+    if (LAYOUT === 'card') return;
+    function wraps(node) { return node.offsetHeight > 1.5 * parseFloat(getComputedStyle(node).lineHeight); }
+    var sub = el.querySelector('.sub');
+    el.classList.remove('tight');
+    if (sub && (wraps(el.querySelector('.who')) || wraps(sub))) el.classList.add('tight');
+  }
+  if (document.fonts && document.fonts.addEventListener) {
+    document.fonts.addEventListener('loadingdone', function () {
+      Array.prototype.forEach.call(list.querySelectorAll('.card'), fit);
+    });
+  }
+
+  function retire(el) { el.classList.add('out'); setTimeout(function () { el.remove(); }, 500); }
+  function place(el) {
+    if (LAYOUT === 'card' || LAYOUT === 'left') {
+      Array.prototype.forEach.call(list.querySelectorAll('.card:not(.out)'), retire);
+      list.appendChild(el);
+      if (LAYOUT === 'left') {
+        clearTimeout(slotTimer);
+        slotTimer = setTimeout(function () { retire(el); }, LAND_MS + SLOT_HOLD_MS);
+      }
+      return;
+    }
+    list.appendChild(el);
+    var keep = LAYOUT === 'hud' ? 3 : 4;
+    while (list.children.length > keep) list.firstElementChild.remove();
+    setTimeout(function () { retire(el); }, 9000);
+  }
+
+  // One card at a time. A card that came while the centre card fades out is shown too: busy
+  // stays set until the queue is really empty, and a card that fails to render is skipped
+  async function run() {
+    busy = true;
+    try {
+      while (queue.length) {
+        while (queue.length) {
+          try { await show(queue.shift(), queue.length > 1); } catch (err) { console.error(err); }
+        }
+        if (LAYOUT === 'card') {
+          await wait(1600);
+          if (!queue.length) Array.prototype.forEach.call(list.children, retire);
+        }
+      }
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function show(c, fast) {
+    var el = cardEl(c);
+    place(el);
+    fit(el);
+    spin(el, fast);
+    var changes = c.titles ? renderTitles(c.titles, true) : [];
+    await wait(LAYOUT === 'left' ? SERIES_MS : fast ? 800 : 2000);
+    if (LAYOUT === 'card') {
+      changes.forEach(function (ch) {
+        queue.unshift({ type: 'title', icon: ch.kind === 'best' ? 'crown' : 'down',
+          what: ch.kind === 'best' ? TEXT.newBest : TEXT.newWorst, who: nick(ch.title.nick), num: ch.title.value });
+      });
+    }
+  }
+
+  function onEvent(ev) {
+    if (typeof ev.min === 'number') scale.min = ev.min;
+    if (typeof ev.max === 'number') scale.max = ev.max;
+    if (ev.type === 'state') {
+      live = ev.live;
+      // A reloaded page keeps what is left of the hold since the bot's last game event
+      if (ev.quiet !== null && ev.quiet !== undefined) wake(Math.max(0, TITLES_MS - ev.quiet * 1000));
+      renderTitles(ev.titles || {}, false);
+      return;
+    }
+    wake(TITLES_MS);
+    if (ev.type !== 'wake') push(ev);
+  }
+
+  // ---------- connection to the bot ----------
+  // EventSource reconnects by itself; a silence longer than three pings means a dead link
+  // it has not noticed, so the page reconnects on its own then
+  function connect() {
+    var base = params.get('server') ? params.get('server').replace(/\/+$/, '') : '';
+    var source = null, lastSeen = Date.now();
+    function open() {
+      if (source) source.close();
+      source = new EventSource(base + '/roll/events');
+      source.addEventListener('roll', function (e) {
+        lastSeen = Date.now();
+        try { onEvent(JSON.parse(e.data)); } catch (err) { console.error(err); }
+      });
+      source.addEventListener('ping', function () { lastSeen = Date.now(); });
+      source.onopen = function () { lastSeen = Date.now(); document.title = 'Roll – на связи'; };
+      source.onerror = function () { document.title = 'Roll – нет связи с ботом'; };
+    }
+    open();
+    setInterval(function () { if (Date.now() - lastSeen > 50000) { lastSeen = Date.now(); open(); } }, 5000);
+  }
+
+  // ---------- demo: the page plays by the bot's rules and sends itself the bot's events ----------
+  function demo() {
+    var NAMES = ['m1ndsh1ft_', 'vo1dptr', 'nosok222', 'dv4mp1r3', 'uberterminal', 'hininn'];
+    var MAX = 100, CEIL = 75, STEP = 10, FLOOR = 25, players = {}, seq = 0;
+    function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
+    function p(n) { return players[n] || (players[n] = { v: null, at: 0, curse: null, before: null, shield: false }); }
+    function rolled() { return Object.keys(players).filter(function (n) { return players[n].v !== null; }); }
+    function standings() {
+      var r = rolled();
+      if (!r.length) return { best: null, worst: null };
+      function by(sign) { return r.slice().sort(function (a, b) { return sign * (players[a].v - players[b].v) || players[b].at - players[a].at; })[0]; }
+      var worst = by(1), best = by(-1);
+      function t(n) { return n ? { nick: n, value: players[n].v } : null; }
+      return { best: best === worst ? null : t(best), worst: t(worst) };
+    }
+    function throwFor(n) {
+      var x = p(n), old = x.v, cap = x.curse || null, v = rnd(1, cap || MAX), next = null;
+      x.v = v; x.at = ++seq;
+      if (cap) { next = Math.max(FLOOR, cap - STEP); x.curse = next; }
+      return { value: v, old: old, ceiling: cap, next: next, hold: null, max: MAX, floor: FLOOR };
+    }
+    function ev(type, who, actor, t) {
+      var e = Object.assign({ type: type, who: who, actor: actor }, t || {});
+      if (t) e.titles = standings();
+      return e;
+    }
+    var MAKE = {
+      roll: function () { var w = pick(NAMES); return ev('roll', w, null, throwFor(w)); },
+      extra: function () { var w = pick(NAMES); return ev('extra', w, w, throwFor(w)); },
+      reroll: function () {
+        var w = pick(rolled().filter(function (n) { return !players[n].shield; })) || pick(NAMES);
+        return ev('reroll', w, pick(NAMES.filter(function (n) { return n !== w; })), throwFor(w));
+      },
+      curse: function () {
+        var w = pick(rolled().filter(function (n) { return !players[n].curse; })) || pick(NAMES), x = p(w);
+        x.before = x.v; x.curse = CEIL;
+        return ev('curse', w, pick(NAMES.filter(function (n) { return n !== w; })), throwFor(w));
+      },
+      shield: function () { var w = pick(rolled()) || pick(NAMES); p(w).shield = true; return { type: 'shield', who: w, minutes: 30 }; },
+      blocked: function () {
+        var w = pick(rolled().filter(function (n) { return players[n].shield; }));
+        if (!w) return MAKE.shield();
+        return { type: 'blocked', who: w, actor: pick(NAMES.filter(function (n) { return n !== w; })), by: 'shield', minutes: 25 };
+      },
+      cleanse: function () {
+        var w = pick(rolled().filter(function (n) { return players[n].curse; }));
+        if (!w) return MAKE.curse();
+        var x = p(w), back = x.before !== null && x.before > x.v ? x.before : null, old = x.v;
+        x.curse = null; x.before = null;
+        if (back !== null) { x.v = back; x.at = -(++seq); }
+        var e = { type: 'cleanse', who: w, actor: w, value: back, old: back !== null ? old : null, max: MAX, minutes: 30 };
+        if (back !== null) e.titles = standings();
+        return e;
+      },
+      lift: function () {
+        var w = pick(rolled().filter(function (n) { return players[n].curse; }));
+        if (!w) return MAKE.roll();
+        p(w).curse = null;
+        return { type: 'lift', who: w, max: MAX };
+      },
+    };
+    [['nosok222', 63], ['m1ndsh1ft_', 91], ['vo1dptr', 12], ['dv4mp1r3', 47]].forEach(function (s, i) { p(s[0]).v = s[1]; p(s[0]).at = i + 1; seq = i + 1; });
+    onEvent({ type: 'state', live: true, titles: standings() });
+    onEvent({ type: 'perks', best: 'm1ndsh1ft_', worst: 'vo1dptr', minutes: 60, ceiling: CEIL });
+    var SCRIPT = ['roll', 'roll', 'reroll', 'roll', 'curse', 'roll', 'shield', 'blocked', 'roll', 'cleanse', 'extra', 'reroll', 'roll', 'curse', 'lift', 'roll'];
+    var step = 0;
+    setInterval(function () { if (queue.length < 2) onEvent(MAKE[SCRIPT[step++ % SCRIPT.length]]()); }, 2600);
+  }
+
+  if (DEMO) demo(); else connect();
+})();
+</script>
+</body>
+</html>

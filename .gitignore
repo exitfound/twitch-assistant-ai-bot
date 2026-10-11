@@ -15,6 +15,8 @@ chat_history.db-wal
 chat_history.db-shm
 chat_history.backup-*.db
 
+/ruaccent/
+
 .ruff_cache/
 .pytest_cache/
 logs/

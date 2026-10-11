@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Twitch chat bot powered by Gemini 2.5 Flash. Commands (`!who`, `!ask`, …) work as plain chat text. Free text is answered only when it contains a `сосур*` / `secur*` word (сосурян, сосурити, securityexpert, etc.), an `@botname` mention, or is a reply to a bot message. Stores full chat history in SQLite with FTS5 search and long-term memory.
+Twitch chat bot powered by Gemini 3.8 Flash. Commands (`!who`, `!ask`, …) work as plain chat text. Free text is answered only when it contains a `сосур*` / `secur*` word (сосурян, сосурити, securityexpert, etc.), an `@botname` mention, or is a reply to a bot message. Stores full chat history in SQLite with FTS5 search and long-term memory.
 
 ## Documentation
 
@@ -15,6 +15,7 @@ Twitch chat bot powered by Gemini 2.5 Flash. Commands (`!who`, `!ask`, …) work
 | `CLAUDE.md` | this file: rules, layout, module map, invariants | English |
 | `docs/CONTENT.md` | everything the bot says, read by the code; `<!-- … -->` notes explain keys | Russian |
 | `docs/TTS.md` | the TTS server the Discord voice uses: model, install, profiles, launch, API, performance, diagnostics – it runs on another machine and is not part of this code | Russian |
+| `docs/index.html` | the bot map: sections, limits and pauses per viewer status, a standalone page published to GitHub Pages by `make pages`; its numbers are written by hand | Russian |
 | `.env.example` | every environment variable with a comment | Russian |
 
 `BOT.md` and `CONTENT.md` below mean the files in `docs/`.
@@ -72,6 +73,8 @@ cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py
 # Context probe: real addressings of the bot, `now` (the plain chat-window context) vs `new` (what the bot sends), side by side; costs ~$0.01 per question
 ./venv/bin/python3 bot.py --probe-context --limit 8
 ./venv/bin/python3 bot.py --probe-context 33839 35280 --samples 2
+# Generation settings instead of contexts: `bot` vs `candidate` (temperature, thinking budget, persona from a file, model)
+./venv/bin/python3 bot.py --probe-context 33839 --temperature 1.4 --thinking 0 --system persona.txt
 
 # Consistent DB copy via sqlite backup API (safe while the bot runs)
 ./venv/bin/python3 bot.py --backup [path.db]
@@ -92,7 +95,7 @@ make venv            # = python3.11 -m venv venv && pip install --require-hashes
 
 # Before a merge (there is no CI)
 make check           # ruff + pytest
-make audit           # known vulnerabilities in requirements.txt and requirements-dev.txt; the one ignore (PyNaCl, pinned by discord.py) is explained in the Makefile
+make audit           # known vulnerabilities in requirements.txt and requirements-dev.txt; the ignores (PyNaCl, pinned by discord.py; transformers, pinned below 5 by ruaccent) are explained in the Makefile
 make lock            # recompile requirements*.txt after editing requirements*.in
 ```
 
@@ -108,7 +111,7 @@ make lock            # recompile requirements*.txt after editing requirements*.i
 | `src/gemini/` | the brain: everything that costs a Gemini call and is not tied to a platform – prompts, context, the fallback ladder, the cleanup of an answer, long-term memory, the `!ascii` download and rendering | anything that builds prompts or talks to Gemini |
 | `src/cli/` | `bot.py --…` commands; the bot does not start | a maintenance command |
 | `src/twitch/` | everything tied to Twitch: `bot.py` (the twitchio `Bot`) and the Twitch side of every feature | see the three rows below |
-| `src/twitch/core/` | the Twitch skeleton: command registry, chat dispatcher and its gate, per-stream limits, viewer tiers, replies in chat, chat sockets, tokens, the stream tracker, follower checks | nothing feature-specific. Twitch features depend on it, never the reverse – the one exception is `component.py`, which registers every feature's commands |
+| `src/twitch/core/` | the Twitch skeleton: command registry, chat dispatcher and its gate, per-stream limits, viewer tiers, replies in chat, chat sockets, tokens, the stream tracker, follower checks, the OBS overlays' SSE server | nothing feature-specific. Twitch features depend on it, never the reverse – the one exception is `component.py`, which registers every feature's commands |
 | `src/twitch/gemini/` | Twitch handlers of generated answers: free text, `!ask`, `!who`, `!versus`, `!summary`, `!ascii`, proactive remarks, the response pipeline | a Twitch command that generates text (`kind=Kind.GEMINI`) |
 | `src/twitch/local/` | сосурян's Twitch features without Gemini: simple commands, follow replies, emote spam, the periodic command reminder, the `roll/` game and the `mascot/` OBS overlay feed | a small command or event reply served from SQLite + `CONTENT.md` |
 | `src/discord/` | everything tied to Discord: `bot.py` (the discord.py client, kept up by `DiscordService`: the voice channel by `!join` / `!leave`, the voice by `!voice`, `!help`) and `local/voice/` – the bot's answers spoken through the TTS server | a Discord feature, inside the package of its kind (`discord/local/…`, later `discord/gemini/…`) |
@@ -125,8 +128,8 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `bot.py` – the entry point: `__main__` delegates to `src/cli/main.py`, otherwise `run_bot()` – logging, config and content checks, signal handling, the Twitch bot and, beside it, the Discord bot (`start_discord()` / `stop_discord()`: its own task, a failure there never stops Twitch), `close_db()` on the way out. BOT.md «Жизненный цикл бота»
 
 **core** (shared)
-- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_env_ids`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Help`, `Proactive`, `Emote`, `Mascot`, `Discord` (with `missing()`), `Voice`
-- `paths.py` – `DB_PATH`, `CONTENT_PATH`: `chat_history.db` in the repository root and `docs/CONTENT.md`, or `BOT_DB_PATH` / `BOT_CONTENT_PATH`
+- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_env_ids`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Pulse`, `Help`, `Proactive`, `Emote`, `Mascot`, `Discord` (with `missing()`), `Voice`
+- `paths.py` – `DB_PATH`, `CONTENT_PATH`, `ACCENT_PATH`: `chat_history.db` in the repository root, `docs/CONTENT.md` and `ruaccent/`, or `BOT_DB_PATH` / `BOT_CONTENT_PATH` / `BOT_ACCENT_PATH` (the image sets it to the models it carries)
 - `content.py` – `CONTENT.md` access (`Content.prompt/label/text/items`), mtime cache, `REQUIRED`, `validate_content()`
 - `database.py` – facade re-exporting `src/core/db/`: callers import every query from here
 - `db/connection.py` – the shared connection (`get_db()`, `close_db()`, `reopen()`), `transaction()`, `backup_db()`, `vacuum_db()`
@@ -145,17 +148,19 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `safe_format`, `defuse`, `find_banned` (the stop list), `local_time`, `random_delay`, `gather_cancelling`. `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
 
 **gemini** (shared)
-- `client.py` – `get_client()`, `generate()` (chat, with the answer deadline), `generate_checked()` (the reason there is no text), `make_gen_config()`, `SAFETY_OFF` / `SAFETY_CHECK`, `usage`, `cost_estimate()` (the one place the Gemini prices live). BOT.md «Шаг 10: Вызов Gemini»
+- `client.py` – `get_client()`, `generate()` (chat, with the answer deadline), `generate_checked()` (the reason there is no text), `make_gen_config()`, `background()` (the slots memory and the pulse share, `use_all_slots()` for the CLI backfill), `using_model()` (another model for one task's requests, the probe's candidate), `SAFETY_OFF` / `SAFETY_CHECK`, `usage`, `PRICES` / `cost_estimate()` (the one place the Gemini prices live, per model). BOT.md «Шаг 10: Вызов Gemini»
 - `context.py` – `ContextBuilder`, `chat_chars()`, `tail_within()`
 - `ladder.py` – `Rung`, `walk()` (the fallback ladder), `unique_rungs()`
-- `answer_context.py` – free-text context: `Question`, `ladder()`, `answer()`; shared with `--probe-context`. BOT.md «Контекст Gemini»
+- `answer_context.py` – free-text context: `Question` (with the pulse), `ladder()` (pulse, the last `CONTEXT_CHAT_MESSAGES`, dossiers, chronicle – not the raw stream), `answer()`; shared with `--probe-context`. BOT.md «Контекст Gemini»
+- `pulse.py` – the pulse: what the chat is about right now, retold in a few lines (`build()`, `refresh()`, `current()` – the cache, stale after two intervals or with a new session). BOT.md «Пульс чата»
+- `dossier.py` – `people()`: a chatter's dossier as one context line (headline, `storage.pick_facts()`, catchphrases, relations); the cap counts chatters with a dossier, not words
 - `output.py` – cleanup of an answer before chat: `cleanup_response()`, `trim_to_sentence()`, `split_into_chunks()`, `strip_*`, `fix_dashes()`, `TWITCH_MSG_MAX`. BOT.md «Шаг 11»
-- `summary.py`, `who.py` – the context of `!summary` and of `!who` / `!versus`
-- `memory/storage.py`, `memory/build.py` – long-term memory: chronicles, events, profiles, `memory_loop()`. BOT.md «Память бота»
+- `summary.py`, `who.py` – the context of `!summary` and of `!who` / `!versus` (a random sample of the dossier)
+- `memory/storage.py`, `memory/build.py` – long-term memory: chronicles, events, dossiers (`chatter_profiles` – headline, relations, catchphrases; `chatter_facts` – retold facts merged by `apply_dossier()`), `memory_loop()`. BOT.md «Память бота»
 - `picture/fetch.py`, `picture/render.py` – `!ascii`: safe download, braille rendering. BOT.md «Шаг 7ж»
 
 **twitch**
-- `bot.py` – `Bot(commands.Bot)`, the Twitch assembly point: lifecycle (`setup_hook`, `event_ready`, `event_oauth_authorized`, `close()`), rewards without the channel's token (`_rewards_failed()`, `tell_rewards_down()`), EventSub subscriptions, `send_chat_message()`, the stream state (`stream`, `session_id`, `stream_went_online()` / `_offline()`, `_sync_stream()`), background task and reward start (a failed start is retried by `_retry_rewards()`), signal handlers taken back from aiohttp (`install_signal_handlers()`). BOT.md «Жизненный цикл бота»
+- `bot.py` – `Bot(commands.Bot)`, the Twitch assembly point: lifecycle (`setup_hook`, `event_ready`, `event_oauth_authorized`, `close()`), rewards without the channel's token (`_rewards_failed()`, `tell_rewards_down()`), EventSub subscriptions, `send_chat_message()`, the stream state (`stream`, `session_id`, `stream_went_online()` / `_offline()`, `_sync_stream()`), background task and reward start (a failed start is retried by `_retry_rewards()`), the overlays' server (`_start_overlays()`: mascot and game routes on one app), signal handlers taken back from aiohttp (`install_signal_handlers()`). BOT.md «Жизненный цикл бота»
 
 **twitch/core**
 - `component.py` – `ChatComponent`: the registry of all commands, `event_message`, the pure `route()` and the gate `_gate()` (follow, cooldown, quota), `event_follow`. BOT.md «Обработка сообщений»
@@ -164,9 +169,10 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `chat_socket.py` – `SocketWatch` (resubscribes when no socket carries the chat or the redemption subscription; after a failure only the minute check retries), `check_private_api()`, `keep_migrated_sockets()` (keeps a migrated socket in twitchio's registry)
 - `tokens.py` – the bot's and the channel's tokens (`add_bot_token()`, `add_broadcaster_token()`), token saving, OAuth links, `token_problem()`, `token_dead()` (a revoked authorization: retrying is pointless)
 - `port.py` – `BotPort` / `StreamBot`: what features need from the bot (incl. `create_clip()`). Core and the features never import `src/twitch/bot.py`; `tests/test_bot.py` checks that both `Bot` and `tests/fakes.py`'s `FakeBot` have every member, and what the follow gate needs (`channel_id`, `create_partialuser()`)
-- `viewer.py` – `Tier`, `tier_of()`, `by_tier()`: the one status ladder behind every per-status number; `sub_hint()`, the «a subscription widens it» tail of a limit refusal
+- `viewer.py` – `Tier`, `tier_of()` (a subscription outranks the moderator and VIP badges), `by_tier()`: the one status ladder behind every per-status number; `sub_hint()` / `tier_sub_hint()`, the «a subscription widens it» tail of a limit refusal, only where the subscriber's limit is higher
 - `limits.py` – `limit_for()` (one ladder), `deny()` (a limit refusal at most once per 30 s) and `PerStreamLimit`: per-stream limit of a command (`!ask`, `!who`, `!versus`, `!summary`, `!ascii`, `!clip`), one call per viewer at a time, count only what reached chat
-- `followers.py` – `FollowerCache`: follower check via Helix with a TTL, fails open
+- `followers.py` – `FollowerCache`: follower check via Helix with a TTL, fails open; one cache for chat and rewards, `forget()` on a new follow
+- `sse.py` – `Feed` (one SSE event name: listeners, `publish()`, the state a new page starts from, pings, a stuck listener drops old items) and `serve()`: one aiohttp server on `MASCOT_HOST`:`MASCOT_PORT` for every overlay, open streams closed first on shutdown. BOT.md «Канал для OBS»
 - `replies.py` – `reply()` (a reply in chat that never raises), `reply_to_bot()` (the bot's line a message replies to)
 
 **twitch/gemini**
@@ -174,6 +180,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `commands.py` – handlers of free text, `!ask`, `!summary`, `!who`, `!versus`; `LIMITS`
 - `picture.py` – the `!ascii` handler with its cache. BOT.md «Шаг 7ж»
 - `proactive.py` – `proactive_loop()`
+- `pulse.py` – `pulse_loop()`: rebuilds the pulse every `PULSE_INTERVAL_MINUTES` during a stream while people write; a build that gave nothing is retried on the next round
 
 **twitch/local**
 - `commands.py` – `handle_help_index` (`!help`), `handle_help` (`!bot`), `handle_stats`
@@ -185,36 +192,40 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **twitch/local/mascot** – the OBS overlay's mood from chat activity (BOT.md «Маскот: оверлей по настроению чата»)
 - `mood.py` – `target()` (chatters → mood and dance rate), `MoodTracker` (window, up at once, down a level per step), the module-level `tracker`
-- `feed.py` – `on_chat()` (called first in `event_message`), the aiohttp SSE app (`make_app()`), `mascot_loop()`
+- `feed.py` – `on_chat()` (called first in `event_message`), `feed` and `add_routes()` (`/mascot/events`, `/mascot/state`), `mascot_loop()` (the recount)
 
 **twitch/local/roll** – the «залупа стрима» game (BOT.md «Шаг 7а», «Награды за баллы канала»)
-- `rules.py` – the rules as pure functions of `now`
-- `game.py` – the only code that mutates `rolls`, under one lock: `free_throw()`, `redeem()`, `lift_expired_curses()`, `status()`, perks
-- `storage.py` – queries on `rolls`, `rewards`, `roll_actions`, `roll_throws`, `roll_perks`
+- `rules.py` – the rules as pure functions: of `now` for throws, curses and pauses, of the status for `free_limit()`
+- `game.py` – the only code that mutates `rolls`, under one lock: `free_throw()`, `redeem()`, `refuse()` (a refusal before the game, journaled against redelivery), `lift_expired_curses()`, `status()`, perks
+- `storage.py` – queries on `rolls`, `rewards`, `roll_actions`, `roll_throws`, `roll_perks`, `roll_tiers`
 - `command.py` – `handle_roll`, `handle_rollstat`
 - `texts.py` – pieces shared by `!roll`, reward outcomes and reward descriptions
-- `redemption.py` – a redemption's outcome: fulfill, refund or leave alone; no Twitch calls
+- `redemption.py` – a redemption's outcome: fulfill, refund or leave alone; the follow gate for a buyer (`_may_play()`); no Twitch calls of its own
 - `rewards.py` – `RewardService` (Twitch side of the rewards) and `RewardComponent`
 - `announce.py` – `curse_lift_loop()`
 - `perks.py` – perks at stream start and on a player's first message
+- `tiers.py` – `on_chat()`: the viewer's status in the stream, written from chat when it changes, for the rewards (a redemption carries no badges)
+- `overlay.py` – the game on the stream (BOT.md «Оверлей игры в OBS»): event builders (`thrown()`, `redeemed()`, `lifted()`, `perks()`, `perk_on()`, `wake()` – a game command with no card brings the titles back), `publish()` (never raises or waits; called by `command.py`, `redemption.py`, `announce.py`, `perks.py` beside their chat line; marks the last game event, which the state sends as `quiet`), `refresh()` (titles from the DB at start and on stream start and end), `add_routes()` (`/roll/` serves `overlay.html`, `/roll/events`, `/roll/state`)
+- `overlay.html` – the OBS page: cards, titles, the queue, reconnects, `?layout=feed|left|card|hud`, `?scale=`, `?titles=` (minutes the titles stay after the last game event), `?nicks=0`, `?demo=1`; its texts are the `TEXT` object at the top of the script
 
 **discord** (BOT.md «Голос в Discord»)
 - `bot.py` – `DiscordBot(discord.Client)`: loads libopus, reads the saved choices (`load_state()`: `bot_state.discord_voice`, `discord_voice_enabled`) and starts the `Speaker` and the minute presence check in `setup_hook`; `Where` (out / here / elsewhere / recovering – discord.py's own reconnect gets 90 s and its own move handling 10 s, checked every 10 s while unsettled – / down) and `presence()` (the pure rule: in the voice channel exactly while `!join` / `!leave` says so, and in that channel – a dragged bot is moved back, and the move is checked, since `move_to()` swallows its timeout), `_reconcile()` on ready, on the bot's own voice state and every minute; the voice client is found among the bot's own connections. `!join` / `!leave` / `!voice` (a toggle, saved) for the owner and `DISCORD_COMMAND_ROLE_IDS` (`may_command()`), answered with a reaction – anyone else gets `texts.discord_no_rights`, once per 30 s per person; `!help` for anyone in the text channel, once per 10 s (both through `Cooldowns`). `DiscordService` – a fresh client after a failed start (30 s doubling to 10 min, reset once a session came up), no retry for a rejected token or a missing intent
-- `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, emotes even with punctuation stuck to them, links, CAPS, numbers, versions «5.5», `%`, `+`, addressees at the start dropped, `trim_to_sentence()`)
-- `local/voice/tts.py` – `TTSClient.stream()`: streaming PCM from `/v1/audio/speech` (5 s to connect, 100 s to the first byte, 30 s of silence after it, the whole answer bounded by the caller), `TTSUnavailable`
-- `local/voice/audio.py` – `Upsampler` (24 kHz mono → 48 kHz stereo across chunk borders), `StreamSource` (a dry buffer mid-answer makes one pause until 1.5 s are back, each next pause in the answer gathering twice as much up to 6 s – no crackle; end only after `finish()`)
-- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time; an answer queued longer than `VOICE_MAX_WAIT_SECONDS` is dropped), `speak()` (prebuffer by the answer's expected length and the server speed measured on earlier answers – `prebuffer_seconds()`, `_measure()` – then play, pauses and player errors logged; a playback stopped early cancels the synthesis, a stuck one is stopped after `2 × VOICE_TIMEOUT`)
+- `local/voice/text.py` – `prepare()` / `spoken()`: an answer → text for the Russian TTS model (nicks from `lists.voice_nicks`, words from `lists.voice_words`, emotes even with punctuation stuck to them, links, CAPS, numbers, versions «5.5», `%`, `+`, addressees at the start dropped, `trim_to_sentence()`); `sentences()` – the parts for `VOICE_SENTENCES`
+- `local/voice/stress.py` – `load()` (ruaccent in tiny mode, once per process, telemetry off) / `apply()`: ё (`VOICE_YO`) and every stress as an upper-case vowel (`VOICE_STRESS`), carried back onto the text word by word; a word already marked by `lists.voice_words` is kept
+- `local/voice/tts.py` – `TTSClient.stream()`: streaming PCM from `/v1/audio/speech` with `language: Russian` (5 s to connect, 100 s to the first byte, 30 s of silence after it, the whole answer bounded by the caller), `TTSUnavailable`
+- `local/voice/audio.py` – `TimeStretch` (`VOICE_TEMPO` without a pitch change, WSOLA in numpy, independent of chunk borders; `flush()` once the server is done), `Upsampler` (24 kHz mono → 48 kHz stereo across chunk borders), `StreamSource` (a dry buffer mid-answer makes one pause until 1.5 s are back, each next pause in the answer gathering twice as much up to 6 s – no crackle; end only after `finish()`)
+- `local/voice/speaker.py` – `Speaker`: `submit()` (the speech listener: queue or drop), `run()` (one answer at a time; an answer queued longer than `VOICE_MAX_WAIT_SECONDS` is dropped; ruaccent loads beside it), `speak()` (ё and stresses per part, the parts one request each with 0.15 s between them, prebuffer by the answer's expected length and the server speed measured on earlier answers – `prebuffer_seconds()`, `_measure()` – then play, pauses and player errors logged; a playback stopped early cancels the synthesis, a stuck one is stopped after `2 × VOICE_TIMEOUT`)
 
 **cli**
 - `main.py` – argparse, `_with_db`, `_check_combination()` (one command per run, modifiers only with their command)
 - `knowledge.py` – lore import in three formats, `clear_knowledge()`, `lore_sources()`
 - `memory.py` – `--build-memory`
-- `probe.py` – `--probe-context`
+- `probe.py` – `--probe-context`: contexts (`now` / `new`) or generation settings (`Candidate`: `bot` / `candidate`)
 - `emotes.py` – `--sync-emotes`
 
 ### `CONTENT.md` – everything the bot says
 
-One Markdown file: `## section` → `### key` → the value until the next heading. Sections `prompts` (`Content.prompt()`), `labels` (context headings the model sees; `prompts.system` names them, so they stay in sync), `texts` (every reply in chat), `lists` (`emotes`, `follow`, `banned`, `voice_nicks`, one entry per line), `channel` (the channel's own commands: `### !tg` and its reply; keys are free, not in `REQUIRED`). Re-read when its mtime changes, no restart. `.env` holds secrets, numbers and flags; `CONTENT.md` holds text – nothing the chat sees is hardcoded. Placeholders go through `safe_format()`. `<!-- … -->` and prose before the first `###` are notes. A duplicate key logs an error; a file that parses to nothing or lacks a `REQUIRED` key keeps the previous version; `validate_content()` stops the start on a missing key. BOT.md «CONTENT.md – тексты бота»
+One Markdown file: `## section` → `### key` → the value until the next heading. Sections `prompts` (`Content.prompt()`), `labels` (context headings the model sees; `prompts.system` names them, so they stay in sync), `texts` (every reply in chat), `lists` (`emotes`, `follow`, `banned`, `voice_nicks`, `voice_words`, one entry per line), `channel` (the channel's own commands: `### !tg` and its reply; keys are free, not in `REQUIRED`). Re-read when its mtime changes, no restart. `.env` holds secrets, numbers and flags; `CONTENT.md` holds text – nothing the chat sees is hardcoded. Placeholders go through `safe_format()`. `<!-- … -->` and prose before the first `###` are notes. A duplicate key logs an error; a file that parses to nothing or lacks a `REQUIRED` key keeps the previous version; `validate_content()` stops the start on a missing key. BOT.md «CONTENT.md – тексты бота»
 
 ## Invariants that are easy to break
 
@@ -226,17 +237,17 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 - **Session = stream**; `session_id` is read once per event, since coroutines outlive a switch
 - **Game state** changes only in `local/roll/game.py`, under its lock, one transaction with its journal row
 - **twitchio 3.x.** Its command system is off (`process_commands()` is a no-op). `CustomRewardRedemption.fulfill()` sends the wrong id – statuses go through `_http.patch_custom_reward_redemption()`. A reply carries `parent_user`, not `parent_user_id`. Private fields read by the chat watch and the token check are verified at start. On `session_reconnect` twitchio drops the live socket from its registry unless `keep_migrated_sockets()` ran; the watch then subscribes twice. After a reconnect twitchio may keep a socket open with its subscriptions lost, or stop reconnecting it at all: a socket counts as alive only while it is connected and holds the watched subscription, or has a reconnect running. `event_ready` fires once per start: nothing in it may raise. `event_message` drops a message id it has already seen. Signal handlers are installed again from `event_ready`, because the OAuth adapter's aiohttp replaces them
-- **Gemini.** Every config comes from `make_gen_config()` (a hand-built one loses `thinking_config`). Chat answers go through `generate()` or `ladder.walk()`, which keep to `GEMINI_ANSWER_DEADLINE`; the memory calls `generate_checked()` directly and takes its own slots. Safety filters are off for the persona and on only for the `!ascii` check. A timeout is not retried
+- **Gemini.** Every config comes from `make_gen_config()` (a hand-built one loses `thinking_config`). Chat answers go through `generate()` or `ladder.walk()`, which keep to `GEMINI_ANSWER_DEADLINE`; the memory calls `generate_checked()` directly; memory and the pulse hold `client.background()` around their requests, so together they never take more than two of the chat's slots; its config also comes from `make_gen_config()`, so `GEMINI_THINKING_BUDGET` covers it. Safety filters are off for the persona and on only for the `!ascii` check. A timeout is not retried
 - **Output.** Every line the bot sends on its own goes through `Bot.send_chat_message()`, which runs `defuse()`; every reply to a viewer goes through `reply()`, which logs a send failure instead of raising; answers go through `cleanup_response()`. `strip_markdown()` keeps `_` (it is part of nicks)
 - **Follow gate.** `bool(await followers.followers)` – the iterator itself is always truthy. The cache fails open
 - **Case.** Free text keeps its case; FTS queries are lowercased (uppercase `AND`/`OR`/`NOT` are operators); Cyrillic facts are matched with `casefold()` in Python, since SQLite folds only ASCII
-- **Voice.** Only an answer that reached chat goes to `speech.say()`; refusals and service lines are not voiced. `Speaker.submit()` never blocks the chat path: it drops an answer rather than queue it past `VOICE_QUEUE` or while the bot is out of the voice channel, and the worker drops one that waited past `VOICE_MAX_WAIT_SECONDS`. The TTS server's own normalization stays off (`normalize: false`): it is English and garbles Russian. `StreamSource.read()` returns `b''` only after `finish()` and an empty buffer – an early `b''` ends playback mid-answer
-- **Tests** (`tests/`, `make test`) clear every variable of `.env.example` and set the environment in `conftest.py` before anything from `src` is imported, recreate module-level asyncio primitives per test, and replace `CONTENT.md` with one whose values are the key names. `client.get_client()` raises: a Gemini stub is patched where it is used (`ladder`, `commands`, `proactive`, `picture.command`, `memory.build`). A new module-level lock, semaphore or cache is added to `_isolation` in `conftest.py`
-- **Deployment.** The tree is mounted read-only at `/app`, dependencies live in `/deps`, the image is distroless (no shell; libopus is copied in from the builder and found through `DISCORD_OPUS_LIB`), one port is published – the mascot SSE feed, on `MASCOT_PUBLISH` (127.0.0.1 unless set), never the OAuth one; new tokens come from `make oauth`, logs go to stdout. Both tokens are read from `.tio.tokens.json` first; the `.env` values are only a fallback, since adding them on top would undo a new login. Session ids, memory keys and log times use `BOT_TIMEZONE`, not the process zone; `TZ` is not set anywhere. README «Эксплуатация»
+- **Voice.** Only an answer that reached chat goes to `speech.say()`; refusals and service lines are not voiced. `Speaker.submit()` never blocks the chat path: it drops an answer rather than queue it past `VOICE_QUEUE` or while the bot is out of the voice channel, and the worker drops one that waited past `VOICE_MAX_WAIT_SECONDS`. The TTS server's own normalization stays off (`normalize: false`): it is English and garbles Russian. A stress goes to the model as an upper-case vowel: it reads `+` as «плюс», and an acute accent garbles the word. `StreamSource.read()` returns `b''` only after `finish()` and an empty buffer – an early `b''` ends playback mid-answer
+- **Tests** (`tests/`, `make test`) clear every variable of `.env.example` and set the environment in `conftest.py` before anything from `src` is imported, recreate module-level asyncio primitives per test, and replace `CONTENT.md` with one whose values are the key names. `client.get_client()` raises: a Gemini stub is patched where it is used (`ladder`, `commands`, `proactive`, `picture.command`, `memory.build`, `pulse`). A new module-level lock, semaphore or cache is added to `_isolation` in `conftest.py`
+- **Deployment.** The tree is mounted read-only at `/app`, dependencies live in `/deps`, the image is distroless (no shell; libopus is copied in from the builder and found through `DISCORD_OPUS_LIB`; ruaccent's models are downloaded in the builder, pruned to what its tiny mode reads, and found through `BOT_ACCENT_PATH`, with `HF_HUB_OFFLINE=1`), one port is published – the OBS overlays (mascot and game), on `MASCOT_PUBLISH` (127.0.0.1 unless set), never the OAuth one; new tokens come from `make oauth`, logs go to stdout. Both tokens are read from `.tio.tokens.json` first; the `.env` values are only a fallback, since adding them on top would undo a new login. Session ids, memory keys and log times use `BOT_TIMEZONE`, not the process zone; `TZ` is not set anywhere. README «Эксплуатация»
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (140 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (155 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 
@@ -251,7 +262,7 @@ Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_C
 - **Docs are part of the change, not a follow-up.** Every change to behaviour, config, schema or layout updates the affected docs in the *same* turn, before reporting the work as done. A change that is only documented in the commit message is unfinished. Each fact lives in one document (see "Documentation"): how a mechanic works – `BOT.md`; what the bot can do, installation, operations, the command and variable tables – `README.md`; layout, module map and these rules – `CLAUDE.md`; plus `.env.example` and the `<!-- … -->` notes in `CONTENT.md`. Do not retell a mechanic in a second document – link to it
 - Adding a channel command (a link, an info line): only `### !name` and its reply in `## channel` of `CONTENT.md`, no code and no restart
 - Adding a command: one `add()` line in `ChatComponent.__init__` + a handler in the right package (see "Where code goes") + its texts in `## texts` of `CONTENT.md` and in `REQUIRED` (`src/core/content.py`). Then: `README.md` (command table), `BOT.md` (registry table and its own «Шаг 7…» section), `CLAUDE.md` only if a module was added
-- Adding config: `src/core/config.py` (with a validated `_env_*` helper) + `.env.example` + README env table. If it is a *text*, it is not config – put it in `CONTENT.md`
+- Adding config: `src/core/config.py` (with a validated `_env_*` helper) + `.env.example` + README env table. If it is a *text*, it is not config – put it in `CONTENT.md`. A default shown on the bot map (`docs/index.html`: cooldowns, quotas, limits, timers) is written there by hand – change it there too
 - Adding a text: `CONTENT.md` + `REQUIRED` in `src/core/content.py`. Never inline a chat-visible string in a handler
 - Editing `CONTENT.md` while the bot runs: the running process hot-reloads it and renders it with **its own, old** code. Adding a placeholder to an existing key before the restart makes `safe_format()` fail and the raw template (`@{user} выбил {value}…`) goes to chat. Add a new key instead
 - Changing rewards: title/prompt in `CONTENT.md`, cost/limit in `.env` – both reach Twitch only on restart. Never create the rewards by hand in the dashboard

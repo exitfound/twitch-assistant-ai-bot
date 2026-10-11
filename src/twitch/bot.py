@@ -3,13 +3,16 @@ import logging
 import signal
 
 import twitchio
+from aiohttp import web
 from twitchio import eventsub
 from twitchio.ext import commands
 
 from src.twitch.core import stream as twitch_stream
 from src.twitch.core.chat_socket import SocketWatch, check_private_api, keep_migrated_sockets
+from src.twitch.core import sse
 from src.twitch.core.component import ChatComponent
-from src.core.config import Emote, Help, Mascot, Memory, Proactive, Rewards, Roll, Twitch
+from src.twitch.core.followers import FollowerCache
+from src.core.config import Emote, Help, Mascot, Memory, Proactive, Pulse, Rewards, Roll, Twitch
 from src.core.content import Content
 from src.core.cooldowns import Cooldowns
 from src.twitch.core.stream import StreamTracker, watch_stream
@@ -21,10 +24,13 @@ from src.twitch.core.tokens import (
 from src.core.utils import defuse
 from src.gemini.memory import build as memory
 from src.twitch.gemini.proactive import proactive_loop
+from src.twitch.gemini.pulse import pulse_loop
 from src.twitch.local.emote_spam import emote_spam_loop
 from src.twitch.local import clip
 from src.twitch.local.help_announce import help_loop
+from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot.feed import mascot_loop
+from src.twitch.local.roll import overlay as roll_overlay
 from src.twitch.local.roll import perks
 from src.twitch.local.roll.announce import curse_lift_loop
 from src.twitch.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
@@ -50,7 +56,8 @@ class Bot(commands.Bot):
         self._bot_name: str | None = None
         self._channel_id: str | None = None
         self._tasks = BackgroundTasks()
-        self._rewards = RewardService(self)
+        self._followers = FollowerCache()
+        self._rewards = RewardService(self, self._followers)
         self._broadcaster_token = False
         self._chat = SocketWatch(
             self, 'чат', lambda: str(self.bot_id), eventsub.ChatMessageSubscription.type,
@@ -126,7 +133,7 @@ class Bot(commands.Bot):
             await self._sync_stream()
         else:
             logger.error('Канал %s не найден – проактив и отправка в чат работать не будут', Twitch.CHANNEL)
-        await self.add_component(ChatComponent(self))
+        await self.add_component(ChatComponent(self, self._followers))
         await self.add_component(RewardComponent(self._rewards))
 
     async def _add_broadcaster_token(self) -> None:
@@ -164,12 +171,16 @@ class Bot(commands.Bot):
         await self.stream.online(stream_id, started_at)
         await self._rewards.set_open(True)
         await self.tell_rewards_down()
+        await roll_overlay.refresh(self.session_id, live=True)
         await perks.on_stream_start(self, self.session_id)
 
     async def stream_went_offline(self) -> None:
         """Stream ended: session by date, game closed, rewards paused."""
+        # The overlay keeps the titles of the stream that ended, not of the date session after it
+        ended = self.session_id
         await self.stream.offline()
         await self._rewards.set_open(False)
+        await roll_overlay.refresh(ended, live=False)
 
     def _start_memory(self) -> None:
         """The memory check (src/gemini/memory/): runs for as long as the bot does.
@@ -234,7 +245,8 @@ class Bot(commands.Bot):
                     'под аккаунтом бота:\n%s', oauth_link(OAUTH_SCOPES),
                 )
         self._start_background_tasks()
-        self._start_mascot()
+        self._start_overlays()
+        await roll_overlay.refresh(self.session_id, live=self.stream_live)
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
         await self._start_rewards()
@@ -244,10 +256,18 @@ class Bot(commands.Bot):
             # so a restart or reconnect mid-stream will not duplicate them
             await perks.on_stream_start(self, self.session_id)
 
-    def _start_mascot(self) -> None:
-        # The overlay feed needs no channel id: it only counts chat and serves the mood
+    def _start_overlays(self) -> None:
+        """The OBS pages' server and the mascot's recount. Neither needs the channel id."""
+        app, feeds = web.Application(), []
         if Mascot.ENABLED:
+            mascot_feed.add_routes(app)
+            feeds.append(mascot_feed.feed)
             self._tasks.start('mascot', mascot_loop)
+        if Roll.OVERLAY_ENABLED:
+            roll_overlay.add_routes(app)
+            feeds.append(roll_overlay.feed)
+        if feeds:
+            self._tasks.start('overlays', lambda: sse.serve(app, feeds, Mascot.HOST, Mascot.PORT))
 
     def _start_background_tasks(self) -> None:
         if not self._channel_id:
@@ -263,6 +283,8 @@ class Bot(commands.Bot):
         if Proactive.ENABLED and tasks.start('proactive', lambda: proactive_loop(self)):
             logger.info('Проактивные сообщения включены (раз в %d–%d мин)',
                         Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
+        if Pulse.ENABLED and tasks.start('pulse', lambda: pulse_loop(self)):
+            logger.info('Пульс чата включён (раз в %d мин во время эфира, пока пишут)', Pulse.INTERVAL_MINUTES)
         # Curses come from rewards and from the previous stream's results
         if (Rewards.ENABLED or Roll.PERKS_ENABLED) and tasks.start('curse_lift', lambda: curse_lift_loop(self)):
             logger.info('Оповещения о снятии проклятий включены')

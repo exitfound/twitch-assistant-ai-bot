@@ -1,4 +1,4 @@
-"""The game's SQLite queries: rolls, rewards, roll_actions, roll_perks.
+"""The game's SQLite queries: rolls, rewards, roll_actions, roll_perks, roll_tiers.
 
 The tables themselves and their migrations are created by init_db() in
 src/core/db/schema.py: the schema lives in one place, which makes it easier to keep
@@ -9,45 +9,51 @@ from typing import NamedTuple
 from src.core.database import get_db, transaction
 
 
-async def save_roll(
-    session_id: str, username: str, value: int, *, free_throw: bool, limit: int | None = None,
-    tier: str | None = None,
-) -> None:
+async def save_roll(session_id: str, username: str, value: int, *, free_throw: bool) -> None:
     """Save a roll. free_throw=True – the throw counts against the free ones.
 
     A paid throw, a reroll and a curse leave the counter alone: a victim of sabotage
     must not lose their free throws because of someone else's points.
-
-    limit – how many free throws the player gets by their status. It is known only
-    when the person rolls from chat: a reward redemption event carries no badges,
-    so the limit is stored in the row. tier – the player's status, stored for the same
-    reason. rolled_at is written to the millisecond: on equal rolls the latest throw
-    takes the title, and two throws often land within one second.
+    rolled_at is written to the millisecond: on equal rolls the latest throw takes the
+    title, and two throws often land within one second.
     """
     async with transaction() as db:
         await db.execute(
-            'INSERT INTO rolls (session_id, username, roll_value, free_throws, free_limit, tier, rolled_at)'
-            " VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))"
+            'INSERT INTO rolls (session_id, username, roll_value, free_throws, rolled_at)'
+            " VALUES (?, ?, ?, ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))"
             ' ON CONFLICT(session_id, username) DO UPDATE SET roll_value = excluded.roll_value,'
-            ' rolled_at = excluded.rolled_at, free_throws = free_throws + excluded.free_throws,'
-            ' free_limit = COALESCE(excluded.free_limit, free_limit), tier = COALESCE(excluded.tier, tier)',
-            (session_id, username, value, int(free_throw), limit, tier),
+            ' rolled_at = excluded.rolled_at, free_throws = free_throws + excluded.free_throws',
+            (session_id, username, value, int(free_throw)),
         )
 
 
-async def set_tier(session_id: str, username: str, tier: str) -> None:
-    """Refresh the status in an existing row: a !roll refused still shows the badges."""
+async def restore_roll(session_id: str, username: str, value: int) -> None:
+    """Put back a roll a curse threw over. It loses every tie: dated just before the
+    session's earliest roll, so a returned number never takes a title from a real throw."""
     async with transaction() as db:
         await db.execute(
-            'UPDATE rolls SET tier = ? WHERE session_id = ? AND username = ?', (tier, session_id, username),
+            'UPDATE rolls SET roll_value = ?, rolled_at = ('
+            "SELECT strftime('%Y-%m-%d %H:%M:%f', MIN(rolled_at), '-0.001 seconds')"
+            ' FROM rolls WHERE session_id = ?) WHERE session_id = ? AND username = ?',
+            (value, session_id, session_id, username),
+        )
+
+
+async def save_tier(session_id: str, username: str, tier: str) -> None:
+    """The viewer's status in the session, as their latest chat message showed it."""
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO roll_tiers (session_id, username, tier) VALUES (?, ?, ?)'
+            ' ON CONFLICT(session_id, username) DO UPDATE SET tier = excluded.tier',
+            (session_id, username, tier),
         )
 
 
 async def get_tier(session_id: str, username: str) -> str | None:
-    """The player's status by their last !roll this session, None – they have not rolled."""
+    """The viewer's status in the session, None – they have not written in this stream's chat."""
     db = await get_db()
     async with db.execute(
-        'SELECT tier FROM rolls WHERE session_id = ? AND username = ?', (session_id, username),
+        'SELECT tier FROM roll_tiers WHERE session_id = ? AND username = ?', (session_id, username),
     ) as cursor:
         row = await cursor.fetchone()
     return row[0] if row else None
@@ -80,14 +86,13 @@ class RollRow(NamedTuple):
     curse_ceiling: int | None
     curse_floor_at: float | None
     curse_until: float | None
-    free_limit: int | None      # status-based limit, stored on a throw from chat
 
 
 async def get_roll(session_id: str, username: str) -> RollRow | None:
     """The player's row in the session, or None if they have not rolled."""
     db = await get_db()
     async with db.execute(
-        'SELECT roll_value, free_throws, curse_ceiling, curse_floor_at, curse_until, free_limit FROM rolls'
+        'SELECT roll_value, free_throws, curse_ceiling, curse_floor_at, curse_until FROM rolls'
         ' WHERE session_id = ? AND username = ?',
         (session_id, username),
     ) as cursor:
@@ -168,6 +173,18 @@ async def last_throws(session_id: str, username: str, limit: int) -> list[float]
         (session_id, username, limit),
     ) as cursor:
         return [thrown_at for (thrown_at,) in await cursor.fetchall()]
+
+
+async def value_before_curse(session_id: str, target: str) -> int | None:
+    """The target's roll before the latest bought curse threw over it. None – no such curse."""
+    db = await get_db()
+    async with db.execute(
+        "SELECT old_value FROM roll_actions WHERE session_id = ? AND action = 'curse' AND target = ?"
+        " AND status = 'ok' ORDER BY id DESC LIMIT 1",
+        (session_id, target),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None
 
 
 async def seconds_since_action(session_id: str, action: str, target: str, status: str) -> int | None:

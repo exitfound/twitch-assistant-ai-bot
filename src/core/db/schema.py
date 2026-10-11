@@ -118,7 +118,7 @@ async def _bot_uses(db: aiosqlite.Connection) -> None:
 
 async def _rolls(db: aiosqlite.Connection) -> None:
     """Rolls and its added columns."""
-    # Tables of the !roll game: rolls, rewards, roll_actions, roll_throws, roll_perks. Schema and migrations
+    # Tables of the !roll game: rolls, rewards, roll_actions, roll_throws, roll_perks, roll_tiers. Schema and migrations
     # live here with all the others, their queries – in src/twitch/local/roll/storage.py
     await db.execute('''
         CREATE TABLE IF NOT EXISTS rolls (
@@ -221,6 +221,45 @@ async def _roll_perks(db: aiosqlite.Connection) -> None:
             PRIMARY KEY (session_id, username, perk)
         )
     ''')
+
+
+async def _roll_tiers(db: aiosqlite.Connection) -> None:
+    """Roll_tiers: each viewer's status in a session."""
+    # Written from chat, read by the rewards: a channel-points redemption carries no
+    # badges, and the follow gate, the buyer's limits and the extra roll depend on them
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS roll_tiers (
+            session_id TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            tier       TEXT NOT NULL,
+            PRIMARY KEY (session_id, username)
+        )
+    ''')
+
+
+async def _dossier(db: aiosqlite.Connection) -> None:
+    """The dossier: chatter_facts and the catchphrases of a profile."""
+    # One retold fact per row, merged after every conversation instead of rewriting a
+    # paragraph: a rewritten paragraph gathers quotes, and the bot pastes them back.
+    # first_seen / last_seen are conversation keys; hits counts confirmations
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS chatter_facts (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            username   TEXT NOT NULL,
+            kind       TEXT NOT NULL,
+            text       TEXT NOT NULL,
+            first_seen TEXT NOT NULL,
+            last_seen  TEXT NOT NULL,
+            hits       INTEGER NOT NULL DEFAULT 1,
+            active     INTEGER NOT NULL DEFAULT 1
+        )
+    ''')
+    await db.execute(
+        'CREATE INDEX IF NOT EXISTS idx_chatter_facts_user ON chatter_facts(username, active)'
+    )
+    # JSON list of at most two phrases the chatter really repeats, kept word for word
+    if 'catchphrases' not in await _columns(db, 'chatter_profiles'):
+        await db.execute("ALTER TABLE chatter_profiles ADD COLUMN catchphrases TEXT NOT NULL DEFAULT '[]'")
 
 
 async def _streams(db: aiosqlite.Connection) -> None:
@@ -353,6 +392,8 @@ STEPS = [
     ('fts', _fts),
     ('roll_throws', _roll_throws),
     ('bot_state', _bot_state),
+    ('roll_tiers', _roll_tiers),
+    ('dossier', _dossier),
 ]
 SCHEMA_VERSION = len(STEPS)
 
@@ -368,11 +409,9 @@ _ROLLS_COLUMNS = {
     # Hard curse deadline by time.time(): the curse of the previous stream's «залупа»
     # has one, a bought curse has NULL
     'curse_until': 'REAL',
-    # How many free throws this player is entitled to in this session: it depends
-    # on their status, and a channel-points redemption carries no badges in the event
+    # Neither is read nor written: the status lives in roll_tiers, filled from chat.
+    # The columns stay because the steps only add
     'free_limit': 'INTEGER',
-    # The player's status by their last !roll (viewer.Tier): the rerolls they may buy
-    # depend on it, for the same reason
     'tier': 'TEXT',
 }
 

@@ -5,6 +5,10 @@ aiosqlite==0.22.1
 discord.py[voice]==2.7.1
 google-genai==1.62.0
 httpx==0.28.1
+numpy==2.4.6
 Pillow==12.3.0
 python-dotenv==1.2.3
+# ё and word stress for the voice; it fails with transformers 5 (token_type_ids)
+ruaccent==1.5.8.3
+transformers==4.57.6
 twitchio==3.2.1

@@ -143,6 +143,8 @@ class Files:
     # Empty – the repository root (see src/core/paths.py); a container moves them to a volume
     DB: str | None = _env_raw('BOT_DB_PATH')
     CONTENT: str | None = _env_raw('BOT_CONTENT_PATH')
+    # ruaccent's models for the voice; the image carries them
+    ACCENT: str | None = _env_raw('BOT_ACCENT_PATH')
 
 
 class Clock:
@@ -173,8 +175,8 @@ class Twitch:
 
 class Gemini:
     API_KEY: str | None = os.getenv('GEMINI_API_KEY')
-    MODEL: str = os.getenv('GEMINI_MODEL', 'gemini-2.5-flash')
-    TEMPERATURE: float = _env_float('GEMINI_TEMPERATURE', 1.5, 0.0, 2.0)
+    MODEL: str = os.getenv('GEMINI_MODEL', 'gemini-3.8-flash')
+    TEMPERATURE: float = _env_float('GEMINI_TEMPERATURE', 1.4, 0.0, 2.0)
     # !ask – factual mode: at the chatter temperature the model makes things up more often
     ASK_TEMPERATURE: float = _env_float('GEMINI_ASK_TEMPERATURE', 0.5, 0.0, 2.0)
     THINKING_BUDGET: int = _env_int('GEMINI_THINKING_BUDGET', 0, -1, 32768)
@@ -198,28 +200,30 @@ class Cooldown:
     # One ladder by viewer status for all commands of both classes.
     # Broadcaster, moderator and subscriber never wait – their values are not
     # configurable, this is a rule, not a parameter.
-    VIP: int = _env_int('COOLDOWN_VIP', 10, 0, 3600)
-    REGULAR: int = _env_int('COOLDOWN_REGULAR', 20, 0, 3600)
+    VIP: int = _env_int('COOLDOWN_VIP', 5, 0, 3600)
+    REGULAR: int = _env_int('COOLDOWN_REGULAR', 15, 0, 3600)
     # Help and channel commands (!help, !bot, !channel, !tg …): one answer per command for
-    # the whole chat, no personal pause. The broadcaster is exempt; 0 – off
+    # the whole chat, no personal pause. The broadcaster and moderators are exempt; 0 – off
     PUBLIC: int = _env_int('COOLDOWN_PUBLIC', 30, 0, 3600)
 
 
 class Quota:
-    # Cap on Gemini requests per hour – on top of the cooldown. Broadcaster, moderators
-    # and subscribers are unlimited: they have no cooldown either. 0 – no limit
-    VIP_PER_HOUR: int = _env_int('QUOTA_VIP_PER_HOUR', 60, 0, 10_000)
-    FOLLOWER_PER_HOUR: int = _env_int('QUOTA_FOLLOWER_PER_HOUR', 30, 0, 10_000)
+    # Cap on Gemini requests per hour – on top of the cooldown, growing up the ladder.
+    # A moderator sits between VIP and subscriber, the broadcaster is unlimited. 0 – no limit
+    SUB_PER_HOUR: int = _env_int('QUOTA_SUB_PER_HOUR', 100, 0, 10_000)
+    MOD_PER_HOUR: int = _env_int('QUOTA_MOD_PER_HOUR', 75, 0, 10_000)
+    VIP_PER_HOUR: int = _env_int('QUOTA_VIP_PER_HOUR', 50, 0, 10_000)
+    FOLLOWER_PER_HOUR: int = _env_int('QUOTA_FOLLOWER_PER_HOUR', 25, 0, 10_000)
     WINDOW_MINUTES: int = _env_int('QUOTA_WINDOW_MINUTES', 60, 1, 1440)
-    # The bill's emergency brake: everyone's requests per window, since the per-viewer
-    # quota leaves every badge above follower unlimited. The broadcaster is not counted.
-    # 0 – no limit; 200 against a busiest hour of 14 served requests is a brake, not a cap
+    # The bill's emergency brake: the viewers' requests per window, so one person cannot
+    # close Gemini for the rest. The broadcaster is neither counted nor held.
+    # 0 – no limit; 200 against a busiest 60 minutes of 69 requests is a brake, not a cap
     CHANNEL_PER_HOUR: int = _env_int('QUOTA_CHANNEL_PER_HOUR', 200, 0, 100_000)
 
 
 class Follow:
-    # Without a follow the bot does not answer at all, except for help. The check goes
-    # through Helix and is cached: follows change rarely, messages are many
+    # Without a follow the bot does not answer at all, except for help, and refunds rewards.
+    # The check goes through Helix and is cached: follows change rarely, messages are many
     REQUIRED: bool = _env_bool('FOLLOW_REQUIRED', True)
     CACHE_MINUTES: int = _env_int('FOLLOW_CACHE_MINUTES', 15, 1, 1440)
     # How often to repeat the follow suggestion to the same person
@@ -229,10 +233,12 @@ class Follow:
 class PerStream:
     # One per-stream limit for !ask, !who, !versus, !summary, !ascii and !clip, counted
     # per command (offline – per 24 hours). A follower's uses are a trial: past them
-    # the refusal offers a subscription. A subscribing VIP counts as a subscriber, the
-    # broadcaster is not limited. 0 – no limit
+    # the refusal offers a subscription. A moderator sits between VIP and subscriber; a
+    # subscribing VIP or moderator counts as a subscriber, the broadcaster is not limited.
+    # 0 – no limit
     FOLLOWER: int = _env_int('PER_STREAM_FOLLOWER', 1, 0, 1000)
     VIP: int = _env_int('PER_STREAM_VIP', 5, 0, 1000)
+    MOD: int = _env_int('PER_STREAM_MOD', 7, 0, 1000)
     SUB: int = _env_int('PER_STREAM_SUB', 10, 0, 1000)
 
 
@@ -296,10 +302,12 @@ def _roll_range() -> tuple[int, int]:
 
 class Roll:
     MIN, MAX = _roll_range()
-    # Free !roll throws per session – by viewer status. Beyond that only the
-    # channel-points reward. The broadcaster rolls without limit, a non-follower not at all
+    # Free !roll throws per session – by viewer status, a moderator between VIP and
+    # subscriber. Beyond that only the channel-points reward. The broadcaster rolls
+    # without limit, a non-follower not at all
     FREE_PER_SESSION: int = _env_int('ROLL_FREE_PER_SESSION', 3, 1, 1000)
     FREE_VIP: int = _env_int('ROLL_FREE_VIP', 5, 1, 1000)
+    FREE_MOD: int = _env_int('ROLL_FREE_MOD', 7, 1, 1000)
     FREE_SUB: int = _env_int('ROLL_FREE_SUB', 10, 1, 1000)
     # Results of the previous stream: the «китежанин» gets a shield against rerolls,
     # the «залупа» gets a curse. PERK_MINUTES counts from the person's first
@@ -312,6 +320,8 @@ class Roll:
     BURST_THROWS: int = _env_int('ROLL_BURST_THROWS', 5, 2, 1000)
     BURST_SECONDS: int = _env_int('ROLL_BURST_SECONDS', 60, 1, 3600)
     BURST_PAUSE_MINUTES: int = _env_int('ROLL_BURST_PAUSE_MINUTES', 1, 1, 1440)
+    # The game on the stream: the OBS page and its SSE feed on the overlays' port (MASCOT_PORT)
+    OVERLAY_ENABLED: bool = _env_bool('ROLL_OVERLAY_ENABLED', False)
 
 
 def _curse_range() -> tuple[int, int]:
@@ -348,14 +358,15 @@ class Rewards:
     # After a successful reroll the target is immune to new rerolls for this many minutes:
     # Twitch's limit counts each attacker separately, and a crowd finishes off one target.
     # A curse pierces this protection, like the shield. 0 – no protection
-    REROLL_PROTECT_MINUTES: int = _env_int('REWARD_REROLL_PROTECT_MINUTES', 3, 0, 1440)
-    # How many rerolls, shields, curses and cleanses a buyer may buy, by the status their
-    # last !roll stored (a redemption carries no badges): rerolls per window of
+    REROLL_PROTECT_MINUTES: int = _env_int('REWARD_REROLL_PROTECT_MINUTES', 1, 0, 1440)
+    # How many rerolls, shields, curses and cleanses a buyer may buy, by the status chat
+    # last showed this stream (a redemption carries no badges): rerolls per window of
     # REROLL_WINDOW_MINUTES, opened by the first successful one, the rest per stream.
-    # The broadcaster is not limited
+    # A moderator sits between VIP and subscriber, the broadcaster is not limited.
     # 0 – no limit, like every other limit of the bot
     LIMIT_FOLLOWER: int = _env_int('REWARD_LIMIT_FOLLOWER', 3, 0, 1000)
     LIMIT_VIP: int = _env_int('REWARD_LIMIT_VIP', 5, 0, 1000)
+    LIMIT_MOD: int = _env_int('REWARD_LIMIT_MOD', 7, 0, 1000)
     LIMIT_SUB: int = _env_int('REWARD_LIMIT_SUB', 10, 0, 1000)
     REROLL_WINDOW_MINUTES: int = _env_int('REWARD_REROLL_WINDOW_MINUTES', 30, 1, 1440)
     # How long a bought shield holds off rerolls, counted from the purchase
@@ -374,24 +385,25 @@ class Rewards:
 
 
 class Context:
-    CHAT_MESSAGES: int = _env_int('CONTEXT_CHAT_MESSAGES', 50, 1, 1000)
-    # A free-text answer during a stream gets the whole current stream and the whole
-    # previous one; this only caps a runaway stream. The longest stream on record
-    # holds 1521 messages
+    # The thread of the conversation a free-text answer and a proactive remark see as is.
+    # What the chat is about goes in retold (Pulse): raw lines are what the model pastes
+    CHAT_MESSAGES: int = _env_int('CONTEXT_CHAT_MESSAGES', 20, 1, 1000)
+    # Dossier facts of the asker in a free-text answer; people named in it get half
+    DOSSIER_FACTS: int = _env_int('CONTEXT_DOSSIER_FACTS', 6, 0, 50)
+    # !summary takes its stream whole; this only caps a runaway stream. The longest
+    # stream on record holds 1521 messages
     STREAM_MAX_MESSAGES: int = _env_int('CONTEXT_STREAM_MAX_MESSAGES', 2000, 100, 20_000)
-    # What the bill depends on: chat characters in one request. Both streams of a free-text
-    # answer share it, the previous one cut first; !summary keeps its one stream to it.
-    # The longest stream on record is 61 thousand characters, a usual one 15–25
+    # What the bill of !summary depends on: chat characters in one request. The longest
+    # stream on record is 61 thousand characters, a usual one 15–25
     STREAM_MAX_CHARS: int = _env_int('CONTEXT_STREAM_MAX_CHARS', 60_000, 5_000, 1_000_000)
     SEARCH_RESULTS: int = _env_int('CONTEXT_SEARCH_RESULTS', 10, 0, 100)
     SEARCH_KNOWLEDGE_SHARE: float = _env_percent('CONTEXT_SEARCH_KNOWLEDGE_SHARE', 50)
     KNOWLEDGE_RANDOM: int = _env_int('CONTEXT_KNOWLEDGE_RANDOM', 10, 0, 100)
-    # !who (src/gemini/who.py): a fresh random sample of the target's whole history on
-    # every call. WHO_MESSAGES – their last messages, the old context and the last
-    # rung; WHO_RECENT_MESSAGES of them go into the sample as «what now»
+    # !who (src/gemini/who.py): a fresh random sample of the target's dossier on every
+    # call. WHO_MESSAGES – their last messages, the last rung; WHO_RECENT_MESSAGES of
+    # them go into the sample as «what now». !versus takes half per person
     WHO_MESSAGES: int = _env_int('CONTEXT_WHO_MESSAGES', 30, 1, 500)
-    WHO_EVENTS: int = _env_int('CONTEXT_WHO_EVENTS', 15, 0, 200)
-    WHO_SAMPLE_MESSAGES: int = _env_int('CONTEXT_WHO_SAMPLE_MESSAGES', 40, 0, 500)
+    WHO_FACTS: int = _env_int('CONTEXT_WHO_FACTS', 8, 0, 50)
     WHO_RECENT_MESSAGES: int = _env_int('CONTEXT_WHO_RECENT_MESSAGES', 10, 0, 500)
     WHO_RELATIONS: int = _env_int('CONTEXT_WHO_RELATIONS', 2, 0, 20)
     VERSUS_MESSAGES: int = _env_int('CONTEXT_VERSUS_MESSAGES', 30, 1, 500)
@@ -412,6 +424,17 @@ class Memory:
     CONVERSATION_MIN_MESSAGES: int = _env_int('MEMORY_CONVERSATION_MIN_MESSAGES', 50, 1, 100_000)
     # A chatter gets a profile (or an update) for a conversation they wrote this much in
     PROFILE_MIN_MESSAGES: int = _env_int('MEMORY_PROFILE_MIN_MESSAGES', 10, 1, 10_000)
+    # Active facts kept per chatter: over it the least confirmed are switched off
+    DOSSIER_MAX_FACTS: int = _env_int('MEMORY_DOSSIER_MAX_FACTS', 40, 5, 500)
+
+
+class Pulse:
+    # What the chat is about right now, retold in a few lines by Gemini and refreshed
+    # while people write. Free-text answers and proactive remarks see it instead of the
+    # raw chat of the stream. See src/gemini/pulse.py
+    ENABLED: bool = _env_bool('PULSE_ENABLED', True)
+    INTERVAL_MINUTES: int = _env_int('PULSE_INTERVAL_MINUTES', 5, 1, 120)
+    MESSAGES: int = _env_int('PULSE_MESSAGES', 150, 20, 2000)
 
 
 class Help:
@@ -502,6 +525,17 @@ class Voice:
     # A longer answer is voiced up to the last sentence end within this many characters:
     # 500 covers one whole Twitch message (450 and the nick)
     MAX_CHARS: int = _env_int('VOICE_MAX_CHARS', 500, 20, 2000)
+    # Speech sped up (above 1) or slowed down by the bot, the pitch kept: the clone's pace
+    # follows its sample, and the server's own speed works only without streaming
+    TEMPO: float = _env_float('VOICE_TEMPO', 1.0, 0.8, 1.25)
+    # ё restored by ruaccent: the model guesses the stress from spelling, and «все»/«всё»
+    # is the commonest miss. STRESS also marks every stress (upper-case vowel), which the
+    # model follows in some words only and which slows the speech: off by default
+    YO: bool = _env_bool('VOICE_YO', True)
+    STRESS: bool = _env_bool('VOICE_STRESS', False)
+    # An answer synthesized sentence by sentence, for the intonation of a long one: each
+    # request starts the model afresh
+    SENTENCES: bool = _env_bool('VOICE_SENTENCES', True)
     # Speech gathered before playback starts: at least PREBUFFER_SECONDS and this share of
     # the answer's expected length; the speaker raises it to match the server speed it
     # measures (0.8–1.8 s per second of speech), so playback does not run dry before the end

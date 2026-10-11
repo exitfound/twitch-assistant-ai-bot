@@ -14,7 +14,7 @@ from twitchio.ext import commands
 from src.twitch.core.commands import (
     CommandContext, CommandEntry, CommandRegistry, Kind,
 )
-from src.core.config import Clip, Cooldown, Follow, Picture, Quota
+from src.core.config import Clip, Cooldown, Follow, Picture, Quota, Twitch
 from src.core.content import Content
 from src.core.database import (
     count_bot_uses, count_channel_bot_uses, oldest_bot_use_age, record_bot_use,
@@ -38,6 +38,7 @@ from src.twitch.local.follow import handle_follow
 from src.twitch.local.mascot import feed as mascot
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
 from src.twitch.local.roll.perks import on_chat as roll_perks_on_chat
+from src.twitch.local.roll.tiers import on_chat as roll_tiers_on_chat
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,8 @@ CLIP_TRIGGER = '!clip'
 FOLLOW_HINT_SCOPE = 'follow_hint'
 # Cooldown scope of help and channel commands: one per trigger for the whole chat
 PUBLIC_SCOPE = 'public'
+# Cooldown scope of the «wait N seconds» refusal: said once per pause, then silence
+COOLDOWN_TOLD_SCOPE = 'cooldown_told'
 
 # EventSub may deliver a message more than once, and a second chat subscription doubles
 # everything: ids of this many recent messages are remembered to drop the repeat
@@ -68,11 +71,11 @@ SEEN_MESSAGES = 500
 def _quota_per_hour(tier: Tier) -> int:
     """Cap on Gemini requests per window. 0 – no limit.
 
-    Same ladder as the cooldown: whoever paid or wears a badge is not
-    limited at all. A limit on top of the cooldown guards against slow but
-    constant draining: the cooldown holds the pace, the quota holds the volume.
+    The cooldown holds the pace, the quota holds the volume: a subscriber never waits,
+    but is still capped, so one person cannot use up the channel ceiling alone.
     """
-    return by_tier(tier, broadcaster=0, sub=0, vip=Quota.VIP_PER_HOUR, regular=Quota.FOLLOWER_PER_HOUR)
+    return by_tier(tier, broadcaster=0, sub=Quota.SUB_PER_HOUR, mod=Quota.MOD_PER_HOUR,
+                   vip=Quota.VIP_PER_HOUR, regular=Quota.FOLLOWER_PER_HOUR)
 
 
 def _cooldown_seconds(tier: Tier) -> int:
@@ -81,7 +84,7 @@ def _cooldown_seconds(tier: Tier) -> int:
     One ladder for both command classes and for free text addressed to the bot.
     Whoever paid or wears a badge does not wait at all.
     """
-    return by_tier(tier, broadcaster=0, sub=0, vip=Cooldown.VIP, regular=Cooldown.REGULAR)
+    return by_tier(tier, broadcaster=0, sub=0, mod=0, vip=Cooldown.VIP, regular=Cooldown.REGULAR)
 
 
 
@@ -122,9 +125,10 @@ def route(text: str, registry: CommandRegistry, bot_name: str,
 
 class ChatComponent(commands.Component):
 
-    def __init__(self, bot: BotPort) -> None:
+    def __init__(self, bot: BotPort, followers: FollowerCache | None = None) -> None:
         self.bot = bot
-        self._followers = FollowerCache()
+        # Shared with the rewards, so a new follow opens both at once
+        self._followers = followers if followers is not None else FollowerCache()
         self._registry = CommandRegistry()
         self._seen: OrderedDict[str, None] = OrderedDict()
         add = self._registry.add
@@ -188,6 +192,8 @@ class ChatComponent(commands.Component):
             )
         # A first appearance in the stream starts the countdown of the previous stream's game perks
         await roll_perks_on_chat(self.bot, session_id, message.chatter.name)
+        # The rewards read the status from here: a redemption carries no badges
+        await roll_tiers_on_chat(self.bot, session_id, message.chatter)
 
         if entry is None and prompt is None:
             return
@@ -235,19 +241,26 @@ class ChatComponent(commands.Component):
             return False
 
         if entry is not None and entry.public:
-            return self._public_free(entry, tier)
+            # A subscribing moderator has the subscriber's tier but is staff all the same
+            return self._public_free(entry, tier == Tier.BROADCASTER or bool(message.chatter.moderator))
 
+        told = f'{COOLDOWN_TOLD_SCOPE}:{kind}'
         if seconds:
             remaining = self.bot.cooldown_remaining(user, kind)
             if remaining > 0:
-                key = 'cooldown_gemini' if kind == Kind.GEMINI else 'cooldown_local'
-                await reply(message, Content.text(key, user=user, seconds=int(remaining) + 1))
+                # The refusal names the seconds left, so once per pause is enough: every
+                # further message until it ends is dropped silently
+                if not self.bot.cooldown_remaining(user, told):
+                    self.bot.set_cooldown(user, math.ceil(remaining), told)
+                    key = 'cooldown_gemini' if kind == Kind.GEMINI else 'cooldown_local'
+                    await reply(message, Content.text(key, user=user, seconds=int(remaining) + 1))
                 return False
 
         # The cooldown is taken right after its check, with no await in between: twitchio
         # runs every event in its own task, and two quick messages would both pass it
         if seconds:
             self.bot.set_cooldown(user, seconds, kind)
+            self.bot.clear_cooldown(user, told)
 
         # Quota on top of the cooldown: only Gemini requests count – they cost
         # money. Local commands are held by the cooldown alone. A refusal gives the
@@ -264,16 +277,17 @@ class ChatComponent(commands.Component):
                 return False
         return True
 
-    def _public_free(self, entry: CommandEntry, tier: Tier) -> bool:
+    def _public_free(self, entry: CommandEntry, staff: bool) -> bool:
         """Help and channel commands: once per COOLDOWN_PUBLIC for the whole chat, silently.
 
         The answer is the same for everyone and is still in chat, so a repeat is dropped
         without a refusal. No personal cooldown: !tg must not hold back !roll or the other
-        way round. No await between the check and the set, as with the personal cooldown.
+        way round. The broadcaster and moderators pass any time – they repeat a link for a
+        newcomer – and still start the pause. No await between the check and the set.
         """
-        if not Cooldown.PUBLIC or tier == Tier.BROADCASTER:
+        if not Cooldown.PUBLIC:
             return True
-        if self.bot.cooldown_remaining(entry.trigger, PUBLIC_SCOPE) > 0:
+        if not staff and self.bot.cooldown_remaining(entry.trigger, PUBLIC_SCOPE) > 0:
             return False
         self.bot.set_cooldown(entry.trigger, Cooldown.PUBLIC, PUBLIC_SCOPE)
         return True
@@ -297,14 +311,13 @@ class ChatComponent(commands.Component):
     async def _within_channel_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:
         """Whether the channel as a whole is within its window. False – already refused.
 
-        A ceiling over everyone, on top of the per-viewer quota, which bounds one person
-        and not the channel's spend: moderators and subscribers have no personal quota at
-        all. The broadcaster is exempt, and local commands keep working – only paid ones
-        are refused.
+        A ceiling over the viewers, on top of the per-viewer quota, which bounds one person
+        and not the channel's spend. The broadcaster is exempt and not counted, so their own
+        requests never close the bot to chat. Local commands keep working.
         """
         if not Quota.CHANNEL_PER_HOUR or tier == Tier.BROADCASTER:
             return True
-        used = await count_channel_bot_uses(Kind.GEMINI, Quota.WINDOW_MINUTES)
+        used = await count_channel_bot_uses(Kind.GEMINI, Quota.WINDOW_MINUTES, exclude=Twitch.CHANNEL)
         if used < Quota.CHANNEL_PER_HOUR:
             return True
         logger.warning(
@@ -327,7 +340,7 @@ class ChatComponent(commands.Component):
         minutes = max(1, math.ceil((Quota.WINDOW_MINUTES * 60 - age) / 60))
         text = Content.text('quota_exceeded', user=user, limit=limit, minutes=minutes,
                             window=Quota.WINDOW_MINUTES)
-        await deny(self.bot, message, user, text + sub_hint(message.chatter))
+        await deny(self.bot, message, user, text + sub_hint(message.chatter, limit, Quota.SUB_PER_HOUR))
         return False
 
     def _route(self, message: twitchio.ChatMessage) -> tuple[CommandEntry | None, str | None, bool]:

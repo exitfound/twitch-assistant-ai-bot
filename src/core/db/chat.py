@@ -29,10 +29,8 @@ async def get_recent_chat(session_id: str, limit: int = 20,
     return list(reversed(rows))
 
 
-# Both lookups scan the whole chat, and every free-text answer and !summary makes one.
-# The session before a given one never changes once found; the latest session other than
-# a given one changes only when some other session gets a message
-_previous_sessions: dict[tuple[str, int], str] = {}
+# The lookup scans the whole chat, and every !summary makes one. The latest session other
+# than a given one changes only when some other session gets a message
 _last_sessions: dict[tuple[str, int], tuple[str | None, int]] = {}
 _CACHE_MAX = 64
 
@@ -41,30 +39,6 @@ def _remember(cache: dict, key: tuple, value: object) -> None:
     if len(cache) >= _CACHE_MAX:
         cache.clear()
     cache[key] = value
-
-
-async def get_previous_chat_session(session_id: str, min_messages: int) -> str | None:
-    """The last session before this one with at least min_messages – the previous stream.
-
-    Taken from the chat rather than from streams, which does not cover the older
-    sessions; a stream nobody wrote in has nothing to remember anyway.
-    """
-    key = (session_id, min_messages)
-    if key in _previous_sessions:
-        return _previous_sessions[key]
-    db = await get_db()
-    async with db.execute(
-        "SELECT session_id FROM chat_messages"
-        " WHERE id < (SELECT MIN(id) FROM chat_messages WHERE session_id = ?) AND message NOT LIKE '!%'"
-        ' GROUP BY session_id HAVING COUNT(*) >= ? ORDER BY MAX(id) DESC LIMIT 1',
-        (session_id, min_messages),
-    ) as cursor:
-        row = await cursor.fetchone()
-    if row is None:
-        # Not cached: a session with no chat yet has no «before» to look behind
-        return None
-    _remember(_previous_sessions, key, row[0])
-    return row[0]
 
 
 async def get_last_chat_session(exclude: str, min_messages: int) -> str | None:

@@ -10,7 +10,7 @@ from src.core.config import Rewards, Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
 from src.twitch.core.port import BotPort
-from src.twitch.local.roll import game
+from src.twitch.local.roll import game, overlay
 from src.twitch.local.roll.storage import get_pending_perk_users
 
 logger = logging.getLogger(__name__)
@@ -35,6 +35,7 @@ async def on_stream_start(bot: BotPort, session_id: str) -> None:
         if granted is None:
             return
         champion, loser = granted
+        overlay.publish(overlay.perks(champion, loser))
         if champion and loser:
             key = 'roll_perks_both'
         elif champion:
@@ -60,6 +61,7 @@ async def on_chat(bot: BotPort, session_id: str, user: str) -> None:
             return
         pending.discard(user)
         for perk in await game.appear(session_id, user):
+            overlay.publish(overlay.perk_on(user, perk))
             key = 'roll_perk_shield_on' if perk == game.Perk.SHIELD else 'roll_perk_curse_on'
             await _say(bot, session_id, f'[perk:{perk}]', Content.text(
                 key, user=user, minutes=Roll.PERK_MINUTES,

@@ -19,6 +19,26 @@ def reward_title(action: str) -> str:
     return Content.text(f'reward_{action}_title')
 
 
+# Words whose own period ends a sentence too: «ещё 5 мин.» keeps it before a note
+ABBREVIATIONS = ('мин.', 'сек.')
+
+
+def compose(*parts: str) -> str:
+    """Join message pieces with spaces. A note in brackets belongs to the sentence before
+    it, so that sentence's closing marks move past the note: «… (95 из 100) (осталось 2).»"""
+    text = ''
+    for part in filter(None, parts):
+        body = text.rstrip('.!?…')
+        marks = text[len(body):]
+        if not (text and part.startswith('(') and marks):
+            text = f'{text} {part}' if text else part
+        elif text.endswith(ABBREVIATIONS):
+            text = f'{text} {part}.'
+        else:
+            text = f'{body} {part}{marks}'
+    return text
+
+
 def curse_values() -> dict:
     """Curse parameters for the texts: in the reward description and in chat."""
     return {

@@ -26,12 +26,16 @@ HUNDREDS = ['', 'сто', 'двести', 'триста', 'четыреста', 
 LINK_RE = re.compile(r'https?://\S+|www\.\S+')
 EMOJI_RE = re.compile(r'[\U0001F000-\U0001FAFF☀-➿️]')
 LATIN_RE = re.compile(r'@?[A-Za-z][A-Za-z0-9_]*')
+CYRILLIC_WORD_RE = re.compile(r'[а-яёА-ЯЁ]+(?:-[а-яёА-ЯЁ]+)*')
 LEADING_MENTIONS_RE = re.compile(r'^(?:@\w+[\s,.:;!?]*)+')
 # Punctuation that sticks to a word in chat: «KEKW,» is still the emote
 WORD_PUNCTUATION = '.,:;!?…"\'()«»'
 # A dotted number in a stream about code is a version far more often than a fraction:
 # «5.5» is read «пять точка пять», not as two sentences
 DECIMAL_RE = re.compile(r'(\d+)\.(?=\d)')
+# A closing quote stays with its sentence: «"…съебал". Всё ноет…»; a quoted «кабан!»
+# followed by a lower-case word is the middle of a sentence
+SENTENCE_END_RE = re.compile(r'(?:(?<=[.!?…])|(?<=[.!?…]"))\s+(?=["(]?[А-ЯЁA-Z])')
 
 
 def _under_1000(n: int, female: bool = False) -> list[str]:
@@ -85,6 +89,25 @@ def parse_nicks(lines: list[str]) -> dict[str, str]:
     return nicks
 
 
+def word_key(word: str) -> str:
+    return word.lower().replace('ё', 'е')
+
+
+def parse_words(lines: list[str]) -> dict[str, str]:
+    """`слово = как сказать` lines from CONTENT.md → {word lowercased, ё as е: words}."""
+    return {word_key(word): spoken for word, spoken in parse_nicks(lines).items()}
+
+
+def _say_words(text: str, words: dict[str, str]) -> str:
+    def say(m: re.Match) -> str:
+        word = m.group(0)
+        known = words.get(word_key(word))
+        if known is None:
+            return word
+        return known[:1].upper() + known[1:] if word[0].isupper() else known
+    return CYRILLIC_WORD_RE.sub(say, text) if words else text
+
+
 def _decaps(text: str) -> str:
     letters = [c for c in text if c.isalpha()]
     if letters and sum(c.isupper() for c in letters) / len(letters) > 0.6:
@@ -95,7 +118,8 @@ def _decaps(text: str) -> str:
     return re.sub(r'(^|[.!?…]\s+)([а-яё])', lambda m: m.group(1) + m.group(2).upper(), text)
 
 
-def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) -> str:
+def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int,
+            words: dict[str, str] | None = None) -> str:
     """The text to synthesize, or '' when nothing speakable is left."""
     text = LINK_RE.sub('ссылка', text)
     # Emotes are matched case-sensitively, as Twitch does: «KEKW» is one, «kekw» a word
@@ -122,6 +146,7 @@ def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) 
     text = DECIMAL_RE.sub(r'\1 точка ', text)
     text = text.replace('%', ' процентов').replace('+', ' плюс ')
     text = re.sub(r'\d+', lambda m: number_words(int(m.group(0))), text)
+    text = _say_words(text, words or {})
     text = text.replace('@', '').replace('_', ' ').replace('«', '"').replace('»', '"')
     text = re.sub(r'([!?.])\1+', r'\1', text)
     text = re.sub(r'\s{2,}', ' ', text).strip(' ,')
@@ -130,6 +155,22 @@ def prepare(text: str, nicks: dict[str, str], emotes: set[str], max_chars: int) 
     return text[:1].upper() + text[1:]
 
 
+def sentences(text: str, min_chars: int) -> list[str]:
+    """The text cut at sentence ends into parts of at least min_chars, a short sentence
+    joined to the next one: alone, «Мудак?» comes out clipped or drawn out."""
+    parts: list[str] = []
+    for sentence in SENTENCE_END_RE.split(text.strip()):
+        if parts and len(parts[-1]) < min_chars:
+            parts[-1] += ' ' + sentence
+        elif sentence:
+            parts.append(sentence)
+    if len(parts) > 1 and len(parts[-1]) < min_chars:
+        last = parts.pop()
+        parts[-1] += ' ' + last
+    return parts
+
+
 def spoken(text: str, max_chars: int) -> str:
-    """prepare() with the nick dictionary and the emotes from CONTENT.md."""
-    return prepare(text, parse_nicks(Content.items('voice_nicks')), set(Content.items('emotes')), max_chars)
+    """prepare() with the nick and word dictionaries and the emotes from CONTENT.md."""
+    return prepare(text, parse_nicks(Content.items('voice_nicks')), set(Content.items('emotes')), max_chars,
+                   parse_words(Content.items('voice_words')))

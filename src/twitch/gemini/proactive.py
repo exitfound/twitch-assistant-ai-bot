@@ -1,4 +1,9 @@
-"""Proactive remarks: the bot writes to chat on its own once per interval."""
+"""Proactive remarks: the bot writes to chat on its own once per interval.
+
+Built like a free-text answer: the pulse (what the chat is about, retold) and the
+thread of the last CONTEXT_CHAT_MESSAGES, plus the target's dossier for a remark
+about one person, «language» for a general one.
+"""
 import asyncio
 import logging
 import random
@@ -10,6 +15,7 @@ from src.core.content import Content
 from src.core.database import get_random_knowledge, get_recent_chat, save_bot_interaction
 from src.twitch.core.port import BotPort
 from src.core.utils import random_delay
+from src.gemini import dossier, pulse
 from src.gemini.client import generate, make_gen_config
 from src.gemini.context import ContextBuilder
 from src.gemini.output import (
@@ -18,6 +24,9 @@ from src.gemini.output import (
 from src.twitch.gemini.responder import apply_caps, maybe_add_emote, passes_moderation
 
 logger = logging.getLogger(__name__)
+
+# Dossier facts of the target of a remark: one remark, one or two details
+PROACTIVE_FACTS = 4
 
 
 async def proactive_loop(bot: BotPort) -> None:
@@ -53,14 +62,19 @@ async def _send_proactive(bot: BotPort, watch: ChatWatch) -> None:
     active_users = list({u for u, _ in recent_chat[-Proactive.ACTIVE_WINDOW:]})
     target_user = random.choice(active_users) if active_users else None
 
+    people = []
     if target_user and random.random() < Proactive.TARGET_PROBABILITY:
         event_prompt = Content.prompt('proactive_user', user=target_user)
+        people = await dossier.people([target_user], '', PROACTIVE_FACTS, 0)
     else:
         event_prompt = Content.prompt('proactive_general')
 
+    current = pulse.current(session_id)
     prompt_ctx = (
         ContextBuilder()
+        .add_lines(Content.label('pulse'), [current] if current else [])
         .add_pairs(Content.label('chat'), recent_chat)
+        .add_lines(Content.label('dossier'), people)
         .add_lines(Content.label('language'), random_knowledge)
         .add_raw(event_prompt)
     )

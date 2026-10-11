@@ -3,7 +3,8 @@
 After that the bot keeps it up to date itself: memory_loop() writes every
 conversation once the chat has gone quiet (src/gemini/memory/build.py). A rerun
 only fills what is missing: conversations without a chronicle, failed chronicles,
-chatters without a profile.
+chatters without a dossier (no active fact and no headline – an old paragraph profile
+counts as none and is rebuilt).
 """
 import asyncio
 
@@ -14,13 +15,18 @@ from src.gemini.memory import build, storage
 
 def _cost() -> str:
     u = client.usage
-    dollars = client.cost_estimate(u['prompt'], u['output'])
-    return f'токенов: вход {u["prompt"]:,}, выход {u["output"]:,} – примерно ${dollars:.2f}'.replace(',', ' ')
+    cost = client.cost_text(client.cost_estimate(u['prompt'], u['output']))
+    return f'токенов: вход {u["prompt"]:,}, выход {u["output"]:,} – {cost}'.replace(',', ' ')
 
 
-def _print_profile(profile: storage.Profile) -> None:
+def _print_dossier(dossier: build.Dossier) -> None:
+    profile = dossier.profile
     print(f'\n=== {profile.username} (сессий: {profile.sessions_seen}) ===')
     print(profile.portrait)
+    for kind, text in dossier.new:
+        print(f'  • ({kind}) {text}')
+    for phrase in profile.catchphrases:
+        print(f'  коронка: {phrase}')
     for r in profile.relations:
         print(f'  – {r["nick"]}: {r["note"]}')
 
@@ -48,7 +54,7 @@ async def _chronicles(blocks: list[storage.Block], save: bool) -> dict[str, buil
 
 async def build_memory(dry_run: bool, limit: int) -> None:
     # Nobody is waiting in chat: use every Gemini slot, not just the memory's share
-    build.use_all_slots()
+    client.use_all_slots()
     blocks = await storage.chat_blocks(Memory.SILENCE_MINUTES, uncovered=False)
     chatters = await storage.ever_active_chatters(_big(blocks), Memory.PROFILE_MIN_MESSAGES)
     print(f'Законченных разговоров (тишина {Memory.SILENCE_MINUTES}+ мин): {len(blocks)}, '
@@ -81,16 +87,17 @@ async def build_memory(dry_run: bool, limit: int) -> None:
             if block not in _big(todo):
                 await storage.save_chronicle(block, '', storage.ChronicleStatus.SKIPPED, [])
 
-    missing = [u for u in chatters if await storage.get_profile(u) is None]
-    print(f'\nПрофили: нужно {len(missing)}, уже есть {len(chatters) - len(missing)}')
+    built_for = await storage.users_with_dossier()
+    missing = [u for u in chatters if u not in built_for]
+    print(f'\nДосье: нужно {len(missing)}, уже есть {len(chatters) - len(missing)}')
 
     async def one(username: str) -> bool:
         try:
-            profile = await build.first_profile(username, chatters[username])
+            dossier = await build.first_profile(username, chatters[username])
         except build.Unavailable:
-            profile = None
-        print(f'  {username}: {"готово" if profile else "не получилось"}')
-        return profile is not None
+            dossier = None
+        print(f'  {username}: {"готово" if dossier else "не получилось"}')
+        return dossier is not None
 
     done = await gather_cancelling(*(one(u) for u in missing))
 
@@ -101,13 +108,13 @@ async def build_memory(dry_run: bool, limit: int) -> None:
         await storage.mark_built()
     failed = len(await storage.failed_blocks())
     if failed or not all(done):
-        print(f'\nНе получилось: хроник {failed}, профилей {done.count(False)} – '
+        print(f'\nНе получилось: хроник {failed}, досье {done.count(False)} – '
               f'повторный запуск --build-memory попробует их снова')
     print(f'\n{_cost()}')
 
 
 async def _preview(blocks: list[storage.Block], chatters: dict[str, storage.Block], limit: int) -> None:
-    """Nothing is written: the last `limit` chronicles and `limit` profiles, printed."""
+    """Nothing is written: the last `limit` chronicles and `limit` dossiers, printed."""
     recent = blocks[-limit:]
     print(f'\n--- Dry run: хроники последних {len(recent)} разговоров ---')
     chronicles = await _chronicles(recent, save=False)
@@ -127,20 +134,20 @@ async def _preview(blocks: list[storage.Block], chatters: dict[str, storage.Bloc
             events.setdefault(nick, []).append((key, event))
 
     top = list(chatters)[:limit]
-    print(f'\n--- Dry run: профили {len(top)} самых активных ---')
-    profiles = await asyncio.gather(*(
+    print(f'\n--- Dry run: досье {len(top)} самых активных ---')
+    dossiers = await asyncio.gather(*(
         build.first_profile(u, chatters[u], save=False, extra_events=events.get(u, []))
         for u in top
     ), return_exceptions=True)
-    for username, profile in zip(top, profiles, strict=True):
-        if isinstance(profile, build.Unavailable):
-            profile = None
-        elif isinstance(profile, BaseException):
-            raise profile
-        if profile is None:
+    for username, dossier in zip(top, dossiers, strict=True):
+        if isinstance(dossier, build.Unavailable):
+            dossier = None
+        elif isinstance(dossier, BaseException):
+            raise dossier
+        if dossier is None:
             print(f'\n=== {username}: не получилось ===')
         else:
-            _print_profile(profile)
+            _print_dossier(dossier)
     print(f'\n{_cost()}')
 
 

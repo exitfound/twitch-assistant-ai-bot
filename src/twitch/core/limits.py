@@ -39,7 +39,7 @@ async def deny(bot: 'BotPort', message: 'twitchio.ChatMessage', user: str, text:
 
 def limit_for(chatter) -> int:
     """A viewer's per-stream limit, 0 – unlimited."""
-    return by_tier(tier_of(chatter), broadcaster=0, sub=PerStream.SUB,
+    return by_tier(tier_of(chatter), broadcaster=0, sub=PerStream.SUB, mod=PerStream.MOD,
                    vip=PerStream.VIP, regular=PerStream.FOLLOWER)
 
 
@@ -50,14 +50,14 @@ def no_left_text(ctx: CommandContext, command: str, limit: int) -> str:
     if tier_of(chatter) == Tier.REGULAR:
         return Content.text('per_stream_trial_used', user=ctx.user, command=command, limit=limit)
     text = Content.text('per_stream_no_left', user=ctx.user, command=command, limit=limit)
-    return text + sub_hint(chatter)
+    return text + sub_hint(chatter, limit, PerStream.SUB)
 
 
 class PerStreamLimit:
     """One command's limit: one call per viewer at a time, the check, the count.
 
     The limit is checked before the work and counted after sending, seconds later, and a
-    subscriber has neither cooldown nor quota: without one-at-a-time several commands pass
+    subscriber or moderator has no cooldown: without one-at-a-time several commands pass
     the same check and overshoot the limit.
     """
 

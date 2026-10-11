@@ -1,13 +1,15 @@
 """Speech from the TTS server into the frames Discord plays.
 
-The server sends 16-bit mono PCM at 24 kHz; discord.py takes 20 ms frames of 16-bit
-stereo at 48 kHz and encodes them with Opus itself.
+The server sends 16-bit mono PCM at 24 kHz; its tempo is changed here when VOICE_TEMPO
+asks for it. discord.py takes 20 ms frames of 16-bit stereo at 48 kHz and encodes them
+with Opus itself.
 """
 import sys
 import threading
 from array import array
 
 import discord
+import numpy as np
 
 # 20 ms of 48 kHz stereo 16-bit
 FRAME_BYTES = 3840
@@ -20,6 +22,84 @@ BYTES_PER_SECOND = 192_000
 # a couple of pauses, not a stutter in bigger pieces
 REBUFFER_SECONDS = 1.5
 REBUFFER_MAX_SECONDS = 6.0
+# Tempo change on 24 kHz speech: 20 ms frames overlapped by half, each placed within 5 ms
+# of its nominal spot where it best continues the previous one – shorter frames blur
+# the pitch, a wider search lets the tempo wander
+STRETCH_HOP = 240
+STRETCH_FRAME = 2 * STRETCH_HOP
+STRETCH_SEEK = 120
+
+
+class TimeStretch:
+    """Speech sped up or slowed down without a pitch change (WSOLA), chunk by chunk.
+
+    The output does not depend on how the network cut the input; flush() gives the rest
+    once the server is done, so the answer comes out length / tempo long.
+    """
+
+    def __init__(self, tempo: float) -> None:
+        self._tempo = tempo
+        self._window = np.hanning(STRETCH_FRAME + 1)[:-1]
+        # Input samples kept for the frames ahead, starting at absolute sample _base
+        self._input = np.zeros(0)
+        self._base = 0
+        self._received = 0
+        self._emitted = 0
+        self._rest = b''
+        self._frame = 0
+        self._prev = 0
+        # The second half of the last frame, added to the first half of the next one
+        self._tail = np.zeros(STRETCH_HOP)
+
+    def _frames(self, end: int) -> np.ndarray:
+        """Every output frame the input up to absolute sample end allows."""
+        out = []
+        while True:
+            nominal = round(self._frame * STRETCH_HOP * self._tempo)
+            lo, hi = (0, 0) if self._frame == 0 else (max(0, nominal - STRETCH_SEEK), nominal + STRETCH_SEEK)
+            natural = self._prev + STRETCH_HOP
+            if max(hi, natural) + STRETCH_FRAME > end:
+                break
+            start = lo
+            if hi > lo:
+                ref = self._input[natural - self._base:natural - self._base + STRETCH_FRAME]
+                span = self._input[lo - self._base:hi - self._base + STRETCH_FRAME]
+                start += int(np.argmax(np.correlate(span, ref, 'valid')))
+            frame = self._input[start - self._base:start - self._base + STRETCH_FRAME] * self._window
+            out.append(self._tail + frame[:STRETCH_HOP])
+            self._tail = frame[STRETCH_HOP:]
+            self._prev = start
+            self._frame += 1
+        keep = min(round(self._frame * STRETCH_HOP * self._tempo) - STRETCH_SEEK, self._prev + STRETCH_HOP)
+        if keep > self._base:
+            self._input = self._input[keep - self._base:]
+            self._base = keep
+        return np.concatenate(out) if out else np.zeros(0)
+
+    def _pcm(self, samples: np.ndarray) -> bytes:
+        self._emitted += len(samples)
+        return np.clip(np.rint(samples), -32768, 32767).astype('<i2').tobytes()
+
+    def convert(self, pcm: bytes) -> bytes:
+        if self._tempo == 1:
+            return pcm
+        data = self._rest + pcm
+        cut = len(data) - len(data) % 2
+        self._rest = data[cut:]
+        samples = np.frombuffer(data[:cut], '<i2').astype(np.float64)
+        self._received += len(samples)
+        self._input = np.concatenate([self._input, samples])
+        return self._pcm(self._frames(self._base + len(self._input)))
+
+    def flush(self) -> bytes:
+        """The rest of the answer: the input padded with silence, cut to length / tempo."""
+        if self._tempo == 1:
+            return b''
+        # Enough silence for every frame whose nominal spot is still within the speech
+        self._input = np.concatenate([self._input, np.zeros(2 * STRETCH_FRAME + 2 * STRETCH_SEEK)])
+        rest = np.concatenate([self._frames(self._base + len(self._input)), self._tail])
+        due = max(0, round(self._received / self._tempo) - self._emitted)
+        return self._pcm(rest[:due])
 
 
 class Upsampler:

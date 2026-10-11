@@ -16,3 +16,4 @@ backups/
 venv/
 __pycache__/
 tests/
+ruaccent/

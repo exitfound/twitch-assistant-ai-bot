@@ -10,7 +10,7 @@ from src.core.config import Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
 from src.twitch.core.port import BotPort
-from src.twitch.local.roll import game
+from src.twitch.local.roll import game, overlay
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ async def curse_lift_loop(bot: BotPort) -> None:
 async def _announce_curse_lifts(bot: BotPort) -> None:
     session_id = bot.session_id
     for user in await game.lift_expired_curses(session_id):
+        overlay.publish(overlay.lifted(user))
         text = Content.text('roll_curse_lifted', user=user, max=Roll.MAX)
         # The curse is already cleared and will not be selected again, so a message
         # that did not go out is not repeated – the game does not break from that

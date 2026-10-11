@@ -9,6 +9,7 @@ import re
 
 from src.core.config import Rewards, Roll
 from src.core.utils import NICK_TRAILING, clean_nick
+from src.twitch.core.viewer import Tier, by_tier
 from src.twitch.local.roll.storage import RollRow
 
 # Twitch login: Latin letters, digits and underscore, up to 25 characters
@@ -19,6 +20,13 @@ def throw(ceiling: int | None = None) -> int:
     """A roll from ROLL_MIN up to ROLL_MAX, or up to a curse's ceiling."""
     top = Roll.MAX if ceiling is None else max(Roll.MIN, min(ceiling, Roll.MAX))
     return random.randint(Roll.MIN, top)
+
+
+def free_limit(tier: Tier) -> int:
+    """Free throws per session by status. The broadcaster's limit is never checked, only
+    compared with by the extra roll, so it gets the base one."""
+    return by_tier(tier, sub=Roll.FREE_SUB, mod=Roll.FREE_MOD, vip=Roll.FREE_VIP,
+                   regular=Roll.FREE_PER_SESSION, broadcaster=Roll.FREE_PER_SESSION)
 
 
 def parse_nick(raw: str) -> str | None:

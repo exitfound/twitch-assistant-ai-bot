@@ -10,6 +10,8 @@ from src.core.config import Voice
 RATE = 24000
 # The server picks the model by its own config; the name only has to be one it accepts
 MODEL = 'tts-1-ru'
+# Without it the server detects the language from the text on every request
+LANGUAGE = 'Russian'
 # A server that is off is noticed at once, not after the whole TIMEOUT
 CONNECT_TIMEOUT = 5
 # The first byte may wait behind another request in the server's queue, or behind its
@@ -37,7 +39,7 @@ class TTSClient:
         """
         body = {
             'model': MODEL, 'voice': self._voice, 'input': text,
-            'response_format': 'pcm', 'stream': True,
+            'response_format': 'pcm', 'stream': True, 'language': LANGUAGE,
             # English normalization garbles Russian: the text comes prepared (text.py)
             'normalization_options': {'normalize': False},
         }

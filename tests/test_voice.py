@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import aiohttp
 import discord
+import numpy as np
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestServer
@@ -18,10 +19,11 @@ from src.discord import bot as discord_module
 from src.discord.bot import Move, Where, presence
 from src.discord.local.voice import speaker as speaker_module
 from src.discord.local.voice.audio import (
-    BYTES_PER_SECOND, FRAME_BYTES, REBUFFER_SECONDS, SILENCE, StreamSource, Upsampler,
+    BYTES_PER_SECOND, FRAME_BYTES, REBUFFER_SECONDS, SILENCE, StreamSource, TimeStretch, Upsampler,
 )
 from src.discord.local.voice.speaker import Speaker, prebuffer_seconds
-from src.discord.local.voice.text import number_words, parse_nicks, prepare
+from src.discord.local.voice import stress
+from src.discord.local.voice.text import number_words, parse_nicks, parse_words, prepare, sentences
 from src.discord.local.voice import tts as tts_module
 from src.discord.local.voice.tts import TTSClient, TTSUnavailable
 
@@ -83,6 +85,78 @@ def test_nothing_speakable_gives_an_empty_text():
     assert say('KEKW 😂 exitfoGigaCAT') == ''
 
 
+def test_sentences_join_a_short_one_to_the_next():
+    text = 'Мудак? Я тут с вами, епта, и никуда не ухожу. Кому нужны мозги в этом чате вообще? Вот.'
+    assert sentences(text, 40) == ['Мудак? Я тут с вами, епта, и никуда не ухожу.',
+                                   'Кому нужны мозги в этом чате вообще? Вот.']
+
+
+def test_a_closing_quote_stays_with_its_sentence():
+    text = 'Он из крыма уехал, и говорит "вовремя так-то съебал". Всё ноет про впн, который заебал.'
+    assert sentences(text, 10) == ['Он из крыма уехал, и говорит "вовремя так-то съебал".',
+                                   'Всё ноет про впн, который заебал.']
+
+
+def test_a_quoted_exclamation_inside_a_sentence_is_not_cut():
+    text = 'Тебе мало мощи "мужики не шмаляйте я кабан!" или "сосурити сука биг текст"? Сам видишь.'
+    assert sentences(text, 10) == ['Тебе мало мощи "мужики не шмаляйте я кабан!" или "сосурити сука биг текст"?',
+                                   'Сам видишь.']
+
+
+def test_one_sentence_is_one_part():
+    assert sentences('Привет.', 40) == ['Привет.']
+
+
+class FakeAccentuator:
+    """ruaccent's manner: «+» before the stressed vowel, ё restored, quotes dropped."""
+
+    def __init__(self, result: str) -> None:
+        self.result = result
+
+    def process_all(self, text: str) -> str:
+        return self.result
+
+
+def test_stresses_are_marked_by_an_upper_case_vowel_and_quotes_kept(monkeypatch):
+    monkeypatch.setattr(stress, '_accentuator', FakeAccentuator('Он сказ+ал зам+ок и вс+ё.'))
+    assert stress.apply('Он сказал "замок" и все.', marks=True) == 'Он сказАл "замОк" и всё.'
+
+
+def test_a_ruaccent_failure_leaves_the_part_unmarked(monkeypatch):
+    """The marks are optional: the part is still spoken, only without them."""
+    class Broken:
+        def process_all(self, text: str) -> str:
+            raise RuntimeError('onnx')
+    monkeypatch.setattr(stress, '_accentuator', Broken())
+    assert stress.apply('Он сказал замок.', marks=True) == 'Он сказал замок.'
+
+
+def test_without_marks_only_yo_is_restored(monkeypatch):
+    monkeypatch.setattr(stress, '_accentuator', FakeAccentuator('Вс+е пришл+и, и вс+ё б+ыло хорош+о.'))
+    assert stress.apply('Все пришли, и все было хорошо.', marks=False) == 'Все пришли, и всё было хорошо.'
+
+
+def test_a_word_ruaccent_lost_is_left_as_is_and_shifts_nothing(monkeypatch):
+    monkeypatch.setattr(stress, '_accentuator', FakeAccentuator('Кр+ужки на стол+е.'))
+    assert stress.apply('Кружки ой на столе.', marks=True) == 'крУжки ой на столЕ.'
+
+
+def test_before_load_the_text_is_unchanged():
+    assert stress.apply('Кружки на столе.', marks=True) == 'Кружки на столе.'
+
+
+def test_words_are_said_as_the_dictionary_says_whatever_their_case_and_yo():
+    words = parse_words(['Замок = замОк', 'звонит = званИт', 'без знака'])
+    assert words == {'замок': 'замОк', 'звонит': 'званИт'}
+    text = prepare('Замок висит, телефон звонит, а замки молчат.', {}, set(), 500, words)
+    assert text == 'ЗамОк висит, телефон званИт, а замки молчат.'
+
+
+def test_a_word_from_the_dictionary_keeps_its_stress(monkeypatch):
+    monkeypatch.setattr(stress, '_accentuator', FakeAccentuator('Ст+арый з+амок стои́т.'))
+    assert stress.apply('Старый замОк стоит.', marks=True) == 'стАрый замОк стоит.'
+
+
 def test_nick_lines_from_content_md():
     lines = ['exitfound = Эксит-фаунд', '@Nosok222=Носок', 'кривая строка', 'x =']
     assert parse_nicks(lines) == {'exitfound': 'Эксит-фаунд', 'nosok222': 'Носок'}
@@ -107,6 +181,42 @@ def test_a_sample_split_across_chunks_is_not_lost():
     assert parts == Upsampler().convert(whole)
 
 
+def tone(hz: float, seconds: float) -> bytes:
+    t = np.arange(int(24000 * seconds)) / 24000
+    return (8000 * np.sin(2 * np.pi * hz * t)).astype('<i2').tobytes()
+
+
+def stretched(tempo: float, data: bytes, cuts: list[int]) -> bytes:
+    stretch = TimeStretch(tempo)
+    out, start = b'', 0
+    for end in [*cuts, len(data)]:
+        out += stretch.convert(data[start:end])
+        start = end
+    return out + stretch.flush()
+
+
+def test_tempo_one_passes_speech_through_untouched():
+    data = tone(150, 0.1)
+    assert stretched(1.0, data, [1001]) == data
+
+
+def test_a_faster_tempo_shortens_speech_and_keeps_the_pitch():
+    out = np.frombuffer(stretched(1.05, tone(150, 1.0), []), '<i2')
+    assert len(out) == round(24000 / 1.05)
+    spectrum = np.abs(np.fft.rfft(out))
+    assert np.fft.rfftfreq(len(out), 1 / 24000)[spectrum.argmax()] == pytest.approx(150, abs=2)
+
+
+def test_the_stretch_does_not_depend_on_chunk_borders():
+    data = tone(140, 0.5)
+    # Odd cuts split a sample in two, as the network may
+    assert stretched(1.05, data, [1, 777, 5001, 9000]) == stretched(1.05, data, [])
+
+
+def test_nothing_in_gives_nothing_out():
+    assert stretched(1.05, b'', []) == b''
+
+
 def test_the_prebuffer_follows_the_measured_server_speed(monkeypatch):
     monkeypatch.setattr(Voice, 'PREBUFFER_SECONDS', 2.0)
     monkeypatch.setattr(Voice, 'PREBUFFER_SHARE', 0.25)
@@ -115,6 +225,46 @@ def test_the_prebuffer_follows_the_measured_server_speed(monkeypatch):
     assert prebuffer_seconds('а' * 290, 1.2) == pytest.approx(5.0)
     # At 1.74 it has to wait for about 10 s
     assert prebuffer_seconds('а' * 290, 1.74) == pytest.approx(20 * (1 - 1 / 1.74) * 1.15)
+
+
+def test_a_faster_tempo_plays_shorter_and_asks_more_of_the_server(monkeypatch):
+    monkeypatch.setattr(Voice, 'PREBUFFER_SECONDS', 2.0)
+    monkeypatch.setattr(Voice, 'PREBUFFER_SHARE', 0.25)
+    monkeypatch.setattr(Voice, 'TEMPO', 1.05)
+    slow = prebuffer_seconds('а' * 290, 1.74)
+    assert slow == pytest.approx(20 / 1.05 * (1 - 1 / (1.74 * 1.05)) * 1.15)
+    monkeypatch.setattr(Voice, 'TEMPO', 1.0)
+    assert slow > prebuffer_seconds('а' * 290, 1.74)
+
+
+def test_a_cold_server_gets_headroom(monkeypatch):
+    monkeypatch.setattr(Voice, 'PREBUFFER_SECONDS', 2.0)
+    monkeypatch.setattr(Voice, 'PREBUFFER_SHARE', 0.25)
+    headroom = speaker_module.COLD_HEADROOM_SECONDS
+    assert prebuffer_seconds('а' * 50, 1.05, cold=True) == pytest.approx(2.0 + headroom)
+    assert prebuffer_seconds('а' * 290, 1.74, cold=True) == pytest.approx(
+        prebuffer_seconds('а' * 290, 1.74) + headroom)
+
+
+async def test_the_server_is_cold_for_a_while_after_silence(plain_text, monkeypatch):
+    clock = [1000.0]
+    monkeypatch.setattr(speaker_module.time, 'monotonic', lambda: clock[0])
+    seen = []
+    real = speaker_module.prebuffer_seconds
+
+    def spy(phrase, rtf, cold=False):
+        seen.append(cold)
+        return real(phrase, rtf, cold)
+    monkeypatch.setattr(speaker_module, 'prebuffer_seconds', spy)
+    speaker = Speaker(lambda: FakeVoiceClient(), FakeTTS([pcm(*range(480))]))
+    await speaker.speak('привет')  # the first answer after the start
+    clock[0] += speaker_module.COLD_SECONDS - 1
+    await speaker.speak('привет')  # answers keep coming: still within the cold window
+    clock[0] += 2
+    await speaker.speak('привет')  # the window is over
+    clock[0] += speaker_module.COLD_AFTER_SECONDS
+    await speaker.speak('привет')  # silence again
+    assert seen == [True, True, False, True]
 
 
 def test_a_slowdown_is_taken_at_once_a_speedup_gradually():
@@ -230,6 +380,34 @@ async def test_an_answer_is_synthesized_and_played(plain_text):
     assert tts.texts == ['привет']
     # 4 × 480 samples at 24 kHz = 80 ms = four 20 ms frames
     assert len(client.played) == 4
+
+
+async def test_sentences_are_synthesized_one_by_one_with_a_pause(plain_text, monkeypatch):
+    monkeypatch.setattr(Voice, 'SENTENCES', True)
+    client = FakeVoiceClient()
+    tts = FakeTTS([pcm(*range(480))] * 2)
+    first, second = 'Первое предложение, и оно длиннее сорока знаков.', 'Второе тоже не короче сорока знаков, честно.'
+    await Speaker(lambda: client, tts).speak(f'{first} {second}')
+    assert tts.texts == [first, second]
+    # 2 × 40 ms of speech and a 150 ms pause between them: 11.5 frames of 20 ms, rounded up
+    assert len(client.played) == 12
+
+
+async def test_the_phrase_goes_to_the_server_with_its_stresses(plain_text, monkeypatch):
+    monkeypatch.setattr(Voice, 'SENTENCES', False)
+    monkeypatch.setattr(Voice, 'STRESS', True)
+    monkeypatch.setattr(stress, '_accentuator', FakeAccentuator('Ст+арый з+амок.'))
+    tts = FakeTTS([pcm(1, 2, 3)])
+    await Speaker(lambda: FakeVoiceClient(), tts).speak('Старый замок.')
+    assert tts.texts == ['стАрый зАмок.']
+
+
+async def test_a_faster_tempo_plays_fewer_frames(plain_text, monkeypatch):
+    monkeypatch.setattr(Voice, 'TEMPO', 1.25)
+    client = FakeVoiceClient()
+    await Speaker(lambda: client, FakeTTS([tone(150, 0.02)] * 10)).speak('привет')
+    # 200 ms of speech at 1.25 is 160 ms: eight 20 ms frames instead of ten
+    assert len(client.played) == 8
 
 
 async def test_playback_waits_for_the_prebuffer(plain_text, monkeypatch):

@@ -22,7 +22,7 @@ from src.twitch.local.roll.storage import (
     RollRow, activate_perks, add_perk, consume_perk, get_action_status, get_expired_curses,
     get_last_roll_session_before, get_perk, get_roll, get_session_champion, get_session_loser,
     count_actions, get_tier, last_throws, reroll_times, save_action, save_roll, save_throw, seconds_since_action,
-    set_curse, set_tier,
+    restore_roll, set_curse, value_before_curse,
 )
 
 class Action(StrEnum):
@@ -31,7 +31,7 @@ class Action(StrEnum):
     REROLL = 'reroll'    # a throw for someone else, the shield protects from it
     CURSE = 'curse'      # a capped throw for another, then the cap drops; pierces the shield
     SHIELD = 'shield'    # protection from rerolls for SHIELD_MINUTES
-    CLEANSE = 'cleanse'  # lifts a curse, any player's, and keeps new ones off for a while
+    CLEANSE = 'cleanse'  # lifts a curse, any player's, returns the roll it threw over, keeps new ones off
 
 
 class Perk(StrEnum):
@@ -63,6 +63,8 @@ class Status(StrEnum):
     NOT_CURSED = 'not_cursed'               # cleanse of a player with no curse to lift
     CLEANSED = 'cleansed'                   # curse on a player cleansed recently, protection still holds
     DUPLICATE = 'duplicate'                 # Twitch sent the same redemption again
+    OFFLINE = 'offline'                     # bought as the stream ended, the rewards paused
+    NOT_FOLLOWER = 'not_follower'           # the buyer does not follow, the game is closed to them
 
 
 _lock = asyncio.Lock()
@@ -115,10 +117,7 @@ def _thrown(target: str, old_value: int | None, throw: Throw, standings: Standin
     )
 
 
-async def _throw_for(
-    session_id: str, user: str, row: RollRow | None, *, free_throw: bool, limit: int | None = None,
-    tier: str | None = None,
-) -> Throw:
+async def _throw_for(session_id: str, user: str, row: RollRow | None, *, free_throw: bool) -> Throw:
     """A throw on a player's row – their own or someone else's reroll.
 
     A cursed player's throw is capped by the ceiling, and the ceiling drops a step:
@@ -133,11 +132,11 @@ async def _throw_for(
             curse = (Rewards.CURSE_CEILING, None)
     if curse is None:
         value = rules.throw()
-        await save_roll(session_id, user, value, free_throw=free_throw, limit=limit, tier=tier)
+        await save_roll(session_id, user, value, free_throw=free_throw)
         return Throw(value)
     ceiling, floor_at = curse
     value = rules.throw(ceiling)
-    await save_roll(session_id, user, value, free_throw=free_throw, limit=limit, tier=tier)
+    await save_roll(session_id, user, value, free_throw=free_throw)
     now = time.time()
     next_ceiling, floor_at = rules.lowered(ceiling, floor_at, now)
     await set_curse(session_id, user, next_ceiling, floor_at, until)
@@ -148,6 +147,11 @@ async def _standings(session_id: str) -> Standings:
     """The session loser and champion after a throw (see rules.visible_champion)."""
     loser = await get_session_loser(session_id)
     return Standings(loser, rules.visible_champion(loser, await get_session_champion(session_id)))
+
+
+async def titles(session_id: str) -> Standings:
+    """The session's two titles, read only: what the overlay shows on connect."""
+    return await _standings(session_id)
 
 
 # --- perks from the previous stream ------------------------------------------------
@@ -225,29 +229,20 @@ async def appear(session_id: str, user: str) -> list[str]:
 
 # --- operations --------------------------------------------------------------
 
-async def free_throw(
-    session_id: str, user: str, *, limit: int, unlimited: bool = False, tier: str | None = None,
-) -> Outcome:
-    """A free !roll: no more than limit per session.
+async def free_throw(session_id: str, user: str, *, limit: int, unlimited: bool = False) -> Outcome:
+    """A free !roll: no more than limit per session, by the viewer's status (rules.free_limit()).
 
-    limit depends on the viewer's status (see free_limit_for() in the command) and is
-    stored in the player's row, because a reward redemption arrives without badges.
     unlimited (broadcaster) still counts the throw, so the paid extra roll behaves the
     same for them, and free_left is None since there is no remainder to mention.
-    tier – the badges of this !roll, stored for the rerolls the player may buy.
     """
     async with _lock, transaction():
         row = await get_roll(session_id, user)
-        if row is not None and tier is not None:
-            # Before any refusal: a viewer who subscribed mid-stream gets the wider
-            # reroll limit even if this throw is refused
-            await set_tier(session_id, user, tier)
         used = row.free_throws if row else 0
         if not unlimited and used >= limit:
             return Outcome(Status.NO_FREE_LEFT, target=user, free_left=0)
         if not unlimited and (wait := await _burst_left(session_id, user)):
             return _too_fast(user, wait)
-        throw = await _throw_for(session_id, user, row, free_throw=True, limit=limit, tier=tier)
+        throw = await _throw_for(session_id, user, row, free_throw=True)
         await save_throw(session_id, user, time.time())
         standings = await _standings(session_id)
     return _thrown(user, row.value if row else None, throw, standings,
@@ -341,12 +336,26 @@ async def redeem(
     return outcome
 
 
+async def refuse(
+    action: str, session_id: str, actor: str, user_input: str, redemption_id: str, status: Status,
+) -> bool:
+    """Record a redemption refused before the game saw it (offline, no follow).
+
+    False – it is in the journal already: a redelivered refusal is neither said in
+    chat again nor given a second status on Twitch.
+    """
+    async with _lock, transaction():
+        if await get_action_status(redemption_id) is not None:
+            return False
+        await save_action(redemption_id, session_id, action, actor, user_input, None, None, None, status)
+    return True
+
+
 async def _extra(session_id: str, actor: str) -> Outcome:
     row = await get_roll(session_id, actor)
     used = row.free_throws if row else 0
-    # A redemption event carries no badges, so the limit comes from the player's row –
-    # written by their own throw from chat. Never rolled – the base limit
-    limit = (row.free_limit if row and row.free_limit else None) or Roll.FREE_PER_SESSION
+    # A redemption event carries no badges: the status is the one chat last showed
+    limit = rules.free_limit(Tier(await get_tier(session_id, actor) or Tier.REGULAR))
     if used < limit:
         # Points for a throw that is free anyway are almost certainly a misclick
         return Outcome(Status.FREE_LEFT, target=actor, free_left=limit - used)
@@ -482,13 +491,13 @@ async def _buyer_limit(session_id: str, actor: str) -> int | None:
     """How many rerolls per window, or shields, curses and cleanses per stream, the buyer
     may make, None – no limit (the broadcaster, or a REWARD_LIMIT_* of 0).
 
-    A redemption carries no badges: the status is the one their last !roll stored, and
-    a buyer who has not rolled this session counts as a follower.
+    A redemption carries no badges: the status is the one chat last showed (roll_tiers),
+    and a buyer who has not written in this stream counts as a follower.
     """
     if actor == (Twitch.CHANNEL or '').lower():
         return None
     tier = await get_tier(session_id, actor) or Tier.REGULAR
-    limit = by_tier(Tier(tier), sub=Rewards.LIMIT_SUB, vip=Rewards.LIMIT_VIP,
+    limit = by_tier(Tier(tier), sub=Rewards.LIMIT_SUB, mod=Rewards.LIMIT_MOD, vip=Rewards.LIMIT_VIP,
                     regular=Rewards.LIMIT_FOLLOWER, broadcaster=None)
     return limit or None
 
@@ -519,7 +528,8 @@ async def _curse(session_id: str, actor: str, user_input: str) -> Outcome:
 
 
 async def _cleanse(session_id: str, actor: str, user_input: str) -> Outcome:
-    """Lift the target's curse: the ceiling is gone at once, the roll itself stays.
+    """Lift the target's curse: the ceiling is gone at once, and the roll a bought curse
+    threw over comes back if it is higher than the current one.
 
     The previous stream's loser curse not laid yet is cancelled too, or it would land
     on the next throw. The target may be the buyer.
@@ -538,7 +548,18 @@ async def _cleanse(session_id: str, actor: str, user_input: str) -> Outcome:
         await set_curse(session_id, target, None, None)
     if pending:
         await consume_perk(session_id, target, Perk.CURSE)
-    return Outcome(Status.OK, target=target, ceiling=curse[0] if curse else None,
+    ceiling = curse[0] if curse else None
+    # A bought curse has no deadline and threw over the roll; the previous stream's
+    # curse fell on a first throw, so there is nothing to return
+    if curse is not None and row.curse_until is None:
+        before = await value_before_curse(session_id, target)
+        if before is not None and before > row.value:
+            await restore_roll(session_id, target, before)
+            standings = await _standings(session_id)
+            return Outcome(Status.OK, target=target, old_value=row.value, value=before, ceiling=ceiling,
+                           protect_minutes_left=Rewards.CLEANSE_PROTECT_MINUTES,
+                           loser=standings.loser, champion=standings.champion)
+    return Outcome(Status.OK, target=target, ceiling=ceiling,
                    protect_minutes_left=Rewards.CLEANSE_PROTECT_MINUTES)
 
 

@@ -112,7 +112,7 @@ async def test_clear_memory_dry_run_deletes_nothing(db, capsys):
     await database.init_db()
     assert await storage.memory_built()
     assert await storage.memory_counts() == {
-        'chronicles': 1, 'chatter_events': 1, 'chatter_profiles': 0, 'memory_state': 1,
+        'chronicles': 1, 'chatter_events': 1, 'chatter_profiles': 0, 'chatter_facts': 0, 'memory_state': 1,
     }
 
     await main.clear_memory(dry_run=False)
@@ -156,6 +156,10 @@ def test_cli_refuses_what_would_start_a_second_bot(argv):
     ['--vacuum', '--dry-run'],
     ['--probe-context', '--dry-run'],
     ['--build-memory', '--replace-emotes'],
+    ['--build-memory', '--temperature', '1.3'],
+    ['--vacuum', '--system', 'persona.txt'],
+    ['--probe-context', '--temperature', '2.5'],
+    ['--probe-context', '--thinking', '-2'],
     ['--backup', '--source', 'x.txt'],
 ])
 def test_cli_refuses_a_modifier_of_another_command(argv):
@@ -247,3 +251,27 @@ async def test_probe_takes_questions_with_an_exclamation_mark(db):
     await save_chat_message('s', 'gop', '!ask что такое терраформ и зачем он', addressed=True)
     questions = await probe._questions([], 10)
     assert [q.text for q in questions] == ['сосурян ну ты даёшь, расскажи про стрим!']
+
+
+def test_probe_candidate_reads_the_persona_file(tmp_path):
+    """Without settings the probe compares contexts; with them the bot's config and the
+    candidate's, the persona taken from the file."""
+    path = tmp_path / 'persona.txt'
+    path.write_text('  персона  \n', encoding='utf-8')
+    assert main._candidate(_args()) is None
+    candidate = main._candidate(_args(temperature=1.4, thinking=512, system=str(path)))
+    assert candidate == probe.Candidate(1.4, 512, 'персона', None)
+    assert candidate.config().thinking_config.thinking_budget == 512
+    assert candidate.config().system_instruction == 'персона'
+
+
+def test_probe_candidate_refuses_an_empty_persona(tmp_path):
+    path = tmp_path / 'persona.txt'
+    path.write_text('\n', encoding='utf-8')
+    with pytest.raises(SystemExit):
+        main._candidate(_args(system=str(path)))
+
+
+def _args(**given):
+    values = {'temperature': None, 'thinking': None, 'system': None, 'model': None, **given}
+    return main.argparse.Namespace(**values)

@@ -112,6 +112,14 @@ async def test_channel_ceiling_counts_only_the_dispatcher_kind(db):
     assert await count_channel_bot_uses('gemini', 60) == 2
 
 
+async def test_channel_ceiling_leaves_out_the_broadcaster(db):
+    """The streamer's own requests must not close the bot to chat."""
+    await record_bot_use('streamer', 'gemini')
+    await record_bot_use('viewer', 'gemini')
+    assert await count_channel_bot_uses('gemini', 60, exclude='Streamer') == 1
+    assert await count_channel_bot_uses('gemini', 60, exclude=None) == 2
+
+
 async def test_user_interactions_skip_every_tagged_row(db):
     """A tag is a prefix: «[who] ник» must be filtered too, or !who reads its own answers."""
     await save_bot_interaction('s', 'gop', 'как дела', 'норм')
@@ -235,21 +243,6 @@ async def test_a_cancelled_begin_does_not_block_every_later_write(db):
 async def _chat(session_id: str, count: int) -> None:
     for i in range(count):
         await database.save_chat_message(session_id, 'gop', f'сообщение {i}')
-
-
-async def test_previous_session_survives_new_chat(db):
-    await _chat('2026-09-18 20:00', 3)
-    await _chat('2026-09-19 20:00', 1)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
-    await _chat('2026-09-19 20:00', 5)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
-
-
-async def test_previous_session_of_a_silent_stream_is_looked_up_again(db):
-    await _chat('2026-09-18 20:00', 3)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) is None
-    await _chat('2026-09-19 20:00', 1)
-    assert await database.get_previous_chat_session('2026-09-19 20:00', 2) == '2026-09-18 20:00'
 
 
 async def test_last_session_follows_a_new_stream(db):

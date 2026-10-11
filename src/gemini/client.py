@@ -1,6 +1,9 @@
 import asyncio
 import logging
 import random
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 
 import aiohttp
 import httpx
@@ -34,6 +37,12 @@ SAFETY_CHECK = [
 _client: genai.Client | None = None
 _semaphore = asyncio.Semaphore(Gemini.CONCURRENCY)
 
+# Background requests (memory, pulse) take at most this many of the GEMINI_CONCURRENCY
+# slots together: a split chronicle fans out into many requests, and viewers of a live
+# stream keep the rest. The CLI backfill lifts it (use_all_slots)
+BACKGROUND_CONCURRENCY = 2
+_background = asyncio.Semaphore(BACKGROUND_CONCURRENCY)
+
 RETRY_BASE_DELAY = 1.0
 
 # Finish reasons of an answer cut off by Gemini's output filter
@@ -46,14 +55,29 @@ _OUTPUT_BLOCKS = {
 # Read by CLI commands to report what a run cost
 usage = {'prompt': 0, 'cached': 0, 'output': 0}
 
-# Gemini 2.5 Flash, paid tier, $ per million tokens – only for the CLI's estimates
-PRICE_INPUT = 0.30
-PRICE_OUTPUT = 2.50
+# Paid tier, text, $ per million tokens: (input, output with thinking) – only for the
+# CLI's estimates. 3.6 and 3.8 Flash are at their promotional price, the list price is
+# double. gemini-3.5-flash is not on Google's price page: the figure is the API resellers'
+PRICES = {
+    'gemini-2.5-flash': (0.30, 2.50),
+    'gemini-3-flash-preview': (0.50, 3.00),
+    'gemini-3.5-flash': (1.50, 9.00),
+    'gemini-3.6-flash': (0.75, 3.75),
+    'gemini-3.8-flash': (0.75, 3.75),
+}
 
 
-def cost_estimate(prompt_tokens: int, output_tokens: int = 0) -> float:
-    """Dollars for that many tokens, at the full input price (the cache discount is ignored)."""
-    return (prompt_tokens * PRICE_INPUT + output_tokens * PRICE_OUTPUT) / 1_000_000
+def cost_estimate(prompt_tokens: int, output_tokens: int = 0, model: str | None = None) -> float | None:
+    """Dollars for that many tokens of the model (GEMINI_MODEL by default), at the full input
+    price – the cache discount is ignored. None – the model's price is not known."""
+    price = PRICES.get(model or Gemini.MODEL)
+    if price is None:
+        return None
+    return (prompt_tokens * price[0] + output_tokens * price[1]) / 1_000_000
+
+
+def cost_text(dollars: float | None, digits: int = 2) -> str:
+    return f'~${dollars:.{digits}f}' if dollars is not None else 'цена модели неизвестна'
 
 
 def get_client() -> genai.Client:
@@ -65,7 +89,8 @@ def get_client() -> genai.Client:
 
 def make_gen_config(*, system: str | None = None, temperature: float | None = None,
                     persona: bool = True,
-                    safety: list[types.SafetySetting] | None = None) -> types.GenerateContentConfig:
+                    safety: list[types.SafetySetting] | None = None,
+                    thinking_budget: int | None = None) -> types.GenerateContentConfig:
     """The request config: persona, chat temperature and safety filters off by default.
 
     A command with its own instruction, temperature or filters passes them in rather than
@@ -80,10 +105,9 @@ def make_gen_config(*, system: str | None = None, temperature: float | None = No
         temperature=Gemini.TEMPERATURE if temperature is None else temperature,
         safety_settings=SAFETY_OFF if safety is None else safety,
     )
-    if Gemini.THINKING_BUDGET >= 0:
-        config.thinking_config = types.ThinkingConfig(
-            thinking_budget=Gemini.THINKING_BUDGET,
-        )
+    budget = Gemini.THINKING_BUDGET if thinking_budget is None else thinking_budget
+    if budget >= 0:
+        config.thinking_config = types.ThinkingConfig(thinking_budget=budget)
     return config
 
 
@@ -101,6 +125,32 @@ def _is_transient(error: Exception) -> bool:
     if isinstance(error, errors.APIError):
         return error.code in (408, 429)
     return isinstance(error, (httpx.TransportError, aiohttp.ClientConnectionError, aiohttp.ClientPayloadError))
+
+
+# Another model for the requests of one task (the --probe-context candidate). A context
+# variable: requests of other tasks keep GEMINI_MODEL
+_model: ContextVar[str | None] = ContextVar('gemini_model', default=None)
+
+
+@contextmanager
+def using_model(name: str | None) -> Iterator[None]:
+    """Requests made inside go to this model; None – GEMINI_MODEL."""
+    token = _model.set(name)
+    try:
+        yield
+    finally:
+        _model.reset(token)
+
+
+def background() -> asyncio.Semaphore:
+    """The slots of background requests, held around the request."""
+    return _background
+
+
+def use_all_slots() -> None:
+    """For bot.py --build-memory: nobody is waiting in chat, use every Gemini slot."""
+    global _background
+    _background = asyncio.Semaphore(Gemini.CONCURRENCY)
 
 
 async def generate(contents: str | list, config: types.GenerateContentConfig) -> str | None:
@@ -159,7 +209,7 @@ async def generate_checked(contents: str | list,
             # hold one while other viewers queue behind it
             async with _semaphore, asyncio.timeout(Gemini.TIMEOUT):
                 response = await get_client().aio.models.generate_content(
-                    model=Gemini.MODEL,
+                    model=_model.get() or Gemini.MODEL,
                     contents=contents,
                     config=config,
                 )

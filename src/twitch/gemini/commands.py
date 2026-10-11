@@ -9,7 +9,7 @@ from src.core.database import get_last_tagged_interaction
 from src.twitch.core.limits import PerStreamLimit
 from src.core.utils import clean_nick
 from src.twitch.core.replies import reply, reply_to_bot
-from src.gemini import summary, who
+from src.gemini import pulse, summary, who
 from src.gemini.answer_context import Question, answer
 from src.gemini.client import generate, make_gen_config
 from src.gemini.ladder import walk
@@ -34,10 +34,11 @@ ASK_FOLLOWUP_MINUTES = 15
 
 async def handle_default(ctx: CommandContext) -> None:
     """Free text addressed to the bot. The context and its fallback ladder live in
-    src/gemini/answer_context.py: two streams plus memory, less when Gemini blocks it."""
+    src/gemini/answer_context.py: the pulse, the thread and the dossiers, less when
+    Gemini blocks it."""
     question = Question(
         session_id=ctx.session_id, user=ctx.user, prompt=ctx.prompt,
-        replied=reply_to_bot(ctx.message, ctx.bot.bot_id),
+        replied=reply_to_bot(ctx.message, ctx.bot.bot_id), pulse=pulse.current(ctx.session_id),
     )
     try:
         text, _ = await answer(question, make_gen_config())

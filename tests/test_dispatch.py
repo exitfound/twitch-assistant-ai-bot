@@ -8,7 +8,7 @@ import pytest
 from fakes import FakeBot, make_chatter, make_message
 from src.twitch.core.commands import CommandContext, CommandEntry, Kind
 from src.twitch.core.component import ChatComponent, route
-from src.core.config import Follow, Quota
+from src.core.config import Follow, Quota, Twitch
 from src.core.database import count_bot_uses, record_bot_use
 from src.twitch.gemini.commands import handle_who
 from src.twitch.local.channel import handle_help_channel
@@ -285,3 +285,76 @@ async def test_quota_refusal_gives_the_cooldown_back(db, monkeypatch):
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.quota_exceeded texts.sub_hint')
     assert bot.cooldown_remaining('viewer', Kind.GEMINI) == 0
+
+
+async def test_the_cooldown_refusal_is_said_once_per_pause(db, monkeypatch):
+    """The refusal names the seconds left: repeating it on every message would be spam."""
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    bot = FakeBot()
+    component = ChatComponent(bot)
+    monkeypatch.setattr('src.twitch.core.component.handle_default', AsyncMock())
+
+    messages = [make_message(f'сосурян {i}') for i in range(4)]
+    for message in messages:
+        await component.event_message(message)
+    told = [m for m in messages[1:] if m.respond.await_count]
+    assert [m.respond.await_args.args[0] for m in told] == ['texts.cooldown_gemini']
+
+    # A new pause brings a new refusal
+    bot.clear_cooldown('viewer', Kind.GEMINI)
+    later = [make_message('сосурян ещё'), make_message('сосурян и ещё')]
+    for message in later:
+        await component.event_message(message)
+    later[1].respond.assert_awaited_once_with('texts.cooldown_gemini')
+
+
+@pytest.mark.parametrize(('badges', 'passes'), [
+    ({'moderator': True}, True), ({'moderator': True, 'subscriber': True}, True),
+    ({'broadcaster': True}, True), ({'subscriber': True}, False), ({}, False),
+])
+async def test_moderators_repeat_a_public_command_within_its_pause(db, monkeypatch, badges, passes):
+    """Staff repeat a link for a newcomer at any time; the rest of the chat waits the pause."""
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    component = ChatComponent(FakeBot())
+    entry = component._registry.resolve('!help')
+    handler = AsyncMock()
+    monkeypatch.setattr(entry, 'handler', handler)
+
+    await component.event_message(make_message('!help', make_chatter('first')))
+    await component.event_message(make_message('!help', make_chatter('second', **badges)))
+    assert handler.await_count == (2 if passes else 1)
+
+
+async def test_the_broadcaster_does_not_use_up_the_channel_ceiling(db, monkeypatch):
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    monkeypatch.setattr(Quota, 'CHANNEL_PER_HOUR', 2)
+    for _ in range(2):
+        await record_bot_use(Twitch.CHANNEL.lower(), Kind.GEMINI)
+    handler = AsyncMock()
+    monkeypatch.setattr('src.twitch.core.component.handle_default', handler)
+    await ChatComponent(FakeBot()).event_message(make_message('сосурян раз'))
+    handler.assert_awaited_once()
+
+
+async def test_a_subscriber_is_held_by_their_own_quota(db, monkeypatch):
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    monkeypatch.setattr(Quota, 'SUB_PER_HOUR', 1)
+    await record_bot_use('viewer', Kind.GEMINI)
+    message = make_message('сосурян раз', make_chatter(subscriber=True))
+    await ChatComponent(FakeBot()).event_message(message)
+    message.respond.assert_awaited_once_with('texts.quota_exceeded')
+
+
+@pytest.mark.parametrize(('badges', 'sub_quota', 'hinted'), [
+    ({'vip': True}, 5, True), ({}, 5, True), ({'moderator': True}, 5, True), ({'moderator': True}, 1, False),
+])
+async def test_the_quota_refusal_hints_only_where_a_subscription_raises_it(db, monkeypatch, badges, sub_quota, hinted):
+    """The hint appears only when the subscriber's quota is above the viewer's own."""
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    for field in ('FOLLOWER_PER_HOUR', 'VIP_PER_HOUR', 'MOD_PER_HOUR'):
+        monkeypatch.setattr(Quota, field, 1)
+    monkeypatch.setattr(Quota, 'SUB_PER_HOUR', sub_quota)
+    await record_bot_use('viewer', Kind.GEMINI)
+    message = make_message('сосурян раз', make_chatter(**badges))
+    await ChatComponent(FakeBot()).event_message(message)
+    message.respond.assert_awaited_once_with('texts.quota_exceeded' + (' texts.sub_hint' if hinted else ''))

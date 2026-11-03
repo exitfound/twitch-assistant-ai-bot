@@ -14,7 +14,7 @@ from twitchio.ext import commands
 from src.twitch.core.commands import (
     PUBLIC_SCOPE, CommandContext, CommandEntry, CommandRegistry, Kind,
 )
-from src.core.config import Clip, Cooldown, Follow, Picture, Quota, Twitch
+from src.core.config import Clip, Cooldown, Follow, Kino, Picture, Quota, Twitch
 from src.core.content import Content
 from src.core.database import (
     count_bot_uses, count_channel_bot_uses, oldest_bot_use_age, record_bot_use,
@@ -35,6 +35,7 @@ from src.twitch.local.channel import handle_help_channel
 from src.twitch.local.clip import handle_clip
 from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
 from src.twitch.local.follow import handle_follow
+from src.twitch.local import kino
 from src.twitch.local.mascot import feed as mascot
 from src.twitch.local.roll.board import TRIGGER as ROLLBOARD_TRIGGER, handle_rollboard
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
@@ -155,6 +156,13 @@ class ChatComponent(commands.Component):
             add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI)
         if Clip.ENABLED:
             add(CLIP_TRIGGER,  handle_clip,  prefix=True)
+        if Kino.ENABLED:
+            # Start and stop are exact triggers ahead of the prefix one: from anyone but the
+            # broadcaster they are dropped, not read as «!кино» with args
+            add(kino.START_TRIGGER, kino.handle_kino_start, broadcaster=True)
+            add(kino.STOP_TRIGGER,  kino.handle_kino_stop,  broadcaster=True)
+            # The link and the code are the same for everyone: one shared pause, like help
+            add(kino.TRIGGER,       kino.handle_kino,       prefix=True, public=True)
         # The channel's own commands come from CONTENT.md and change while the bot runs
         self._channel = channel.ChannelCommands(lambda trigger: self._registry.resolve_own(trigger) is not None)
         self._registry.set_fallback(self._channel.resolve)

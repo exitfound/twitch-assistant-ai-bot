@@ -291,6 +291,14 @@ class Clip:
     MIN_SECONDS, DEFAULT_SECONDS = _clip_lengths()
 
 
+class Kino:
+    # !кино: the cinema hall's site and the API token of its gate, which holds the session
+    # and its code. Without either the command is not registered
+    URL: str | None = (_env_raw('KINO_URL') or '').rstrip('/') or None
+    API_TOKEN: str | None = _env_raw('KINO_API_TOKEN')
+    ENABLED: bool = bool(URL and API_TOKEN)
+
+
 class Stream:
     # The bot session is the stream. If the stream dropped and came back within
     # RESUME_MINUTES, it is the same stream: rolls, shields and curses carry on.

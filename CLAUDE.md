@@ -187,6 +187,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `commands.py` – `handle_help_index` (`!help`), `handle_help` (`!bot`), `handle_stats`
 - `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`: `ChannelCommands` (`resolve()`, the registry's fallback; `check()` logs clashes with bot commands and replies too long for Twitch on every edit); `handle_help_channel`. BOT.md «Шаг 7а4»
 - `clip.py` – `!clip`: `parse()`, `default_title()`, `handle_clip`, `make_clip()` (create the clip as the bot, wait until Twitch lists it). BOT.md «Шаг 7з»
+- `kino.py` – `!кино`: the cinema hall's link and code from its gate (`gate()`, `GateError`); `!кино старт` / `!кино стоп` open and close a session, the broadcaster's only. BOT.md «Шаг 7и»
 - `follow.py` – `handle_follow()`: a thank-you once per viewer, a few a minute
 - `emote_spam.py` – `emote_spam_loop()`
 - `help_announce.py` – `help_loop()`, `note_help_shown()`

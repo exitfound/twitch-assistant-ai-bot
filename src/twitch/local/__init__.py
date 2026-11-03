@@ -3,6 +3,7 @@
     commands.py    !help, !bot, !stat
     channel.py     the channel's own commands (!tg …) from CONTENT.md, !channel
     clip.py        !clip – a clip of the stream's last seconds
+    kino.py        !кино – the cinema hall's link and code, its session opened and closed
     follow.py      reply to a new follow
     emote_spam.py  a batch of emotes in chat once per interval
     roll/          the «залупа стрима» (session loser) game: !roll, channel-points rewards,

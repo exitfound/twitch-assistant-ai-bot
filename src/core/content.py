@@ -94,6 +94,7 @@ REQUIRED = {
         'ascii_blocked', 'ascii_unchecked',
         'clip_done', 'clip_bad_length', 'clip_usage', 'clip_title', 'clip_offline', 'clip_bad_title', 'clip_rejected',
         'clip_failed',
+        'kino_info', 'kino_closed', 'kino_open', 'kino_close', 'kino_error',
         'summary_empty', 'summary_error', 'summary_no_previous',
         'who_usage', 'who_unknown', 'who_failed',
         'versus_usage', 'versus_unknown', 'versus_unknown_one', 'versus_failed',

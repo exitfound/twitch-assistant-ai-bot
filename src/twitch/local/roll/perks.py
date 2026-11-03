@@ -25,12 +25,14 @@ async def on_stream_start(bot: BotPort, session_id: str) -> None:
     """The stream is live: grant the perks from the previous one and announce them in chat.
 
     Safe to call again – after a restart or an outage, what was already granted is
-    neither granted nor announced a second time.
+    neither granted nor announced a second time. The champion's Благодать waits for
+    the rewards: without rerolls it guards against nothing, and the bot calls this again
+    once the rewards come up.
     """
     if not Roll.PERKS_ENABLED:
         return
     try:
-        granted = await game.grant_perks(session_id)
+        granted = await game.grant_perks(session_id, shield=bot.rewards_active)
         _pending.pop(session_id, None)
         if granted is None:
             return

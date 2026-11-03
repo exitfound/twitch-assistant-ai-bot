@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="470" viewBox="0 0 1200 470" role="img" aria-labelledby="title desc">
+  <title id="title">Как бот отвечает</title>
+  <desc id="desc">Обращение в чате проходит ворота (фолов, пауза, квота), собирается контекст (пульс чата, последние сообщения, досье, хроника, поиск по базе), Gemini отвечает в персоне, ответ уходит в чат Twitch и голосом в Discord. После разговора бот дописывает память: хронику и досье зрителей.</desc>
+
+  <rect width="1200" height="470" rx="24" fill="#0d0c13"/>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#5c586c"/>
+    </marker>
+    <marker id="arrow-mem" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#b18cff"/>
+    </marker>
+  </defs>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans', 'Helvetica Neue', sans-serif">
+    <!-- 01 -->
+    <g transform="translate(40 40)">
+      <rect width="208" height="280" rx="14" fill="#16151f" stroke="#2c2a3a" stroke-width="1.5"/>
+      <text x="22" y="48" font-family="ui-monospace, 'JetBrains Mono', Menlo, monospace" font-size="18" font-weight="700" fill="#33c5c7">01</text>
+      <text x="22" y="84" font-size="24" font-weight="700" fill="#f1f0f6">Обращение</text>
+      <g font-size="19" fill="#c9c6d6">
+        <text x="22" y="128">«сосур…» в тексте</text>
+        <text x="22" y="160">@ник_бота</text>
+        <text x="22" y="192">реплай боту</text>
+        <text x="22" y="236" fill="#9b97ad">или !команда</text>
+      </g>
+    </g>
+    <!-- 02 -->
+    <g transform="translate(268 40)">
+      <rect width="208" height="280" rx="14" fill="#16151f" stroke="#2c2a3a" stroke-width="1.5"/>
+      <text x="22" y="48" font-family="ui-monospace, 'JetBrains Mono', Menlo, monospace" font-size="18" font-weight="700" fill="#4dd4ff">02</text>
+      <text x="22" y="84" font-size="24" font-weight="700" fill="#f1f0f6">Ворота</text>
+      <g font-size="19" fill="#c9c6d6">
+        <text x="22" y="128">фолов</text>
+        <text x="22" y="160">личная пауза</text>
+        <text x="22" y="192">квота в час</text>
+        <text x="22" y="236" fill="#9b97ad">по статусу</text>
+        <text x="22" y="262" fill="#9b97ad">зрителя</text>
+      </g>
+    </g>
+    <!-- 03 -->
+    <g transform="translate(496 40)">
+      <rect width="208" height="280" rx="14" fill="#16151f" stroke="#2c2a3a" stroke-width="1.5"/>
+      <text x="22" y="48" font-family="ui-monospace, 'JetBrains Mono', Menlo, monospace" font-size="18" font-weight="700" fill="#b18cff">03</text>
+      <text x="22" y="84" font-size="24" font-weight="700" fill="#f1f0f6">Контекст</text>
+      <g font-size="19" fill="#c9c6d6">
+        <text x="22" y="128">пульс чата</text>
+        <text x="22" y="160">20 сообщений</text>
+        <text x="22" y="192">досье людей</text>
+        <text x="22" y="224">хроника стрима</text>
+        <text x="22" y="256">поиск по базе</text>
+      </g>
+    </g>
+    <!-- 04 -->
+    <g transform="translate(724 40)">
+      <rect width="208" height="280" rx="14" fill="#16151f" stroke="#2c2a3a" stroke-width="1.5"/>
+      <text x="22" y="48" font-family="ui-monospace, 'JetBrains Mono', Menlo, monospace" font-size="18" font-weight="700" fill="#b18cff">04</text>
+      <text x="22" y="84" font-size="24" font-weight="700" fill="#f1f0f6">Gemini</text>
+      <g font-size="19" fill="#c9c6d6">
+        <text x="22" y="128">персона</text>
+        <text x="22" y="160">из CONTENT.md</text>
+        <text x="22" y="204" fill="#9b97ad">фильтр сработал –</text>
+        <text x="22" y="230" fill="#9b97ad">повтор с меньшим</text>
+        <text x="22" y="256" fill="#9b97ad">контекстом</text>
+      </g>
+    </g>
+    <!-- 05 -->
+    <g transform="translate(952 40)">
+      <rect width="208" height="280" rx="14" fill="#16151f" stroke="#2c2a3a" stroke-width="1.5"/>
+      <text x="22" y="48" font-family="ui-monospace, 'JetBrains Mono', Menlo, monospace" font-size="18" font-weight="700" fill="#4fd474">05</text>
+      <text x="22" y="84" font-size="24" font-weight="700" fill="#f1f0f6">Ответ</text>
+      <g font-size="19" fill="#c9c6d6">
+        <text x="22" y="128">чат Twitch</text>
+        <text x="22" y="160">голос в Discord</text>
+        <text x="22" y="204" fill="#9b97ad">голос идёт</text>
+        <text x="22" y="230" fill="#9b97ad">через свой</text>
+        <text x="22" y="256" fill="#9b97ad">TTS-сервер</text>
+      </g>
+    </g>
+
+    <!-- stage arrows -->
+    <g stroke="#5c586c" stroke-width="2" marker-end="url(#arrow)">
+      <line x1="249" y1="180" x2="266" y2="180"/>
+      <line x1="477" y1="180" x2="494" y2="180"/>
+      <line x1="705" y1="180" x2="722" y2="180"/>
+      <line x1="933" y1="180" x2="950" y2="180"/>
+    </g>
+
+    <!-- memory loop: after a conversation the bot writes memory that the context reads next time -->
+    <path d="M1056 322 V372 H600 V324" fill="none" stroke="#b18cff" stroke-width="2" stroke-dasharray="6 6" marker-end="url(#arrow-mem)"/>
+    <rect x="236" y="386" width="728" height="58" rx="14" fill="#1d1c28" stroke="#b18cff" stroke-width="1.5"/>
+    <text x="600" y="422" text-anchor="middle" font-size="20" fill="#f1f0f6"><tspan font-weight="700" fill="#b18cff">Память</tspan> после разговора: хроника, события, досье до 40 фактов</text>
+  </g>
+</svg>

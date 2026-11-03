@@ -6,6 +6,7 @@
     answer_context.py  the context of a free-text answer and its rungs
     pulse.py           the pulse: what the chat is about right now, retold, and its cache
     dossier.py         a chatter's dossier as one context line
+    fact_rest.py       dossier facts the bot has worn out, kept out of the context for a while
     output.py          chat limits and the cleanup of an answer: CAPS, markdown, dashes, trimming
     summary.py         the context of !summary
     who.py             the context of !who and !versus

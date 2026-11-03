@@ -32,7 +32,7 @@ from src.gemini.client import (
 from src.gemini.memory import storage
 from src.gemini.memory.storage import FACT_KINDS, HEADLINE_MAX_CHARS, Block, Fact, Profile
 from src.gemini.output import fix_dashes, trim_to_sentence
-from src.twitch.local.roll.storage import get_session_champion, get_session_loser
+from src.twitch.local.roll.storage import get_session_titles
 
 logger = logging.getLogger(__name__)
 
@@ -185,13 +185,12 @@ async def _game_line(block: Block) -> str:
     session_id = await storage.block_session(block)
     if session_id is None:
         return NONE
-    loser, champion = await asyncio.gather(
-        get_session_loser(session_id), get_session_champion(session_id),
-    )
+    # The game's own rule, so the memory names the same people chat and the overlay did
+    champion, loser = await get_session_titles(session_id)
     parts = []
     if loser:
         parts.append(f'залупа стрима – {loser[0]} ({loser[1]})')
-    if champion and (not loser or champion[0] != loser[0]):
+    if champion:
         parts.append(f'китежанин стрима – {champion[0]} ({champion[1]})')
     return ', '.join(parts) or NONE
 

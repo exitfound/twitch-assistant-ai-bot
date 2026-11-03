@@ -6,6 +6,7 @@ checked for any moment. game.py applies them under its lock.
 import math
 import random
 import re
+from typing import NamedTuple
 
 from src.core.config import Rewards, Roll
 from src.core.utils import NICK_TRAILING, clean_nick
@@ -20,6 +21,71 @@ def throw(ceiling: int | None = None) -> int:
     """A roll from ROLL_MIN up to ROLL_MAX, or up to a curse's ceiling."""
     top = Roll.MAX if ceiling is None else max(Roll.MIN, min(ceiling, Roll.MAX))
     return random.randint(Roll.MIN, top)
+
+
+class Luck(NamedTuple):
+    """The luck flask's own throws: evenly from floor up to just below top, or top itself with a
+    chance growing by step percent a throw."""
+    floor: int
+    top: int
+    step: float
+
+
+def luck_of(mode: str | None, stacks: int = 1) -> Luck:
+    """The luck flask's strength: one flask's, times the flasks holding the player, times the mass
+    flask holding the game (game.Flask's value, None – none) – half under АГОНИЯ ЧЕРНОМИРЬЯ, which
+    also lowers the top to AGONY_LUCK_TOP, double under БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА.
+
+    The chance's step grows with the strength. The floor sits at LUCK_FLOOR's share of the top up
+    to a strength of one, and above it closes the gap to the top by that factor: 50 at one, 75 at
+    two, 83 at three.
+    """
+    top = max(Roll.MIN, min(Rewards.AGONY_LUCK_TOP, Roll.MAX)) if mode == 'agony' else Roll.MAX
+    strength = stacks * (0.5 if mode == 'agony' else 2 if mode == 'blessing' else 1)
+    base = max(Roll.MIN, round(Rewards.LUCK_FLOOR * top / Roll.MAX))
+    floor = base if strength <= 1 else round(top - (top - base) / strength)
+    return Luck(min(floor, top), top, Rewards.LUCK_STEP * strength)
+
+
+def luck_chance(throw_no: int, luck: Luck | None = None) -> float:
+    """The chance of the top on the n-th own throw under the luck flask: the step per throw,
+    counted up to LUCK_THROWS – 2%, 4% … 20% by default, exactly."""
+    luck = luck or luck_of(None)
+    return min(1.0, luck.step / 100 * min(throw_no, Rewards.LUCK_THROWS))
+
+
+def lucky_throw(throw_no: int, luck: Luck | None = None) -> int:
+    """The n-th own throw under the luck flask: the top with luck_chance(), otherwise evenly from
+    the floor up to just below the top."""
+    luck = luck or luck_of(None)
+    if luck.floor >= luck.top or random.random() < luck_chance(throw_no, luck):
+        return luck.top
+    return random.randint(luck.floor, luck.top - 1)
+
+
+def choke_step(mode: str | None) -> int:
+    """What the choking flask takes off a roll each minute under the mass flask holding the game:
+    twice CHOKE_STEP under АГОНИЯ ЧЕРНОМИРЬЯ, half under БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА, at least 1."""
+    if mode == 'agony':
+        return Rewards.CHOKE_STEP * 2
+    if mode == 'blessing':
+        return max(1, Rewards.CHOKE_STEP // 2)
+    return Rewards.CHOKE_STEP
+
+
+def agony_top() -> int:
+    """The top of the roll АГОНИЯ ЧЕРНОМИРЬЯ throws everyone, inside the roll's own range."""
+    return max(Roll.MIN, min(Rewards.AGONY_TOP, Roll.MAX))
+
+
+def agony_throw_top() -> int:
+    """The top of every throw while АГОНИЯ ЧЕРНОМИРЬЯ holds, inside the roll's own range."""
+    return max(Roll.MIN, min(Rewards.AGONY_THROW_TOP, Roll.MAX))
+
+
+def bless_floor() -> int:
+    """The bottom of the roll БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА throws everyone, inside the roll's own range."""
+    return max(Roll.MIN, min(Rewards.BLESS_FLOOR, Roll.MAX))
 
 
 def free_limit(tier: Tier) -> int:
@@ -85,7 +151,7 @@ def curse_of(row: RollRow | None, now: float) -> tuple[int, float | None] | None
     """The active curse: (ceiling of the next throw, when it reached the floor).
 
     The curse does not need lifting separately: once the ceiling has sat on the
-    floor longer than CURSE_HOLD_MINUTES, the row simply stops counting as cursed.
+    floor longer than its hold (curse_hold()), the row simply stops counting as cursed.
     A new session is a new row with no curse in it. The curse of the previous
     stream's loser also has a hard deadline, curse_until.
     """
@@ -94,24 +160,34 @@ def curse_of(row: RollRow | None, now: float) -> tuple[int, float | None] | None
     if row.curse_until is not None and now >= row.curse_until:
         return None
     floor_at = row.curse_floor_at
-    if floor_at is not None and now - floor_at >= Rewards.CURSE_HOLD_MINUTES * 60:
+    if floor_at is not None and now - floor_at >= curse_hold(row.curse_power):
         return None
     return row.curse_ceiling, floor_at
 
 
-def lowered(ceiling: int, floor_at: float | None, now: float) -> tuple[int, float | None]:
+def curse_hold(power: int | None) -> float:
+    """Seconds a curse holds on the floor: CURSE_HOLD_MINUTES, times the doubling АГОНИЯ ЧЕРНОМИРЬЯ gave it."""
+    return Rewards.CURSE_HOLD_MINUTES * 60 * (power or 1)
+
+
+def curse_step(power: int | None) -> int:
+    """How far a throw lowers a curse's ceiling: CURSE_STEP, divided by its doubling, at least 1."""
+    return max(1, Rewards.CURSE_STEP // (power or 1))
+
+
+def lowered(ceiling: int, floor_at: float | None, now: float, power: int | None = None) -> tuple[int, float | None]:
     """The ceiling after a cursed player's throw: one step lower, but not below the floor.
 
     The countdown to the lift starts the moment the ceiling first reaches the
     floor, and does not move after that.
     """
-    next_ceiling = max(Rewards.CURSE_FLOOR, ceiling - Rewards.CURSE_STEP)
+    next_ceiling = max(Rewards.CURSE_FLOOR, ceiling - curse_step(power))
     if floor_at is None and next_ceiling == Rewards.CURSE_FLOOR:
         floor_at = now
     return next_ceiling, floor_at
 
 
-def minutes_left(floor_at: float | None, until: float | None, now: float) -> int | None:
+def minutes_left(floor_at: float | None, until: float | None, now: float, power: int | None = None) -> int | None:
     """Minutes until a curse sitting on the floor lifts. None – nothing to wait for.
 
     None means either that the ceiling is still dropping (no floor_at yet) or that the
@@ -121,16 +197,8 @@ def minutes_left(floor_at: float | None, until: float | None, now: float) -> int
     """
     if floor_at is None:
         return None
-    lifts_at = floor_at + Rewards.CURSE_HOLD_MINUTES * 60
+    lifts_at = floor_at + curse_hold(power)
     if until is not None:
         lifts_at = min(lifts_at, until)
     return whole_minutes(lifts_at - now)
 
-
-def visible_champion(loser: tuple[str, int] | None,
-                     champion: tuple[str, int] | None) -> tuple[str, int] | None:
-    """The champion to show: none when it is the loser too – one player, or everyone
-    threw the same number, and there is nobody to praise them against."""
-    if champion is not None and loser is not None and champion[0] == loser[0]:
-        return None
-    return champion

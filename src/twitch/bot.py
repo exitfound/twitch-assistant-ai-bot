@@ -18,7 +18,7 @@ from src.core.cooldowns import Cooldowns
 from src.twitch.core.stream import StreamTracker, watch_stream
 from src.core.tasks import BackgroundTasks
 from src.twitch.core.tokens import (
-    OAUTH_SCOPES, OAUTH_SCOPES_FOLLOWS, add_bot_token, add_broadcaster_token, oauth_link, store_tokens,
+    BOT_LOGIN, CHANNEL_LOGIN, add_bot_token, add_broadcaster_token, add_login_routes, oauth_link, store_tokens,
     token_dead, token_problem,
 )
 from src.core.utils import defuse
@@ -31,8 +31,11 @@ from src.twitch.local.help_announce import help_loop
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot.feed import mascot_loop
 from src.twitch.local.roll import overlay as roll_overlay
+from src.twitch.local.roll import announce as roll_announce
+from src.twitch.local.roll import board as roll_board
 from src.twitch.local.roll import perks
 from src.twitch.local.roll.announce import curse_lift_loop
+from src.twitch.local.roll.choke import choke_loop
 from src.twitch.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
 from src.twitch.local.roll.storage import get_reward_ids
 
@@ -41,6 +44,9 @@ logger = logging.getLogger(__name__)
 # Pause before the next attempt to start the rewards after a failure: doubles up to the cap
 REWARDS_RETRY_SECONDS = 60
 REWARDS_RETRY_MAX_SECONDS = 600
+
+# How long a mass flask waits for Twitch's chat list before it takes who has written instead
+CHATTERS_TIMEOUT = 5
 
 
 class Bot(commands.Bot):
@@ -52,6 +58,8 @@ class Bot(commands.Bot):
             bot_id=Twitch.BOT_ID,
             prefix='!',
         )
+        # /bot and /channel beside twitchio's /oauth: links a terminal cannot wrap and cut short
+        add_login_routes(self._adapter, REWARDS_SCOPE)
         self._cooldowns = Cooldowns()
         self._bot_name: str | None = None
         self._channel_id: str | None = None
@@ -167,11 +175,13 @@ class Bot(commands.Bot):
             await self.stream.settle_missed_end()
 
     async def stream_went_online(self, stream_id: str, started_at: float) -> None:
-        """Stream is live: stream session, rewards open, perks from the previous one."""
+        """Stream is live: stream session, rewards open, old curses gone, perks."""
         await self.stream.online(stream_id, started_at)
         await self._rewards.set_open(True)
         await self.tell_rewards_down()
         await roll_overlay.refresh(self.session_id, live=True)
+        await roll_board.regalia(self.session_id, live=True)
+        await roll_announce.on_stream_start(self.session_id)
         await perks.on_stream_start(self, self.session_id)
 
     async def stream_went_offline(self) -> None:
@@ -181,6 +191,7 @@ class Bot(commands.Bot):
         await self.stream.offline()
         await self._rewards.set_open(False)
         await roll_overlay.refresh(ended, live=False)
+        await roll_board.regalia(ended, live=False)
 
     def _start_memory(self) -> None:
         """The memory check (src/gemini/memory/): runs for as long as the bot does.
@@ -242,18 +253,23 @@ class Bot(commands.Bot):
             if token_problem(e):
                 logger.warning(
                     'Похоже, нет токена бота или у него не те права. Открой в браузере и войди '
-                    'под аккаунтом бота:\n%s', oauth_link(OAUTH_SCOPES),
+                    'под аккаунтом бота:\n%s', oauth_link(BOT_LOGIN),
                 )
         self._start_background_tasks()
         self._start_overlays()
         await roll_overlay.refresh(self.session_id, live=self.stream_live)
+        await roll_board.regalia(self.session_id, live=self.stream_live)
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
+        if self.stream_live:
+            # The curses of finished streams go first: the perks granted below lay new ones
+            await roll_announce.on_stream_start(self.session_id)
         await self._start_rewards()
         await self.tell_rewards_down()
-        if self.stream_live:
-            # Perks from the previous stream. What was granted is not granted twice,
-            # so a restart or reconnect mid-stream will not duplicate them
+        if self.stream_live and not self._rewards.active:
+            # Perks from the previous stream. Rewards that came up granted them already
+            # (_rewards_started()); without them only the Сглаз goes out, and what was
+            # granted is not granted twice, so a restart mid-stream duplicates nothing
             await perks.on_stream_start(self, self.session_id)
 
     def _start_overlays(self) -> None:
@@ -288,6 +304,9 @@ class Bot(commands.Bot):
         # Curses come from rewards and from the previous stream's results
         if (Rewards.ENABLED or Roll.PERKS_ENABLED) and tasks.start('curse_lift', lambda: curse_lift_loop(self)):
             logger.info('Оповещения о снятии проклятий включены')
+        # The choking flask comes only from a reward
+        if Rewards.ENABLED and tasks.start('choke', lambda: choke_loop(self)):
+            logger.info('Шаги ФЛАСКИ УДУШЕНИЯ включены')
         if Help.ANNOUNCE_ENABLED and tasks.start('help', lambda: help_loop(self)):
             logger.info('Напоминания о командах включены (раз в %d мин)', Help.ANNOUNCE_INTERVAL_MINUTES)
         if Emote.SPAM_ENABLED and not tasks.running('emote_spam'):
@@ -309,7 +328,7 @@ class Bot(commands.Bot):
             logger.warning(
                 'Награды за баллы канала выключены: нет токена канала. Открой в браузере '
                 'и войди под аккаунтом канала %s:\n%s',
-                Twitch.CHANNEL, oauth_link(REWARDS_SCOPE),
+                Twitch.CHANNEL, oauth_link(CHANNEL_LOGIN),
             )
             return
         try:
@@ -320,6 +339,14 @@ class Bot(commands.Bot):
             # restart, and open on Twitch if the last run crashed before pausing them
             if not await self._rewards_failed(e):
                 self._tasks.start('rewards_retry', self._retry_rewards, once=True)
+            return
+        await self._rewards_started()
+
+    async def _rewards_started(self) -> None:
+        """The rewards came up. Mid-stream the champion's Благодать, held back while
+        they were down, is granted now; perks.on_stream_start() grants nothing twice."""
+        if self.stream_live:
+            await perks.on_stream_start(self, self.session_id)
 
     async def _retry_rewards(self) -> None:
         """Start the rewards again until it works, the channel's token dies or the bot stops."""
@@ -331,11 +358,13 @@ class Bot(commands.Bot):
                 return
             try:
                 await self._rewards.start(self._channel_id, open_=self.stream_live)
-                return
             except Exception as e:
                 if await self._rewards_failed(e):
                     return
                 logger.warning('Награды за баллы канала снова не запустились: %r', e)
+            else:
+                await self._rewards_started()
+                return
             delay = min(delay * 2, REWARDS_RETRY_MAX_SECONDS)
 
     async def _rewards_failed(self, error: Exception) -> bool:
@@ -347,7 +376,7 @@ class Bot(commands.Bot):
         self._rewards.drop()
         logger.error(
             'Twitch отозвал токен канала – награды за баллы выключены: %s\nОткрой в браузере '
-            'и войди под аккаунтом канала %s:\n%s', error, Twitch.CHANNEL, oauth_link(REWARDS_SCOPE),
+            'и войди под аккаунтом канала %s:\n%s', error, Twitch.CHANNEL, oauth_link(CHANNEL_LOGIN),
         )
         await self.tell_rewards_down()
         return True
@@ -439,6 +468,28 @@ class Bot(commands.Bot):
             raise RuntimeError('ID канала не получен – клип сделать нельзя')
         return await clip.make_clip(self, self._channel_id, str(self.bot_id), seconds, title)
 
+    async def fetch_chatters(self) -> set[str] | None:
+        """Logins connected to the channel's chat, the bot's own left out. None – Twitch did not say.
+
+        Asked as the bot, a moderator of the channel (moderator:read:chatters). Never raises: a
+        mass flask then takes who has written in the stream.
+        """
+        if not self._channel_id:
+            return None
+        try:
+            async with asyncio.timeout(CHATTERS_TIMEOUT):
+                chatters = await self.create_partialuser(self._channel_id).fetch_chatters(
+                    moderator=str(self.bot_id), first=1000,
+                )
+                return {user.name.lower() async for user in chatters.users
+                        if user.name and str(user.id) != str(self.bot_id)}
+        except Exception as e:
+            logger.warning('Список зрителей чата не получен, фласка возьмёт писавших в стриме: %r', e)
+            if isinstance(e, twitchio.HTTPException) and e.status in (401, 403):
+                logger.warning('Боту нужно право moderator:read:chatters и модерка в канале. Открой в '
+                               'браузере и войди под аккаунтом бота:\n%s', oauth_link(BOT_LOGIN))
+            return None
+
     async def stop_background_tasks(self) -> None:
         await self._tasks.stop()
 
@@ -465,7 +516,7 @@ class Bot(commands.Bot):
             logger.info('Подписка на фоловы')
         except Exception as e:
             logger.warning('Не удалось подписаться на фоловы: %s\nПереавторизация: %s',
-                           e, oauth_link(OAUTH_SCOPES_FOLLOWS))
+                           e, oauth_link(BOT_LOGIN))
 
         try:
             for stream_sub in (

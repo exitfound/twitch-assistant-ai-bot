@@ -118,8 +118,9 @@ async def _bot_uses(db: aiosqlite.Connection) -> None:
 
 async def _rolls(db: aiosqlite.Connection) -> None:
     """Rolls and its added columns."""
-    # Tables of the !roll game: rolls, rewards, roll_actions, roll_throws, roll_perks, roll_tiers. Schema and migrations
-    # live here with all the others, their queries – in src/twitch/local/roll/storage.py
+    # Tables of the !roll game: rolls, rewards, roll_actions, roll_throws, roll_perks, roll_tiers,
+    # roll_chokes. Schema and migrations live here with all the others, their queries – in
+    # src/twitch/local/roll/storage.py
     await db.execute('''
         CREATE TABLE IF NOT EXISTS rolls (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -131,6 +132,7 @@ async def _rolls(db: aiosqlite.Connection) -> None:
             curse_ceiling  INTEGER,
             curse_floor_at REAL,
             curse_until    REAL,
+            curse_power    INTEGER,
             free_limit     INTEGER,
             UNIQUE(session_id, username)
         )
@@ -166,12 +168,24 @@ async def _roll_actions(db: aiosqlite.Connection) -> None:
             old_value     INTEGER,
             new_value     INTEGER,
             status        TEXT NOT NULL,
-            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            flask         TEXT,
+            acted_at      REAL,
+            actor_extra   REAL
         )
     ''')
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_roll_actions_target ON roll_actions(session_id, target, action)'
     )
+    # flask – what a random flask came up with, acted_at – the redemption by the bot's clock to a
+    # fraction of a second (created_at holds whole seconds), actor_extra – seconds a swap holds its
+    # buyer past REWARD_FLASK_MINUTES. A table made before the columns gets them here
+    async with db.execute('PRAGMA table_info(roll_actions)') as cursor:
+        columns = {row[1] for row in await cursor.fetchall()}
+    for name, ddl in (('flask', 'TEXT'), ('acted_at', 'REAL'), ('actor_extra', 'REAL')):
+        if name not in columns:
+            await db.execute(f'ALTER TABLE roll_actions ADD COLUMN {name} {ddl}')
+            logger.warning('В roll_actions добавлена колонка %s', name)
 
 
 async def _roll_throws(db: aiosqlite.Connection) -> None:
@@ -235,6 +249,22 @@ async def _roll_tiers(db: aiosqlite.Connection) -> None:
             PRIMARY KEY (session_id, username)
         )
     ''')
+
+
+async def _roll_chokes(db: aiosqlite.Connection) -> None:
+    """Roll_chokes: every choking flask running on a player, each on its own schedule."""
+    # Two chokes on one player both step, each a minute apart from its own drink: next_at – its
+    # next step, until – its end, by time.time()
+    await db.execute('''
+        CREATE TABLE IF NOT EXISTS roll_chokes (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            username   TEXT NOT NULL,
+            next_at    REAL NOT NULL,
+            until      REAL NOT NULL
+        )
+    ''')
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_roll_chokes_due ON roll_chokes(session_id, next_at)')
 
 
 async def _dossier(db: aiosqlite.Connection) -> None:
@@ -394,6 +424,7 @@ STEPS = [
     ('bot_state', _bot_state),
     ('roll_tiers', _roll_tiers),
     ('dossier', _dossier),
+    ('roll_chokes', _roll_chokes),
 ]
 SCHEMA_VERSION = len(STEPS)
 
@@ -409,6 +440,9 @@ _ROLLS_COLUMNS = {
     # Hard curse deadline by time.time(): the curse of the previous stream's «залупа»
     # has one, a bought curse has NULL
     'curse_until': 'REAL',
+    # How many times АГОНИЯ ЧЕРНОМИРЬЯ doubled a running curse, as a factor: the step is that
+    # many times smaller, the hold on the floor that many times longer. NULL – 1
+    'curse_power': 'INTEGER',
     # Neither is read nor written: the status lives in roll_tiers, filled from chat.
     # The columns stay because the steps only add
     'free_limit': 'INTEGER',

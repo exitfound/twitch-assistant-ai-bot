@@ -3,11 +3,13 @@ import asyncio
 
 import pytest
 
-from fakes import FakeBot, make_chatter
-from src.core.database import transaction
+from fakes import FakeBot, always, make_chatter
+import time
+
+from src.core.database import save_chat_message, save_stream, transaction
 from src.twitch.local.roll import game, redemption, rules, tiers
 from src.twitch.local.roll.redemption import handle_redemption
-from src.twitch.local.roll.storage import count_actions, get_tier, save_roll, save_tier
+from src.twitch.local.roll.storage import add_perk, count_actions, get_tier, save_roll, save_tier
 
 
 def redeem(bot, action, redemption_id, user, user_input, *, follows=True, asked=None):
@@ -62,7 +64,7 @@ async def test_a_cleanse_that_returns_the_roll_says_so_with_the_titles(db, monke
     assert await redeem(bot, game.Action.CURSE, 'r1', 'foe', 'gop') is True
     bot.send_chat_message.reset_mock()
     assert await redeem(bot, game.Action.CLEANSE, 'r2', buyer, 'gop') is True
-    bot.send_chat_message.assert_awaited_once_with(f'{key} texts.roll_champion')
+    bot.send_chat_message.assert_awaited_once_with(f'{key} texts.roll_loser_note texts.roll_champion')
 
 
 async def test_duplicate_is_left_alone_silently(db):
@@ -78,6 +80,27 @@ async def test_first_reroll_of_a_player_uses_its_own_text(db):
     await save_roll(bot.session_id, 'victim', 50, free_throw=True)
     await redeem(bot, game.Action.REROLL, 'r1', 'gop', 'victim')
     assert bot.send_chat_message.await_args.args[0].startswith('texts.reward_reroll_done')
+
+
+async def test_a_reroll_that_lays_the_sglaz_says_so(db, monkeypatch):
+    """A reroll on the previous stream's loser who has not written yet lays the Сглаз with no
+    «Сглаз на тебе» before it: the outcome names it, in chat and on the overlay."""
+    monkeypatch.setattr(rules.random, 'randint', lambda a, b: b)
+    bot = FakeBot()
+    await save_stream('stream-1', 'P', time.time() - 86_400)
+    await save_stream('stream-2', bot.session_id, time.time() - 60)
+    await save_roll('P', 'champ', 95, free_throw=True)
+    await save_roll('P', 'loser', 3, free_throw=True)
+    await save_chat_message('P', 'loser', 'привет')
+    await game.grant_perks(bot.session_id)
+    events = []
+    monkeypatch.setattr(redemption.overlay, 'publish', events.append)
+    assert await redeem(bot, game.Action.REROLL, 'r1', 'gop', 'loser') is True
+    assert bot.send_chat_message.await_args.args[0].endswith('texts.roll_sglaz_laid')
+    assert events[0]['sglaz'] is True and events[0]['ceiling'] == game.Rewards.CURSE_CEILING
+    # The next throw on them is an ordinary cursed one: the Сглаз is laid once
+    assert await redeem(bot, game.Action.REROLL, 'r2', 'mate', 'loser') is not None
+    assert not bot.send_chat_message.await_args.args[0].endswith('texts.roll_sglaz_laid')
 
 
 async def test_game_error_refunds(db, monkeypatch):
@@ -270,3 +293,163 @@ async def test_a_limit_refusal_hints_at_a_subscription_where_it_would_help(db, m
     assert await redeem(bot, game.Action.SHIELD, 'r2', 'gop', '') is False
     expected = 'texts.reward_refund_shield_limit' + (' texts.sub_hint' if hint else '')
     bot.send_chat_message.assert_awaited_once_with(expected)
+
+
+async def test_a_swap_says_who_traded_with_whom_and_the_titles(db, swap):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 10, free_throw=True)
+    await save_roll(bot.session_id, 'other', 90, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    bot.send_chat_message.assert_awaited_once_with(
+        'texts.reward_flask_swap texts.roll_loser_note texts.roll_champion')
+
+
+
+async def test_a_swap_drunk_again_names_the_longer_hold(db, swap):
+    bot = FakeBot()
+    for user, value in (('gop', 10), ('a', 90), ('b', 50)):
+        await save_roll(bot.session_id, user, value, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    assert await redeem(bot, game.Action.FLASK, 'r2', 'gop', '') is True
+    assert bot.send_chat_message.await_args.args[0].startswith('texts.reward_flask_swap_again')
+
+@pytest.mark.parametrize(('rolls', 'text'), [
+    ({}, 'texts.reward_refund_flask_no_roll'),
+    ({'gop': 10}, 'texts.reward_refund_flask_no_partner'),
+])
+async def test_a_swap_with_nothing_to_trade_is_refunded(db, swap, rolls, text):
+    bot = FakeBot()
+    for user, value in rolls.items():
+        await save_roll(bot.session_id, user, value, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is False
+    bot.send_chat_message.assert_awaited_once_with(text)
+
+
+async def test_a_reroll_on_a_held_player_is_refunded(db, swap):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 10, free_throw=True)
+    await save_roll(bot.session_id, 'other', 90, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    bot.send_chat_message.reset_mock()
+    assert await redeem(bot, game.Action.REROLL, 'r2', 'foe', 'other') is False
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_refund_flask_guarded')
+    assert await redeem(bot, game.Action.REROLL, 'r3', 'gop', 'foe') is False
+    bot.send_chat_message.assert_awaited_with('texts.reward_refund_under_flask')
+
+
+async def test_the_luck_flask_says_so_without_the_titles(db, luck):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_flask_luck')
+    # Only a mass flask needs the chat list: Twitch is not asked for any other
+    bot.fetch_chatters.assert_not_awaited()
+
+
+async def test_a_cursed_buyer_hears_the_luck_waits_for_the_curse(db, luck):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    async with transaction() as db_:
+        await db_.execute("UPDATE rolls SET curse_ceiling = 55 WHERE username = 'gop'")
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_flask_luck_cursed')
+
+
+async def test_an_extra_roll_under_luck_adds_no_note(db, luck):
+    bot = FakeBot()
+    for _ in range(game.Roll.FREE_PER_SESSION):
+        await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    assert await redeem(bot, game.Action.EXTRA, 'r2', 'gop', '') is True
+    assert 'luck' not in bot.send_chat_message.await_args.args[0]
+
+
+async def test_the_choking_flask_says_so(db, monkeypatch):
+    always(monkeypatch, game.Flask.CHOKE)
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r2', 'gop', '') is True
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_flask_choke')
+
+
+async def test_agony_asks_twitch_who_is_in_chat_and_then_holds_every_reward(db, monkeypatch):
+    always(monkeypatch, game.Flask.AGONY)
+    bot = FakeBot()
+    bot.fetch_chatters.return_value = {'gop', 'lurker'}
+    await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    bot.fetch_chatters.assert_awaited_once()
+    assert bot.send_chat_message.await_args.args[0].startswith('texts.reward_flask_agony')
+    assert await redeem(bot, game.Action.SHIELD, 'r2', 'lurker', '') is False
+    bot.send_chat_message.assert_awaited_with('texts.reward_refund_agony_lock')
+    bot.fetch_chatters.assert_awaited_once()
+
+
+async def test_the_blessing_says_so_and_holds_every_spell(db, monkeypatch):
+    always(monkeypatch, game.Flask.BLESSING)
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    await save_roll(bot.session_id, 'mate', 60, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is True
+    assert bot.send_chat_message.await_args.args[0].startswith('texts.reward_flask_blessing')
+    assert await redeem(bot, game.Action.REROLL, 'r2', 'foe', 'mate') is False
+    bot.send_chat_message.assert_awaited_with('texts.reward_refund_bless_lock')
+    always(monkeypatch, game.Flask.CHOKE)
+    assert await redeem(bot, game.Action.FLASK, 'r3', 'mate', '') is True
+
+
+
+async def test_a_failed_redemption_is_journaled_so_a_redelivery_is_skipped(db, monkeypatch):
+    """The points go back on a failure; Twitch may deliver the event again, and it must not apply then."""
+    bot = FakeBot()
+    real, calls = game.redeem, []
+
+    async def broken_once(*args, **kwargs):
+        calls.append(args)
+        if len(calls) == 1:
+            raise RuntimeError('database is locked')
+        return await real(*args, **kwargs)
+    monkeypatch.setattr(game, 'redeem', broken_once)
+    assert await redeem(bot, game.Action.SHIELD, 'r1', 'gop', '') is False
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_error')
+    assert await redeem(bot, game.Action.SHIELD, 'r1', 'gop', '') is None
+    assert len(calls) == 1
+
+
+async def test_a_copy_failing_beside_an_applied_one_says_nothing_and_refunds_nothing(db, monkeypatch):
+    """Twitch delivered the redemption twice: one copy applied, the other failed. The failed one
+    finds it in the journal and must not refund points for an effect that is on."""
+    bot = FakeBot()
+    real = game.redeem
+
+    async def applied_meanwhile(*args, **kwargs):
+        await real(*args, **kwargs)
+        raise RuntimeError('database is locked')
+    monkeypatch.setattr(game, 'redeem', applied_meanwhile)
+    assert await redeem(bot, game.Action.SHIELD, 'r1', 'gop', '') is None
+    bot.send_chat_message.assert_not_awaited()
+
+
+async def test_a_purchase_is_the_buyers_appearance_and_says_the_perk(db):
+    """A previous stream's loser who buys before writing in chat hears the Сглаз start, as on a
+    first message: otherwise the curse on their throw would come out of nowhere."""
+    bot = FakeBot()
+    await add_perk(bot.session_id, 'gop', game.Perk.CURSE, 'previous')
+    assert await redeem(bot, game.Action.SHIELD, 'r1', 'gop', '') is True
+    said = [c.args[0] for c in bot.send_chat_message.await_args_list]
+    assert said == ['texts.roll_perk_curse_on', 'texts.reward_shield_up']
+
+
+def test_a_long_message_is_cut_at_sentence_ends():
+    from src.twitch.local.roll.texts import MESSAGE_MAX, split_message
+    sentence = 'Слово ' * 50 + 'конец.'
+    pieces = split_message(' '.join([sentence] * 3))
+    assert len(pieces) == 3 and all(len(piece) <= MESSAGE_MAX for piece in pieces)
+    assert all(piece.endswith('конец.') for piece in pieces)
+    long = 'а' * 300 + ' ' + 'б' * 300
+    assert split_message(long) == ['а' * 300, 'б' * 300]
+    # An abbreviation's period is no cut, and a leading space never gives an empty piece
+    note = 'Удерживает ещё 5 мин. – минус 20 каждую минуту.'
+    held = 'Слово ' * 50 + 'конец. ' + note
+    assert split_message(held, limit=len(held) - 10)[-1] == note
+    assert all(split_message(' ' + 'а' * 600))

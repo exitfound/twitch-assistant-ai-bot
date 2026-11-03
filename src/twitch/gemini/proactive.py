@@ -15,7 +15,7 @@ from src.core.content import Content
 from src.core.database import get_random_knowledge, get_recent_chat, save_bot_interaction
 from src.twitch.core.port import BotPort
 from src.core.utils import random_delay
-from src.gemini import dossier, pulse
+from src.gemini import dossier, fact_rest, pulse
 from src.gemini.client import generate, make_gen_config
 from src.gemini.context import ContextBuilder
 from src.gemini.output import (
@@ -62,10 +62,10 @@ async def _send_proactive(bot: BotPort, watch: ChatWatch) -> None:
     active_users = list({u for u, _ in recent_chat[-Proactive.ACTIVE_WINDOW:]})
     target_user = random.choice(active_users) if active_users else None
 
-    people = []
+    people, shown = [], []
     if target_user and random.random() < Proactive.TARGET_PROBABILITY:
         event_prompt = Content.prompt('proactive_user', user=target_user)
-        people = await dossier.people([target_user], '', PROACTIVE_FACTS, 0)
+        people = await dossier.people([target_user], '', PROACTIVE_FACTS, 0, picked=shown)
     else:
         event_prompt = Content.prompt('proactive_general')
 
@@ -96,4 +96,5 @@ async def _send_proactive(bot: BotPort, watch: ChatWatch) -> None:
     text = maybe_add_emote(text)
     if await bot.send_chat_message(text):
         speech.say(text, 'twitch')
+        fact_rest.answered(text, shown)
         await save_bot_interaction(session_id, '_proactive_', event_prompt, text)

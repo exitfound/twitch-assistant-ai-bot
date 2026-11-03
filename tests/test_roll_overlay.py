@@ -1,20 +1,21 @@
 """The game on the stream: what the OBS page gets from !roll, the rewards and the perks."""
 import asyncio
 import json
+import time
 from unittest.mock import AsyncMock
 
 import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, always, make_chatter, make_message
 from src.core.config import Rewards, Roll
 from src.twitch.core import sse
 from src.twitch.core.commands import CommandContext
 from src.twitch.local.roll import game, overlay, rules
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
 from src.twitch.local.roll.redemption import handle_redemption
-from src.twitch.local.roll.storage import save_roll
+from src.twitch.local.roll.storage import save_roll, save_throw
 
 
 @pytest.fixture
@@ -49,8 +50,8 @@ async def test_a_roll_from_chat_reaches_the_page_with_the_titles(db, page, monke
     [event] = sent(page)
     assert event == {
         'type': 'roll', 'who': 'gop', 'actor': None, 'value': 42, 'old': None, 'min': Roll.MIN, 'max': Roll.MAX,
-        'ceiling': None, 'next': None, 'hold': None, 'floor': event['floor'],
-        'titles': {'best': None, 'worst': {'nick': 'gop', 'value': 42}},
+        'ceiling': None, 'next': None, 'hold': None, 'floor': event['floor'], 'sglaz': False, 'luck': None,
+        'agony': None, 'titles': {'best': {'nick': 'gop', 'value': 42}, 'worst': None},
     }
 
 
@@ -109,7 +110,69 @@ async def test_a_cleanse_that_returns_the_roll_shows_both_numbers(db, page, monk
     await redeem(bot, game.Action.CLEANSE, 'r2', 'gop', 'gop')
     _, cleanse = sent(page)
     assert (cleanse['type'], cleanse['value'], cleanse['old']) == ('cleanse', 90, 1)
-    assert cleanse['titles']['worst'] == {'nick': 'gop', 'value': 90}
+    assert cleanse['titles'] == {'best': {'nick': 'gop', 'value': 90}, 'worst': None}
+
+
+async def test_a_swap_shows_the_buyers_numbers_and_a_hit_on_the_held_bounces(db, swap, page):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 10, free_throw=True)
+    await save_roll(bot.session_id, 'mate', 90, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop') is True
+    assert await redeem(bot, game.Action.REROLL, 'r2', 'foe', 'mate') is False
+    flask, blocked = sent(page)
+    assert flask == {
+        'type': 'flask', 'flask': 'swap', 'who': 'mate', 'actor': 'gop', 'value': 90, 'old': 10,
+        'max': Roll.MAX, 'minutes': Rewards.FLASK_MINUTES,
+        'titles': {'best': {'nick': 'gop', 'value': 90}, 'worst': {'nick': 'mate', 'value': 10}},
+    }
+    assert (blocked['type'], blocked['action'], blocked['by'], blocked['who']) == ('blocked', 'reroll', 'flask', 'mate')
+
+
+async def test_the_luck_flask_shows_what_is_coming_and_lucky_throws_say_so(db, page, luck):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 50, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop') is True
+    await roll(bot, 'gop')
+    assert await redeem(bot, game.Action.CURSE, 'r2', 'foe', 'gop') is False
+    flask, thrown, blocked = sent(page)
+    assert flask == {'type': 'flask', 'flask': 'luck', 'who': 'gop', 'actor': 'gop', 'from': Rewards.LUCK_FLOOR,
+                     'max': Roll.MAX, 'chance': thrown['luck'], 'minutes': Rewards.FLASK_MINUTES}
+    assert thrown['type'] == 'roll' and thrown['value'] >= Rewards.LUCK_FLOOR
+    assert (blocked['type'], blocked['action'], blocked['by']) == ('blocked', 'curse', 'luck')
+
+
+async def test_a_choke_step_moves_only_the_titles_and_only_when_they_change(db, page, monkeypatch):
+    always(monkeypatch, game.Flask.CHOKE)
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 90, free_throw=True)
+    await save_roll(bot.session_id, 'mate', 50, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop') is True
+    [flask] = sent(page)
+    assert (flask['type'], flask['flask'], flask['value'], flask['step']) == ('flask', 'choke', 90, Rewards.CHOKE_STEP)
+    await overlay.refresh(bot.session_id, live=True)
+    sent(page)
+    standings = await game.titles(bot.session_id)
+    assert overlay.choked(standings) is None
+    later = game.Standings(loser=('mate', 50), champion=('gop', 80))
+    assert overlay.choked(later) == {'type': 'choke', 'titles': {
+        'best': {'nick': 'gop', 'value': 80}, 'worst': {'nick': 'mate', 'value': 50}}}
+
+
+
+async def test_the_mass_flasks_count_who_they_reached_with_the_titles(db, page, monkeypatch):
+    always(monkeypatch, game.Flask.BLESSING)
+    monkeypatch.setattr(rules.random, 'randint', lambda a, b: b)
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 10, free_throw=True)
+    await save_roll(bot.session_id, 'mate', 20, free_throw=True)
+    assert await redeem(bot, game.Action.FLASK, 'r1', 'gop') is True
+    assert await redeem(bot, game.Action.CURSE, 'r2', 'foe', 'mate') is False
+    flask, refused = sent(page)
+    assert {k: flask[k] for k in ('type', 'flask', 'who', 'crowd', 'from', 'to')} == {
+        'type': 'flask', 'flask': 'blessing', 'who': 'gop', 'crowd': 2, 'from': Rewards.BLESS_FLOOR, 'to': Roll.MAX}
+    assert flask['shields'] + flask['cleanses'] == 2 and flask['titles']['best'] is not None
+    # A curse while the blessing holds the game is refused: no card, the titles come back
+    assert refused == {'type': 'wake'}
 
 
 def test_the_perks_name_the_blessing_and_the_evil_eye():
@@ -160,10 +223,18 @@ async def test_a_new_page_starts_from_the_titles_in_the_database(db, page):
                 lines.append(line)
         assert lines[0] == 'event: roll'
         state = json.loads(lines[1].removeprefix('data: '))
-        # A refresh during a stream counts as a move: a restarted bot shows the titles at once
-        assert state == {'type': 'state', 'live': True, 'min': Roll.MIN, 'max': Roll.MAX, 'quiet': 0, 'titles': {
-            'best': {'nick': 'king', 'value': 99}, 'worst': {'nick': 'gop', 'value': 10}}}
+        # No throw or redemption is journaled: a restart alone starts no hold of the titles
+        assert state == {'type': 'state', 'live': True, 'min': Roll.MIN, 'max': Roll.MAX, 'quiet': None,
+                         'regalia': None, 'titles': {
+                             'best': {'nick': 'king', 'value': 99}, 'worst': {'nick': 'gop', 'value': 10}}}
         response.close()
+
+
+async def test_a_restart_keeps_the_quiet_since_the_last_move(db, page):
+    """A restarted bot shows the titles for what is left of their hold, not for a new one."""
+    await save_throw('s', 'gop', time.time() - 120)
+    await overlay.refresh('s', live=True)
+    assert 119 <= overlay._snapshot()['quiet'] <= 121
 
 
 async def test_titles_from_an_event_become_the_state_of_the_next_page(db, page, monkeypatch):
@@ -171,7 +242,7 @@ async def test_titles_from_an_event_become_the_state_of_the_next_page(db, page, 
     await roll(FakeBot(), 'gop')
     async with TestClient(TestServer(_app())) as client:
         state = await (await client.get('/roll/state')).json()
-    assert state['titles']['worst'] == {'nick': 'gop', 'value': 7}
+    assert state['titles'] == {'best': {'nick': 'gop', 'value': 7}, 'worst': None}
     # The page reloaded right after a move keeps the rest of the titles' hold
     assert state['quiet'] == 0
 

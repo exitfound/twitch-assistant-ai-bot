@@ -40,6 +40,8 @@ MAX_PEOPLE = 4
 # A Twitch login: 4–25 Latin letters, digits and underscores, standing as a whole word.
 # Russian words are never logins, so they are not looked up
 _NICK = re.compile(r'(?<!\w)[a-z0-9_]{4,25}(?!\w)', re.IGNORECASE)
+# The last rung: the thread and the question, no memory
+CHAT_ONLY = 'только чат'
 
 
 @dataclass
@@ -63,24 +65,25 @@ def is_stream_session(session_id: str) -> bool:
     return len(session_id) > 10
 
 
-async def _people(user: str, prompt: str) -> list[str]:
+async def _people(user: str, prompt: str, picked: list[storage.Fact] | None = None) -> list[str]:
     """Dossiers of the asker and of the chatters named in the question. The cap counts
     dossiers, not words: «dota» and «pubg» are looked up and take no place."""
     named = [clean_nick(w) for w in _NICK.findall(prompt)]
     return await dossier.people([user, *named], prompt, Context.DOSSIER_FACTS, Context.DOSSIER_FACTS // 2,
-                                limit=MAX_PEOPLE)
+                                limit=MAX_PEOPLE, picked=picked)
 
 
-async def ladder(q: Question) -> list[Rung]:
+async def ladder(q: Question, picked: list[storage.Fact] | None = None) -> list[Rung]:
     """(rung name, prompt), richest first; each next one is what to send when the
-    previous was blocked. Identical rungs are dropped."""
+    previous was blocked. Identical rungs are dropped. `picked` collects the dossier
+    facts of every rung but the last."""
     stream = q.stream if q.stream is not None else is_stream_session(q.session_id)
     thread, facts, found, language, people, chronicle = await asyncio.gather(
         get_recent_chat(q.session_id, Context.CHAT_MESSAGES, q.before_id),
         get_relevant_facts(q.user, q.prompt),
         search_context(q.prompt, Context.SEARCH_RESULTS),
         get_random_knowledge(Context.KNOWLEDGE_RANDOM),
-        _people(q.user, q.prompt),
+        _people(q.user, q.prompt, picked),
         # Offline the previous stream is simply the latest one
         storage.chronicle_before(q.session_id if stream else None),
     )
@@ -106,10 +109,16 @@ async def ladder(q: Question) -> list[Rung]:
     return unique_rungs([
         ('всё', build()),
         ('без поиска и языка', build(extras=False)),
-        ('только чат', build(memory=False, extras=False)),
+        (CHAT_ONLY, build(memory=False, extras=False)),
     ])
 
 
-async def answer(q: Question, config: types.GenerateContentConfig) -> tuple[str | None, str]:
-    """The answer and the rung that gave it."""
-    return await walk(await ladder(q), config, q.user)
+async def answer(q: Question, config: types.GenerateContentConfig,
+                 shown: list[storage.Fact] | None = None) -> tuple[str | None, str]:
+    """The answer and the rung that gave it. `shown` gets the dossier facts the answering
+    rung carried, for fact_rest.answered()."""
+    picked: list[storage.Fact] = []
+    text, rung = await walk(await ladder(q, picked), config, q.user)
+    if shown is not None and text and rung != CHAT_ONLY:
+        shown.extend(picked)
+    return text, rung

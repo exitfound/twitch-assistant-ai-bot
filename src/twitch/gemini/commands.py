@@ -9,7 +9,7 @@ from src.core.database import get_last_tagged_interaction
 from src.twitch.core.limits import PerStreamLimit
 from src.core.utils import clean_nick
 from src.twitch.core.replies import reply, reply_to_bot
-from src.gemini import pulse, summary, who
+from src.gemini import fact_rest, pulse, summary, who
 from src.gemini.answer_context import Question, answer
 from src.gemini.client import generate, make_gen_config
 from src.gemini.ladder import walk
@@ -40,13 +40,16 @@ async def handle_default(ctx: CommandContext) -> None:
         session_id=ctx.session_id, user=ctx.user, prompt=ctx.prompt,
         replied=reply_to_bot(ctx.message, ctx.bot.bot_id), pulse=pulse.current(ctx.session_id),
     )
+    shown = []
     try:
-        text, _ = await answer(question, make_gen_config())
+        text, _ = await answer(question, make_gen_config(), shown)
     except Exception:
         logger.exception('Gemini: ошибка генерации для %s', ctx.user)
         await reply(ctx.message, Content.text('gen_error', user=ctx.user))
         return
-    if not await respond_and_save(ctx, text, ctx.prompt):
+    if await respond_and_save(ctx, text, ctx.prompt):
+        fact_rest.answered(text, shown)
+    else:
         logger.warning('Ответ не отправлен для %s, запрос: %s', ctx.user, ctx.prompt[:100])
         await reply(ctx.message, Content.text('no_answer', user=ctx.user))
 

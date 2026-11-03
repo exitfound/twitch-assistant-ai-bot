@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
+from aiohttp.test_utils import TestClient, TestServer
 import twitchio
 
 from fakes import FakeBot
@@ -349,13 +350,20 @@ async def test_a_failed_reward_start_is_retried_until_it_works(live_bot, monkeyp
         live_bot._rewards.active = True
         started.set()
     monkeypatch.setattr(live_bot._rewards, 'start', start)
+    granted = asyncio.Event()
+    perks = AsyncMock(side_effect=lambda *args: granted.set())
+    monkeypatch.setattr(bot_module.perks, 'on_stream_start', perks)
 
     await live_bot._start_rewards()
     assert not live_bot._rewards.active
     async with asyncio.timeout(2):
         await started.wait()
+        await granted.wait()
+    await asyncio.sleep(0)
     assert not live_bot._tasks.running('rewards_retry')
     live_bot.send_chat_message.assert_not_awaited()
+    # Mid-stream the champion's Благодать, held back while the rewards were down, comes now
+    perks.assert_awaited_once_with(live_bot, live_bot.session_id)
 
 
 async def test_a_dead_token_at_start_is_not_retried(live_bot, monkeypatch):
@@ -450,6 +458,7 @@ def lifecycle(live_bot, monkeypatch):
     monkeypatch.setattr(live_bot._rewards, 'set_open', record('rewards.set_open'))
     monkeypatch.setattr(live_bot._rewards, 'stop', record('rewards.stop'))
     monkeypatch.setattr(bot_module.perks, 'on_stream_start', record('perks'))
+    monkeypatch.setattr(bot_module.roll_announce, 'on_stream_start', record('curses.drop'))
     monkeypatch.setattr(live_bot, 'stop_background_tasks', record('tasks.stop'))
     monkeypatch.setattr(bot_module.commands.Bot, 'close', record('twitchio.close'))
     return live_bot, calls
@@ -476,6 +485,7 @@ async def test_a_stream_start_opens_the_rewards_and_hands_out_perks(lifecycle):
     assert ('stream.online', 's1', 1000.0) in calls
     assert ('rewards.set_open', True) in calls
     assert ('perks', bot, bot.session_id) in calls
+    assert ('curses.drop', bot.session_id) in calls
 
 
 @pytest.mark.parametrize(('kind', 'started'), [('live', True), ('rerun', False), ('premiere', False)])
@@ -511,3 +521,43 @@ def test_the_follow_gate_gets_what_it_needs():
     needed = {'channel_id', 'bot_id', 'create_partialuser'}
     assert [m for m in needed if not hasattr(FakeBot(), m)] == []
     assert [m for m in needed if not hasattr(bot_module.Bot, m)] == []
+
+
+async def test_the_chat_list_leaves_out_the_bot_and_a_failure_gives_none(monkeypatch, caplog):
+    bot = bot_module.Bot()
+    bot._channel_id = '2000'
+
+    async def users():
+        for user_id, login in (('1', 'Gop'), (str(bot.bot_id), 'sosuryan_bot'), ('3', 'lurker')):
+            yield SimpleNamespace(id=user_id, name=login)
+
+    async def fetch_chatters(*, moderator, first):
+        assert moderator == str(bot.bot_id)
+        return SimpleNamespace(users=users())
+    monkeypatch.setattr(bot, 'create_partialuser', lambda user_id: SimpleNamespace(fetch_chatters=fetch_chatters))
+    assert await bot.fetch_chatters() == {'gop', 'lurker'}
+
+    async def refused(*, moderator, first):
+        raise twitchio.HTTPException('x', status=403, extra={'message': 'Forbidden'})
+    monkeypatch.setattr(bot, 'create_partialuser', lambda user_id: SimpleNamespace(fetch_chatters=refused))
+    with caplog.at_level(logging.WARNING):
+        assert await bot.fetch_chatters() is None
+    assert 'moderator:read:chatters' in caplog.text
+
+
+async def test_the_short_login_links_reach_twitch_with_the_full_scopes():
+    """A terminal wraps the full /oauth link and a copy loses the scopes after the break."""
+    bot = bot_module.Bot()
+    client = TestClient(TestServer(bot._adapter))
+    await client.start_server()
+    try:
+        for path, scope in ((tokens.BOT_LOGIN, 'moderator:read:chatters'),
+                            (tokens.CHANNEL_LOGIN, 'channel:manage:redemptions')):
+            short = await client.get(path, allow_redirects=False)
+            assert short.status == 302
+            # twitchio's own /oauth then sends the browser to Twitch with every scope
+            full = await client.get(short.headers['Location'], allow_redirects=False)
+            assert full.headers['Location'].startswith('https://id.twitch.tv/oauth2/authorize')
+            assert scope in full.headers['Location'] and 'force_verify=true' in full.headers['Location']
+    finally:
+        await client.close()

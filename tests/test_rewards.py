@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 import twitchio
 
+from src.core.utils import safe_format
 from src.twitch.local.roll import game, rewards
 from src.twitch.local.roll.rewards import CANCELED, FULFILLED, RewardService
 from src.twitch.local.roll.storage import get_reward_ids, save_action
@@ -20,6 +21,7 @@ class FakeBroadcaster:
         self.created: list[str] = []
         self.broken: dict[str, Exception] = {}     # reward id → what pausing it raises
         self.unfulfilled: dict[str, list] = {}     # reward id → its UNFULFILLED redemptions
+        self.rewards: dict[str, SimpleNamespace] = {}  # reward id → the reward as Twitch holds it
 
     async def fetch_custom_rewards(self, *, ids=None, manageable=True):
         if ids is None:
@@ -36,10 +38,15 @@ class FakeBroadcaster:
             return pages()
         return fetch
 
-    async def create_custom_reward(self, title, cost, **kwargs):
+    async def create_custom_reward(self, title, cost, *, prompt=None, max_per_user=None):
         await asyncio.sleep(0)      # a real request: another start() may run meanwhile
         self.created.append(title)
-        return SimpleNamespace(id=f'id-{title}')
+        # As twitchio does: a description makes the reward ask for text
+        self.rewards[f'id-{title}'] = SimpleNamespace(
+            id=f'id-{title}', title=title, cost=cost, prompt=prompt or '', input_required=prompt is not None,
+            max_per_user_stream=SimpleNamespace(enabled=bool(max_per_user), value=max_per_user or 0), enabled=True,
+        )
+        return self.rewards[f'id-{title}']
 
     async def update_custom_reward(self, reward_id, **changes):
         if 'paused' in changes:
@@ -48,7 +55,11 @@ class FakeBroadcaster:
             if reward_id in self.broken:
                 raise self.broken[reward_id]
             self.paused.append(changes['paused'])
-        return SimpleNamespace(id=reward_id)
+            return SimpleNamespace(id=reward_id)
+        reward = self.rewards[reward_id]
+        for field, value in changes.items():
+            setattr(reward, field, value)
+        return reward
 
 
 @pytest.fixture
@@ -66,7 +77,7 @@ async def test_start_creates_the_rewards_and_opens_them_live(db, twitch):
     service, _, broadcaster = twitch
     await service.start('chan', open_=True)
     assert service.active
-    assert len(await get_reward_ids()) == 5
+    assert len(await get_reward_ids()) == len(rewards._specs()) == 6
     assert set(broadcaster.paused) == {False}
 
 
@@ -106,12 +117,22 @@ async def test_resubscribe_settles_what_was_redeemed_while_deaf(db, twitch):
     assert broadcaster.settle_asked
 
 
+async def test_a_new_reward_without_a_nick_does_not_ask_for_text(db, twitch):
+    """twitchio creates every reward with a description as one that asks for text: the
+    rewards that take no nick are switched back at once, not on the next start."""
+    service, _, broadcaster = twitch
+    await service.start('chan', open_=True)
+    asks = {action: broadcaster.rewards[reward_id].input_required for reward_id, action in service._actions.items()}
+    assert asks == {spec.action: spec.input_required for spec in rewards._specs()}
+    assert asks[game.Action.FLASK] is False
+
+
 async def test_two_starts_at_once_create_each_reward_once(db, twitch):
     """event_ready, a new login and the retry may all call start(): each would find the
     rewards missing and create them again."""
     service, _, broadcaster = twitch
     await asyncio.gather(service.start('chan', open_=True), service.start('chan', open_=True))
-    assert len(broadcaster.created) == 5
+    assert len(broadcaster.created) == len(rewards._specs())
 
 
 def _not_found() -> twitchio.HTTPException:
@@ -128,7 +149,7 @@ async def test_one_broken_reward_does_not_stop_the_pause_of_the_rest(db, twitch)
     broadcaster.paused.clear()
 
     assert not await service._set_paused(True)
-    assert broadcaster.paused == [True] * 3
+    assert broadcaster.paused == [True] * (len(rewards._specs()) - 2)
     # The deleted one is forgotten until the next start; the one that failed is kept
     assert first not in service._actions
     assert second in service._actions
@@ -214,3 +235,15 @@ async def test_stale_redemptions_are_settled_by_the_journal(db, twitch):
     await service.start('chan', open_=True)
 
     assert _statuses(bot) == {'applied': FULFILLED, 'refused': CANCELED, 'unseen': CANCELED}
+
+
+def test_every_placeholder_the_notes_promise_reaches_the_descriptions(monkeypatch):
+    """CONTENT.md lists what a reward description may use; one the code does not pass
+    would send the raw template to Twitch."""
+    promised = ('{ceiling} {step} {floor} {hold} {protect} {shield} {cleanse_protect} {flask} '
+                '{luck_from} {luck_step} {luck_top} {choke_step} {agony_from} {agony_top} {agony_curse} '
+                '{agony_throw_top} {bless_from} {throws} {pause} '
+                '{window} {follower} {vip} {mod} {sub} {max}')
+    monkeypatch.setattr(rewards.Content, 'text', lambda key, **values: safe_format(promised, **values))
+    for spec in rewards._specs():
+        assert '{' not in spec.prompt, spec.action

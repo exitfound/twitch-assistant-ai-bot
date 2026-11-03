@@ -26,7 +26,7 @@ from src.twitch.core.followers import FollowerCache
 from src.twitch.local.roll import game
 from src.twitch.local.roll.redemption import handle_redemption
 from src.twitch.local.roll.storage import get_action_status, get_reward_ids, save_reward_id
-from src.twitch.local.roll.texts import curse_values, reward_title
+from src.twitch.local.roll.texts import curse_values, luck_values, mass_values, reward_title
 
 logger = logging.getLogger(__name__)
 
@@ -60,10 +60,11 @@ class RewardSpec:
         return Content.text(
             f'reward_{self.action}_prompt', ceiling=Rewards.CURSE_CEILING,
             protect=Rewards.REROLL_PROTECT_MINUTES, cleanse_protect=Rewards.CLEANSE_PROTECT_MINUTES,
-            shield=Rewards.SHIELD_MINUTES, throws=Roll.BURST_THROWS, pause=Roll.BURST_PAUSE_MINUTES,
+            shield=Rewards.SHIELD_MINUTES, flask=Rewards.FLASK_MINUTES, choke_step=Rewards.CHOKE_STEP,
+            throws=Roll.BURST_THROWS, pause=Roll.BURST_PAUSE_MINUTES,
             window=Rewards.REROLL_WINDOW_MINUTES, follower=Rewards.LIMIT_FOLLOWER,
-            vip=Rewards.LIMIT_VIP, sub=Rewards.LIMIT_SUB,
-            max=Roll.MAX, **curse_values(),
+            vip=Rewards.LIMIT_VIP, mod=Rewards.LIMIT_MOD, sub=Rewards.LIMIT_SUB,
+            max=Roll.MAX, **curse_values(), **luck_values(), **mass_values(),
         )[:PROMPT_MAX]
 
 
@@ -74,6 +75,7 @@ def _specs() -> list[RewardSpec]:
         RewardSpec(game.Action.CURSE, Rewards.COST_CURSE, True, Rewards.CURSE_MAX_PER_USER),
         RewardSpec(game.Action.SHIELD, Rewards.COST_SHIELD, False, Rewards.SHIELD_MAX_PER_USER),
         RewardSpec(game.Action.CLEANSE, Rewards.COST_CLEANSE, True, Rewards.CLEANSE_MAX_PER_USER),
+        RewardSpec(game.Action.FLASK, Rewards.COST_FLASK, False, Rewards.FLASK_MAX_PER_USER),
     ]
 
 
@@ -222,11 +224,12 @@ class RewardService:
                     max_per_user=spec.max_per_user or None,
                 )
                 logger.info('Создана награда «%s» за %d баллов', spec.title, spec.cost)
-            else:
-                changes = _changes(reward, spec)
-                if changes:
-                    reward = await broadcaster.update_custom_reward(reward.id, **changes)
-                    logger.info('Награда «%s» обновлена: %s', spec.title, ', '.join(changes))
+            # A new reward is checked too: twitchio creates any reward with a description as
+            # one that asks for text, and a reward that takes no nick must not ask for it
+            changes = _changes(reward, spec)
+            if changes:
+                reward = await broadcaster.update_custom_reward(reward.id, **changes)
+                logger.info('Награда «%s» обновлена: %s', spec.title, ', '.join(changes))
             await save_reward_id(spec.action, reward.id)
             actions[reward.id] = spec.action
         self._actions = actions

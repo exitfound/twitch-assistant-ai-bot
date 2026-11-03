@@ -1,4 +1,4 @@
-"""Background announcement of the game: a curse lift.
+"""The end of a curse: the background announcement of a lift, the cleanup at a stream's start.
 
 There is no periodic «кто залупа стрима» summary: every !roll and reward outcome
 already names the loser (залупа) and the champion (китежанин).
@@ -23,8 +23,8 @@ async def curse_lift_loop(bot: BotPort) -> None:
     """Tells chat when a player's curse has lifted.
 
     A curse lifts once the ceiling has sat on the floor for REWARD_CURSE_HOLD_MINUTES.
-    A curse that never reaches the floor lives until the session ends and leaves
-    silently with it – nothing to announce, a new session starts without curses anyway.
+    A curse that never reaches the floor lives until the session ends; on_stream_start()
+    of the next stream clears it silently.
     """
     try:
         while True:
@@ -37,6 +37,16 @@ async def curse_lift_loop(bot: BotPort) -> None:
         raise
     finally:
         logger.info('Цикл снятия проклятий остановлен')
+
+
+async def on_stream_start(session_id: str) -> None:
+    """The stream is live: the curses of finished streams go, without a word. Never raises."""
+    try:
+        cleared = await game.drop_finished_curses(session_id)
+        if cleared:
+            logger.info('Сняты проклятия прошлых эфиров: %d', cleared)
+    except Exception:
+        logger.exception('Проклятия прошлых эфиров не сняты')
 
 
 async def _announce_curse_lifts(bot: BotPort) -> None:

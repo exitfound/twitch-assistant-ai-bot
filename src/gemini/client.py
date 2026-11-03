@@ -37,7 +37,7 @@ SAFETY_CHECK = [
 _client: genai.Client | None = None
 _semaphore = asyncio.Semaphore(Gemini.CONCURRENCY)
 
-# Background requests (memory, pulse) take at most this many of the GEMINI_CONCURRENCY
+# Background requests (memory, pulse, the fact check) take at most this many of the GEMINI_CONCURRENCY
 # slots together: a split chronicle fans out into many requests, and viewers of a live
 # stream keep the rest. The CLI backfill lifts it (use_all_slots)
 BACKGROUND_CONCURRENCY = 2

@@ -42,15 +42,21 @@ async def test_schema_has_every_table(db):
 
 
 async def test_an_old_game_table_is_brought_up_to_date(monkeypatch, tmp_path):
-    """init_db() runs against the live database: rolls from before the status column and
-    no roll_throws table gain both, twice over without harm, and the old rows keep their
-    place. An old rolled_at, to the second, still loses a tie to a newer one with milliseconds."""
+    """init_db() runs against the live database: rolls from before the status column, a journal
+    from before the flask column and no roll_throws table gain them, twice over without harm,
+    and the old rows keep their place. An old rolled_at, to the second, still loses a tie to a
+    newer one with milliseconds."""
     path = tmp_path / 'old.db'
     old = sqlite3.connect(path)
     old.execute('CREATE TABLE rolls (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,'
                 ' username TEXT NOT NULL, roll_value INTEGER NOT NULL,'
                 ' rolled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, UNIQUE(session_id, username))')
     old.execute("INSERT INTO rolls (session_id, username, roll_value) VALUES ('s', 'old', 42)")
+    old.execute('CREATE TABLE roll_actions (id INTEGER PRIMARY KEY AUTOINCREMENT,'
+                ' redemption_id TEXT NOT NULL UNIQUE, session_id TEXT NOT NULL, action TEXT NOT NULL,'
+                " actor TEXT NOT NULL, user_input TEXT NOT NULL DEFAULT '',"
+                ' target TEXT, old_value INTEGER, new_value INTEGER, status TEXT NOT NULL,'
+                ' created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
     old.commit()
     old.close()
     monkeypatch.setattr(connection, 'DB_PATH', path)
@@ -61,6 +67,8 @@ async def test_an_old_game_table_is_brought_up_to_date(monkeypatch, tmp_path):
         async with db.execute('PRAGMA table_info(rolls)') as cursor:
             columns = {row[1] for row in await cursor.fetchall()}
         assert {'free_throws', 'free_limit', 'tier', 'curse_ceiling'} <= columns
+        async with db.execute('PRAGMA table_info(roll_actions)') as cursor:
+            assert {'flask', 'acted_at', 'actor_extra'} <= {row[1] for row in await cursor.fetchall()}
         assert {'roll_throws', 'idx_roll_throws_user'} <= await _tables(db)
         assert await get_session_loser('s') == ('old', 42)
         await save_roll('s', 'new', 42, free_throw=True)

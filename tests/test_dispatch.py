@@ -13,6 +13,7 @@ from src.core.database import count_bot_uses, record_bot_use
 from src.twitch.gemini.commands import handle_who
 from src.twitch.local.channel import handle_help_channel
 from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
+from src.twitch.local.roll.board import handle_rollboard
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
 
 
@@ -60,12 +61,12 @@ async def test_per_stream_commands_are_open_to_a_follower(db, monkeypatch, text)
 
 @pytest.fixture
 def gated(monkeypatch):
-    """A component with the follow requirement on and !stat's handler replaced by a mock."""
+    """A component with the follow requirement on and !rollstat's handler replaced by a mock."""
     monkeypatch.setattr(Follow, 'REQUIRED', True)
     bot = FakeBot()
     component = ChatComponent(bot)
     handler = AsyncMock()
-    monkeypatch.setattr(component._registry.resolve('!stat'), 'handler', handler)
+    monkeypatch.setattr(component._registry.resolve('!rollstat'), 'handler', handler)
     return component, bot, handler
 
 
@@ -74,7 +75,7 @@ async def test_a_viewer_who_does_not_follow_is_refused_once(db, gated):
     into refusal spam."""
     component, bot, handler = gated
     bot.follows = False
-    first, second = make_message('!stat', make_chatter('gop')), make_message('!stat', make_chatter('gop'))
+    first, second = make_message('!rollstat', make_chatter('gop')), make_message('!rollstat', make_chatter('gop'))
     await component.event_message(first)
     await component.event_message(second)
     handler.assert_not_awaited()
@@ -84,10 +85,10 @@ async def test_a_viewer_who_does_not_follow_is_refused_once(db, gated):
 
 async def test_a_follower_passes_and_is_cached(db, gated):
     component, bot, handler = gated
-    await component.event_message(make_message('!stat', make_chatter('gop')))
+    await component.event_message(make_message('!rollstat', make_chatter('gop')))
     handler.assert_awaited_once()
     # The check comes before the cooldown, so a repeat within it still asks the cache
-    await component.event_message(make_message('!stat', make_chatter('gop')))
+    await component.event_message(make_message('!rollstat', make_chatter('gop')))
     assert bot.follow_checks == 1
 
 
@@ -95,10 +96,10 @@ async def test_a_new_follow_is_not_held_back_by_the_cache(db, gated):
     """A viewer refused a minute ago follows: event_follow drops the cached «no»."""
     component, bot, handler = gated
     bot.follows = False
-    await component.event_message(make_message('!stat', make_chatter('gop')))
+    await component.event_message(make_message('!rollstat', make_chatter('gop')))
     bot.follows = True
     component._followers.forget('id-gop')
-    await component.event_message(make_message('!stat', make_chatter('gop')))
+    await component.event_message(make_message('!rollstat', make_chatter('gop')))
     handler.assert_awaited_once()
 
 
@@ -106,20 +107,33 @@ async def test_a_helix_error_lets_the_viewer_in(db, gated):
     """A silent Twitch must not lock the chat out of the bot."""
     component, bot, handler = gated
     bot.follows = RuntimeError('helix down')
-    await component.event_message(make_message('!stat', make_chatter('gop')))
+    await component.event_message(make_message('!rollstat', make_chatter('gop')))
     handler.assert_awaited_once()
 
 
 async def test_badges_and_help_skip_the_follow_check(db, gated, monkeypatch):
     component, bot, handler = gated
     bot.follows = False
-    await component.event_message(make_message('!stat', make_chatter('vip', vip=True)))
+    await component.event_message(make_message('!rollstat', make_chatter('vip', vip=True)))
     handler.assert_awaited_once()
     help_handler = AsyncMock()
     monkeypatch.setattr(component._registry.resolve('!bot'), 'handler', help_handler)
     await component.event_message(make_message('!bot', make_chatter('gop')))
     help_handler.assert_awaited_once()
     assert bot.follow_checks == 0
+
+
+async def test_stat_is_the_broadcasters_and_silent_for_anyone_else(db, monkeypatch):
+    component = ChatComponent(FakeBot())
+    handler = AsyncMock()
+    monkeypatch.setattr(component._registry.resolve('!stat'), 'handler', handler)
+    for chatter in (make_chatter('gop'), make_chatter('mod', moderator=True), make_chatter('sub', subscriber=True)):
+        message = make_message('!stat', chatter)
+        await component.event_message(message)
+        message.respond.assert_not_awaited()
+    handler.assert_not_awaited()
+    await component.event_message(make_message('!stat gop', make_chatter('streamer', broadcaster=True)))
+    handler.assert_awaited_once()
 
 
 @pytest.mark.parametrize(('text', 'handler'), [
@@ -129,10 +143,13 @@ async def test_badges_and_help_skip_the_follow_check(db, gated, monkeypatch):
     ('!stat', handle_stats),
     ('!stat nick', handle_stats),
     ('!rollstat', handle_rollstat),
+    ('!rollboard', handle_rollboard),
+    ('!rollboard 5', handle_rollboard),
     ('!roll', handle_roll),
     ('!roll 5', handle_roll),
     ('!roll: @nick', handle_roll),
-    ('!rollstat 5', None),
+    ('!rollstat 5', handle_rollstat),
+    ('!rollstats', None),
     ('!who nick', handle_who),
 ])
 def test_registry_resolves_the_real_commands(component, text, handler):
@@ -261,6 +278,20 @@ async def test_roll_with_anything_after_it_is_refused_without_a_throw(db, monkey
 
     throw.assert_not_awaited()
     message.respond.assert_awaited_once_with('texts.roll_bad_input')
+    assert bot.cooldown_remaining('viewer', Kind.LOCAL) == 0
+
+
+async def test_rollstat_with_anything_after_it_is_refused_without_a_status(db, monkeypatch):
+    monkeypatch.setattr(Follow, 'REQUIRED', False)
+    bot = FakeBot()
+    status = AsyncMock()
+    monkeypatch.setattr('src.twitch.local.roll.game.status', status)
+
+    message = make_message('!rollstat два слова')
+    await ChatComponent(bot).event_message(message)
+
+    status.assert_not_awaited()
+    message.respond.assert_awaited_once_with('texts.rollstat_bad_input')
     assert bot.cooldown_remaining('viewer', Kind.LOCAL) == 0
 
 

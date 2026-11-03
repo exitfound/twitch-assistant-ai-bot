@@ -4,6 +4,7 @@ from pathlib import Path
 
 import aiohttp
 import twitchio
+from aiohttp import web
 from twitchio.ext import commands
 
 from src.twitch.core.chat_socket import stored_token
@@ -12,17 +13,49 @@ from src.core.config import Twitch
 logger = logging.getLogger(__name__)
 
 OAUTH_SCOPES = 'user:read:chat+user:write:chat+user:bot+clips:edit'
-OAUTH_SCOPES_FOLLOWS = f'{OAUTH_SCOPES}+moderator:read:followers'
+# What the bot reads as the channel's moderator: followers for the follow gate, the chat list
+# for the mass flasks. A login link always asks for all of it
+OAUTH_SCOPES_FULL = f'{OAUTH_SCOPES}+moderator:read:followers+moderator:read:chatters'
+
+# Short login links on twitchio's OAuth server: the full /oauth link is long enough for a
+# terminal to wrap it, and a copy then loses the scopes after the break
+LOGIN_HOST = 'http://localhost:4343'
+BOT_LOGIN = '/bot'
+CHANNEL_LOGIN = '/channel'
 
 # Where twitchio keeps the tokens: the name it uses by default, next to the working
 # directory. In the container that is the /data volume
 TOKENS_FILE = '.tio.tokens.json'
 
 
-def oauth_link(scopes: str) -> str:
-    """The login link twitchio's OAuth adapter serves, plus how to reach it from a container."""
-    return (f'http://localhost:4343/oauth?scopes={scopes}&force_verify=true\n'
-            '(в контейнере ссылка не откроется – запусти make oauth на хосте)')
+def oauth_path(scopes: str) -> str:
+    """twitchio's own login route with these scopes, always asking which account logs in."""
+    return f'/oauth?scopes={scopes}&force_verify=true'
+
+
+def add_login_routes(adapter: object, channel_scopes: str) -> None:
+    """BOT_LOGIN and CHANNEL_LOGIN on twitchio's OAuth server: redirects to its /oauth with the
+    bot's every scope or the channel's. Skipped on an adapter that is not an aiohttp app."""
+    router = getattr(adapter, 'router', None)
+    if router is None:
+        return
+    for path, scopes in ((BOT_LOGIN, OAUTH_SCOPES_FULL), (CHANNEL_LOGIN, channel_scopes)):
+        target = oauth_path(scopes)
+
+        async def login(request: web.Request, target: str = target) -> web.Response:
+            raise web.HTTPFound(target)
+        router.add_get(path, login)
+
+
+def oauth_link(path: str) -> str:
+    """A short login link plus how to reach it from a container, for the log."""
+    return f'{LOGIN_HOST}{path}\n(в контейнере ссылка не откроется – запусти make oauth на хосте)'
+
+
+def print_login_links() -> None:
+    """Both short login links, for `make oauth`."""
+    print(f'Вход под аккаунтом бота: {LOGIN_HOST}{BOT_LOGIN}')
+    print(f'Вход под аккаунтом канала (награды за баллы): {LOGIN_HOST}{CHANNEL_LOGIN}')
 
 
 def token_problem(error: Exception) -> bool:

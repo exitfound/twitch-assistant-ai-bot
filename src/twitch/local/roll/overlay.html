@@ -12,8 +12,15 @@
     scale=0.8              размер оверлея от обычного (0.3–3), рисуется заново, а не растягивается
     titles=5               титулы гаснут через столько минут после последнего хода игры и возвращаются
                            с новым; 0 – видны всегда
+    board=10               сколько секунд плашка !rollboard («Китежанин месяца») стоит напротив титулов
     nicks=0                ники заменяются на «Игрок 1, 2…»
-    demo=1                 страница сама играет – проверить вид без эфира и без бота
+    regalia=0              без полосы под титулами: победители прошлого месяца, шкала и лидер этого
+    demo=1                 страница сама играет – проверить вид без эфира и без бота; встроенную в другую
+                           страницу ведут сообщения postMessage: {make: 'curse'}, {auto: false}, {live: false}
+    demo=mass              то же, но по кругу АГОНИЯ ЧЕРНОМИРЬЯ и БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА с бросками между ними
+    demo=board             то же, но по кругу плашка «Китежанин месяца» – то за этот месяц, то итоги прошлого
+                           с победителем жребия – и броски под ней
+    fx=0                   без эффекта массовых фласок во весь кадр, только карточка
     server=http://host:8787  адрес бота, если страница открыта как локальный файл
   Тексты карточек – в TEXT ниже. Подробно – BOT.md, «Оверлей игры в OBS».
 -->
@@ -31,14 +38,18 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .stage {
   position: fixed; top: 0; bottom: 0; left: 0; width: calc(100% * var(--scale, 1)); container-type: inline-size;
   /* Dusky lavender with one tone per spell: bright lavender Roll, turquoise reroll, dark violet curse,
-     blue shield, light gold for everything holy; the titles are burgundy and dark blue */
+     blue shield, light gold for everything holy, bright yellow flasks, blood red АГОНИЯ ЧЕРНОМИРЬЯ and lake
+     azure БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА; the titles are burgundy and dark blue */
   --o-bg: rgba(36, 30, 56, .88); --o-fg: #f7f4ff; --o-muted: #c2b8dc; --o-line: #a493d9;
   --o-accent: #b9a0ff; --o-reroll: #3fd9c8; --o-curse: #9a63f5; --o-curse-bg: rgba(46, 20, 86, .92);
-  --o-shield: #5c9dff; --o-light: #ffe0a0; --o-good: #e0587c; --o-bad: #5270e8;
+  --o-shield: #5c9dff; --o-light: #ffe0a0; --o-flask: #ffd43b; --o-good: #e0587c; --o-bad: #5270e8;
+  --o-agony: #f0434f; --o-agony-bg: rgba(48, 12, 20, .92); --o-svet: #8fdcff;
   --o-bad-ink: #8aa0ff; /* the dark blue frames the plate; numbers and the icon take a lighter blue to stay legible */
   --o-display: 'Ruslan Display', 'Golos Text', serif; --o-body: 'Golos Text', system-ui, sans-serif;
   --o-num: 'Unbounded', 'Golos Text', sans-serif;
   --o-radius: .5cqw; --o-border: .12cqw solid var(--o-line); --o-shadow: 0 .6cqw 2cqw #0009;
+  /* The gap between the frame's edge and the plates: the titles, the board and the feed share it */
+  --o-edge: calc(1.6cqw - 10px);
   color: var(--o-fg); font-family: var(--o-body);
 }
 .stage[data-layout="feed"] { left: auto; right: 0; }
@@ -59,10 +70,10 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .card .ico { width: 1.9cqw; height: 1.9cqw; color: var(--tone, var(--o-accent)); }
 .card .ico svg { width: 100%; height: 100%; display: block; }
 .card .body { min-width: 0; }
-.card .what { font: 1cqw/1.2 var(--o-display); letter-spacing: .02em; color: var(--o-muted);
+.card .what { font: 1.06cqw/1.2 var(--o-display); letter-spacing: 0; color: var(--o-muted);
   color: color-mix(in srgb, var(--tone, var(--o-accent)) 40%, var(--o-fg)); }
 /* «@actor → @target» with two long nicks takes a second line rather than losing the target */
-.card .who { font: 700 1.15cqw/1.2 var(--o-body); overflow: hidden; overflow-wrap: anywhere;
+.card .who { font: 700 1.05cqw/1.2 var(--o-body); overflow: hidden; overflow-wrap: anywhere;
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .card .sub { font: 500 .85cqw/1.35 var(--o-body); color: var(--o-muted); }
 .card .num { font: 900 1.7cqw/1 var(--o-num); font-variant-numeric: tabular-nums; text-align: right; min-width: 3.4cqw; }
@@ -77,6 +88,10 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .card.t-shield, .card.t-blocked { --tone: var(--o-shield); }
 .card.t-bless, .card.t-cleanse, .card.t-lift { --tone: var(--o-light); }
 .card.t-reroll { --tone: var(--o-reroll); }
+.card.t-flask, .card.by-flask, .card.lucky { --tone: var(--o-flask); }
+.card.t-flask.agony { --tone: var(--o-agony); background: var(--o-agony-bg); }
+.card.t-flask.svet { --tone: var(--o-svet); }
+.card.agonized { --tone: var(--o-agony); }
 /* The frame takes the card's tone; a browser without color-mix keeps the plain frame */
 .card { border-color: color-mix(in srgb, var(--tone, var(--o-accent)) 75%, transparent); }
 .card.t-curse::after, .card.t-sglaz::after { /* a chain sweeping across a fresh curse */
@@ -90,11 +105,76 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
   border-radius: 50%; border: .18cqw solid var(--tone); pointer-events: none; animation: bubble 1.2s ease-out both;
 }
 .card.t-blocked { animation: card-in .45s cubic-bezier(.2,.9,.3,1.2) both, shake .4s .45s ease-in-out; }
+/* The flask is drunk: the icon tips up and its potion drains, then the potion takes effect –
+   a yellow glow spreads from the icon over the card and bubbles rise through it */
+.card.t-flask .ico svg { transform-origin: 50% 80%; animation: sip 1.3s .15s ease-in-out both; }
+.card.t-flask .ico .liq { transform-box: fill-box; transform-origin: 50% 100%; animation: drain 1s .35s ease-in both; }
+.card.t-flask::after {
+  content: ''; position: absolute; inset: -30%; pointer-events: none; transform-origin: 20% 50%;
+  background: radial-gradient(circle at 20% 50%, rgba(255, 212, 59, .55) 0 10%, transparent 55%);
+  background: radial-gradient(circle at 20% 50%, color-mix(in srgb, var(--tone) 55%, transparent) 0 10%, transparent 55%);
+  animation: haze 1.4s 1.1s ease-out both;
+}
 .card.t-cleanse::after, .card.t-lift::after { /* the curse breaking */
   content: ''; position: absolute; inset: -20%; pointer-events: none;
   background: radial-gradient(circle at 12% 50%, rgba(255, 224, 160, .55) 0 8%, transparent 30%);
   background: radial-gradient(circle at 12% 50%, color-mix(in srgb, var(--o-light) 55%, transparent) 0 8%, transparent 30%);
   animation: burst 1s ease-out both;
+}
+/* A soft light in the move's colour, once as the card lands; a plain Roll stays plain. The chain,
+   the bubble and the burst live on ::after, so this one takes ::before */
+.card.t-extra::before, .card.t-title::before, .card.t-reroll::before, .card.t-curse::before, .card.t-sglaz::before,
+.card.t-shield::before, .card.t-blocked::before, .card.t-bless::before, .card.t-flask::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+}
+.card.t-extra::before, .card.t-title::before { /* a glint crossing the card, a coin catching the light */
+  background: linear-gradient(105deg, transparent 35%, rgba(185, 160, 255, .35) 50%, transparent 65%);
+  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--o-accent) 35%, transparent) 50%, transparent 65%);
+  animation: glint 1.1s .15s ease-out both;
+}
+.card.t-reroll::before { /* the roll changing hands: a glow flies from the icon to the number */
+  right: auto; width: 35%;
+  background: radial-gradient(ellipse at center, rgba(63, 217, 200, .45), transparent 70%);
+  background: radial-gradient(ellipse at center, color-mix(in srgb, var(--o-reroll) 45%, transparent), transparent 70%);
+  animation: swap 1.1s .1s ease-in-out both;
+}
+.card.t-curse::before, .card.t-sglaz::before { /* a haze spreading from the icon under the chain */
+  inset: -30%; transform-origin: 20% 50%;
+  background: radial-gradient(circle at 20% 50%, rgba(154, 99, 245, .7) 0 12%, transparent 55%);
+  background: radial-gradient(circle at 20% 50%, color-mix(in srgb, var(--o-curse) 70%, transparent) 0 12%, transparent 55%);
+  animation: haze 1.6s ease-out both;
+}
+.card.t-shield::before { /* the shield going up: two waves from the icon */
+  transform-origin: 9% 50%;
+  background: radial-gradient(circle at 9% 50%, rgba(92, 157, 255, .6) 0 8%, transparent 38%);
+  background: radial-gradient(circle at 9% 50%, color-mix(in srgb, var(--o-shield) 60%, transparent) 0 8%, transparent 38%);
+  animation: waves 1.3s ease-out both;
+}
+.card.t-blocked::before { /* the hit against the shield, as the card shakes */
+  transform-origin: 92% 50%;
+  background: radial-gradient(circle at 92% 50%, rgba(92, 157, 255, .5) 0 5%, transparent 35%);
+  background: radial-gradient(circle at 92% 50%, color-mix(in srgb, var(--tone) 50%, transparent) 0 5%, transparent 35%);
+  animation: impact .7s .4s ease-out both;
+}
+.card.t-bless::before { /* warm light falling from above */
+  background: radial-gradient(ellipse 70% 140% at 12% -20%, rgba(255, 224, 160, .65), transparent 70%);
+  background: radial-gradient(ellipse 70% 140% at 12% -20%, color-mix(in srgb, var(--o-light) 65%, transparent), transparent 70%);
+  animation: halo 1.6s ease-out both;
+}
+.card.t-flask::before { /* bubbles rising through the potion */
+  --b: rgba(255, 212, 59, .75); --b: color-mix(in srgb, var(--tone) 75%, transparent);
+  background: radial-gradient(circle at 10% 85%, var(--b) 0 .22cqw, transparent .3cqw),
+              radial-gradient(circle at 28% 95%, var(--b) 0 .15cqw, transparent .22cqw),
+              radial-gradient(circle at 47% 80%, var(--b) 0 .25cqw, transparent .33cqw),
+              radial-gradient(circle at 66% 92%, var(--b) 0 .17cqw, transparent .24cqw),
+              radial-gradient(circle at 85% 86%, var(--b) 0 .21cqw, transparent .29cqw);
+  animation: brew 1.6s 1.2s ease-out both;
+}
+.card.lucky::before { /* a throw the luck flask lifted: a yellow glint crosses it */
+  content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 35%, rgba(255, 212, 59, .4) 50%, transparent 65%);
+  background: linear-gradient(105deg, transparent 35%, color-mix(in srgb, var(--o-flask) 40%, transparent) 50%, transparent 65%);
+  animation: glint 1.1s .15s ease-out both;
 }
 .bar { position: absolute; left: 0; right: 0; bottom: 0; height: .3cqw; background: rgba(154, 99, 245, .25); background: color-mix(in srgb, var(--o-curse) 25%, transparent); overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--o-curse); width: var(--from); animation: drop 1.1s .4s ease-in-out forwards; }
@@ -107,6 +187,16 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 @keyframes shake { 25% { transform: translateX(-.5cqw); } 50% { transform: translateX(.5cqw); } 75% { transform: translateX(-.3cqw); } }
 @keyframes burst { from { transform: scale(.4); opacity: 1; } to { transform: scale(1.6); opacity: 0; } }
 @keyframes drop { to { width: var(--to); } }
+@keyframes glint { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+@keyframes swap { from { transform: translateX(-20%); opacity: 0; } 25%, 75% { opacity: 1; } to { transform: translateX(240%); opacity: 0; } }
+@keyframes haze { from { transform: scale(.5); opacity: 0; } 30% { opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+@keyframes waves { 0% { transform: scale(.6); opacity: 0; } 20% { opacity: 1; } 45% { transform: scale(1); opacity: .3; }
+                   65% { opacity: .9; } 100% { transform: scale(1.3); opacity: 0; } }
+@keyframes impact { from { transform: scale(.6); opacity: 0; } 30% { opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
+@keyframes halo { from { transform: translateY(-30%); opacity: 0; } 35% { opacity: 1; } to { transform: translateY(10%); opacity: 0; } }
+@keyframes brew { from { transform: translateY(30%); opacity: 0; } 25% { opacity: 1; } to { transform: translateY(-75%); opacity: 0; } }
+@keyframes sip { 0% { transform: none; } 30%, 70% { transform: translateY(-12%) rotate(-38deg); } 100% { transform: none; } }
+@keyframes drain { to { transform: scaleY(.15); } }
 @keyframes flash { 0% { box-shadow: 0 0 0 0 var(--tone); } 100% { box-shadow: 0 0 0 1.2cqw transparent; } }
 
 /* ---------- titles ---------- */
@@ -126,16 +216,74 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
   background: linear-gradient(90deg, color-mix(in srgb, var(--tone) 22%, transparent), transparent 70%), var(--o-bg);
 }
 .title .ico { color: var(--ink, var(--tone)); }
-.title .lbl { font: 1cqw/1.2 var(--o-display); letter-spacing: .02em; color: var(--o-muted); color: color-mix(in srgb, var(--tone) 40%, var(--o-fg)); }
-.title .nick { font: 700 1.15cqw/1.2 var(--o-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.title .lbl { font: 1.06cqw/1.2 var(--o-display); letter-spacing: 0; color: var(--o-muted); color: color-mix(in srgb, var(--tone) 40%, var(--o-fg)); }
+.title .nick { font: 700 1.05cqw/1.2 var(--o-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .title .val { font: 900 1.7cqw/1 var(--o-num); font-variant-numeric: tabular-nums; }
 .title .val { color: var(--ink, var(--tone)); }
 .title.changed { animation: flash .9s ease-out; }
 
+/* ---------- regalia: the strip under the titles, it fades with them ---------- */
+/* The last month's first places, this month's days on a bar and its leader. Across both columns of hud */
+.regalia {
+  grid-column: 1 / -1; display: grid; gap: .3cqw; padding: .5cqw .9cqw .6cqw; min-width: 0;
+  background: var(--o-bg); border: var(--o-border); border-radius: var(--o-radius); box-shadow: var(--o-shadow);
+  font: 500 .85cqw/1.3 var(--o-body); color: var(--o-muted);
+}
+.regalia .r-row { display: grid; grid-template-columns: 1.2cqw 1fr; align-items: center; column-gap: .5cqw; min-width: 0; }
+.regalia .r-row.best { --tone: var(--o-good); }
+.regalia .r-row.worst { --tone: var(--o-bad); --ink: var(--o-bad-ink); }
+.regalia .r-row.lead, .regalia .r-month { --tone: var(--o-light); }
+.regalia .ico { width: 1.2cqw; height: 1.2cqw; color: var(--ink, var(--tone)); }
+.regalia .ico svg { width: 100%; height: 100%; display: block; }
+.regalia .r-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.regalia b { color: var(--o-fg); font-weight: 700; }
+.regalia .r-month { display: grid; grid-template-columns: 1.2cqw auto 1fr auto; align-items: center; column-gap: .5cqw; white-space: nowrap; }
+.regalia .r-month b { margin-right: .1cqw; }
+.regalia .r-bar { height: .35cqw; border-radius: .2cqw; background: rgba(255, 255, 255, .1); overflow: hidden; }
+.regalia .r-bar i { display: block; height: 100%; width: var(--p); background: linear-gradient(90deg, var(--o-line), var(--o-light)); }
+/* The last month's champion wears a crown next to the nick, on cards and title plates */
+.cr { color: var(--o-light); font: 400 1em/1 'Segoe UI Symbol', 'DejaVu Sans', sans-serif; margin-left: .25em; }
+
+/* ---------- the month's board: opposite the titles for a while after !rollboard ---------- */
+/* A stage of its own, anchored on the other edge: ?scale= draws each stage toward its own edge,
+   so the plate mirrors the titles at any scale. Only opacity and transform move */
+.stage.side[data-side="right"] { left: auto; right: 0; }
+.board {
+  position: absolute; top: var(--o-edge); right: var(--o-edge); width: 27.75cqw; display: grid; gap: .7cqw; padding: .8cqw 1cqw 1cqw;
+  background: var(--o-bg); color: var(--o-fg); border: var(--o-border); border-radius: var(--o-radius); box-shadow: var(--o-shadow);
+  opacity: 0; visibility: hidden; transform: translateX(1.5cqw);
+  transition: opacity .5s, transform .5s cubic-bezier(.2, .9, .3, 1), visibility 0s .5s;
+}
+.stage.side[data-side="left"] .board { right: auto; left: var(--o-edge); width: 26.25cqw; transform: translateX(-1.5cqw); }
+.stage.side .board.on { opacity: 1; visibility: visible; transform: none; transition: opacity .5s, transform .5s cubic-bezier(.2, .9, .3, 1); }
+.board .b-head { display: grid; gap: .15cqw; }
+.board .b-title { font: 1.3cqw/1.2 var(--o-display); color: var(--o-light); white-space: nowrap; }
+.board .b-sub { font: 500 .85cqw/1.2 var(--o-body); color: var(--o-muted); white-space: nowrap; }
+.board .b-part { display: grid; gap: .3cqw; }
+.board .b-part.best { --tone: var(--o-good); --row: rgba(224, 88, 124, .24); }
+.board .b-part.worst { --tone: var(--o-bad); --ink: var(--o-bad-ink); --row: rgba(82, 112, 232, .28); }
+.board .b-lbl { display: flex; align-items: center; gap: .5cqw; font: 1.02cqw/1.2 var(--o-display); color: var(--ink, var(--tone)); white-space: nowrap; }
+.board .b-lbl span:last-child::after { content: ':'; }
+.board .b-lbl .ico { width: 1.5cqw; height: 1.5cqw; flex: none; }
+.board .b-lbl .ico svg { width: 100%; height: 100%; display: block; }
+.board .b-row {
+  display: grid; grid-template-columns: 1.4cqw 1fr auto; align-items: center; column-gap: .6cqw;
+  padding: .3cqw .6cqw; border-radius: .35cqw; background: rgba(255, 255, 255, .04);
+}
+.board .b-row.first { background: linear-gradient(90deg, var(--row), transparent 75%), rgba(255, 255, 255, .04); }
+.board .b-place { font: 900 1cqw/1 var(--o-num); color: var(--o-muted); text-align: center; }
+.board .b-row.first .b-place { color: var(--ink, var(--tone)); }
+.board .b-nick { font: 700 1.05cqw/1.3 var(--o-body); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board .b-val { font: 900 1.3cqw/1 var(--o-num); font-variant-numeric: tabular-nums; color: var(--ink, var(--tone)); }
+.board .b-drawn { font: 500 .75cqw/1 var(--o-body); color: var(--o-muted); margin-left: .3cqw; }
+.board .b-row.none { grid-template-columns: 1fr; font: 500 .95cqw/1.3 var(--o-body); color: var(--o-muted); }
+.board.on .b-row { animation: row-in .45s cubic-bezier(.2, .9, .3, 1.1) both; }
+@keyframes row-in { from { opacity: 0; transform: translateX(1cqw); } to { opacity: 1; transform: none; } }
+
 /* ---------- layout: feed on the right ---------- */
 .overlay { position: absolute; inset: 0; pointer-events: none; }
-.overlay[data-layout="feed"] .titles { position: absolute; right: 1.6cqw; top: 1.6cqw; width: 25cqw; }
-.overlay[data-layout="feed"] .list { position: absolute; right: 1.6cqw; bottom: 1.6cqw; width: 25cqw; display: flex; flex-direction: column; gap: .7cqw; }
+.overlay[data-layout="feed"] .titles { position: absolute; right: var(--o-edge); top: var(--o-edge); width: 26.25cqw; }
+.overlay[data-layout="feed"] .list { position: absolute; right: var(--o-edge); bottom: var(--o-edge); width: 26.25cqw; display: flex; flex-direction: column; gap: .7cqw; }
 
 /* A card is three lines at most: with two lines of nicks or a hint that wraps, the hint gives
    way (fit()); a card without a number keeps an invisible one, so every card is one height */
@@ -147,8 +295,8 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 /* ---------- layout: titles in the top left corner, one event slot right under them ---------- */
 /* An empty titles plate keeps its place, so the slot never jumps when it appears; the outgoing
    and the incoming card share one grid cell and cross-fade */
-.overlay[data-layout="left"] { display: flex; flex-direction: column; align-items: flex-start; gap: 1.8cqw; padding: 1.6cqw; }
-.overlay[data-layout="left"] .titles, .overlay[data-layout="left"] .list { width: 26.5cqw; }
+.overlay[data-layout="left"] { display: flex; flex-direction: column; align-items: flex-start; gap: 1.8cqw; padding: var(--o-edge); }
+.overlay[data-layout="left"] .titles, .overlay[data-layout="left"] .list { width: 27.75cqw; }
 .overlay[data-layout="left"] .list { display: grid; }
 .overlay[data-layout="left"] .list .card { grid-area: 1 / 1; }
 /* Three lines tall whatever the card holds – heading, nick, hint – so a plain Roll is as high
@@ -161,32 +309,94 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .overlay[data-layout="card"] .list { position: absolute; left: 50%; top: 14%; width: 40cqw; transform: translateX(-50%); display: grid; }
 .overlay[data-layout="card"] .list .card { grid-area: 1 / 1; padding: 1.6cqw 2cqw; column-gap: 1.6cqw; }
 .overlay[data-layout="card"] .card .ico { width: 4.4cqw; height: 4.4cqw; }
-.overlay[data-layout="card"] .card .what { font-size: 1.1cqw; }
-.overlay[data-layout="card"] .card .who { font-size: 2.1cqw; }
+.overlay[data-layout="card"] .card .what { font-size: 1.17cqw; }
+.overlay[data-layout="card"] .card .who { font-size: 1.9cqw; }
 .overlay[data-layout="card"] .card .sub { font-size: 1.3cqw; }
 .overlay[data-layout="card"] .card .num { font-size: 5.6cqw; min-width: 8cqw; }
 
 /* ---------- layout: titles bar at the bottom + short lines ---------- */
-.overlay[data-layout="hud"] .titles { position: absolute; left: 22.4cqw; bottom: 1.6cqw; width: 46cqw; grid-template-columns: 1fr 1fr; }
-.overlay[data-layout="hud"] .list { position: absolute; left: 22.4cqw; bottom: 7.4cqw; width: 30cqw; display: flex; flex-direction: column; gap: .5cqw; }
+/* Each title as wide as in the feed (26.25cqw): a narrower one runs the label into a 100. A column
+   growing from the bottom: the strip under the titles lifts the lines with them instead of under them */
+.overlay[data-layout="hud"] { display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start;
+  gap: 2.3cqw; padding: 0 0 var(--o-edge) 22.4cqw; }
+.overlay[data-layout="hud"] .titles { width: 53cqw; grid-template-columns: 1fr 1fr; }
+.overlay[data-layout="hud"] .list { order: -1; width: 31.25cqw; display: flex; flex-direction: column; gap: .5cqw; }
 .overlay[data-layout="hud"] .card { padding: .55cqw .8cqw; column-gap: .7cqw; }
 .overlay[data-layout="hud"] .card .ico { width: 1.9cqw; height: 1.9cqw; }
-.overlay[data-layout="hud"] .card .who { font-size: 1.05cqw; }
-.overlay[data-layout="hud"] .card .what { font-size: .66cqw; }
+.overlay[data-layout="hud"] .card .who { font-size: .96cqw; }
+.overlay[data-layout="hud"] .card .what { font-size: .7cqw; }
 .overlay[data-layout="hud"] .card .sub { font-size: .8cqw; }
 .overlay[data-layout="hud"] .card .num { font-size: 2cqw; min-width: 3.6cqw; }
 .overlay[data-layout="hud"] .card .num small { display: none; }
 /* After the layouts: the invisible number of a card without one takes no width in any of them */
 .overlay .card .num.blank { visibility: hidden; min-width: 0; width: 0; overflow: hidden; }
+
+/* ---------- mass flasks: the whole frame for ten seconds ---------- */
+/* Outside the stage, which ?scale= narrows: the effect always covers the frame, so its sizes are vw.
+   It lies under the stage: the card and the titles stay readable over the fire and the light */
+.fx { position: fixed; inset: 0; pointer-events: none; overflow: hidden; visibility: hidden; }
+.fx.on { visibility: visible; }
+.fx > * { position: absolute; }
+.fx canvas { left: 0; top: 0; width: 100%; height: 100%; }
+.fx-vign { inset: 0; opacity: 0;
+  background: radial-gradient(ellipse 75% 70% at 50% 45%, transparent 40%, rgba(25, 0, 6, .55) 72%, rgba(10, 0, 3, .92) 100%); }
+.fx-glow { inset: 0; opacity: 0; box-shadow: inset 0 0 6vw rgba(240, 67, 79, .55), inset 0 -4vw 8vw rgba(255, 90, 30, .45);
+}
+.fx-bed { left: 0; right: 0; bottom: 0; height: 13vw; opacity: 0;
+  background: linear-gradient(to top, rgba(255, 150, 60, .9), rgba(240, 67, 79, .5) 30%, rgba(120, 10, 25, .2) 65%, transparent); }
+.fx-cracks { left: 0; top: 0; width: 100%; height: 100%; opacity: 0; }
+.fx-top { inset: 0; opacity: 0;
+  background: radial-gradient(ellipse 70% 45% at 50% -8%, rgba(255, 246, 220, .75), rgba(255, 224, 160, .35) 45%, transparent 75%),
+              linear-gradient(90deg, rgba(143, 220, 255, .28), transparent 12%, transparent 88%, rgba(143, 220, 255, .28)); }
+.fx-rays { left: 50%; top: -12%; width: 116vw; height: 116vw; margin: -58vw 0 0 -58vw; opacity: 0; }
+/* Each fan carries its own round mask and turns with it: the mask is the same at any angle, so a
+   turn moves a finished layer instead of masking it again every frame */
+.fx-rays i { position: absolute; left: 0; top: 0; width: 100%; height: 100%; border-radius: 50%; will-change: transform;
+  -webkit-mask-image: radial-gradient(circle, #000 0, rgba(0, 0, 0, .6) 28%, transparent 62%);
+          mask-image: radial-gradient(circle, #000 0, rgba(0, 0, 0, .6) 28%, transparent 62%); }
+.fx-rays i:nth-child(1) { background: repeating-conic-gradient(from 0deg, transparent 0 5deg, rgba(255, 240, 205, .55) 7deg, transparent 9.5deg 17deg); animation: fx-turn 90s linear infinite; }
+.fx-rays i:nth-child(2) { background: repeating-conic-gradient(from 4deg, transparent 0 9deg, rgba(143, 220, 255, .4) 11deg, transparent 13deg 23deg); animation: fx-turn 140s linear infinite reverse; }
+.fx-lake { left: 0; right: 0; bottom: 0; height: 9vw; opacity: 0;
+  background: linear-gradient(to top, rgba(143, 220, 255, .55), rgba(143, 220, 255, .16) 55%, transparent); }
+.fx-ring { left: 50%; top: 45%; width: 8vw; height: 8vw; margin: -4vw 0 0 -4vw; border-radius: 50%; opacity: 0; }
+.fx-ring.agony { border: .5vw solid rgba(255, 120, 60, .9); box-shadow: 0 0 2.5vw rgba(240, 67, 79, .95), inset 0 0 2vw rgba(60, 0, 10, .9); }
+.fx-ring.svet { border: .3vw solid rgba(255, 246, 220, .95); box-shadow: 0 0 2vw rgba(255, 224, 160, .9), inset 0 0 2vw rgba(143, 220, 255, .8); }
+.fx-flash { inset: 0; opacity: 0; }
+.fx-flash.agony { background: radial-gradient(ellipse at 50% 60%, rgba(255, 120, 60, .7), rgba(176, 16, 42, .75) 50%, rgba(30, 0, 6, .9)); }
+.fx-flash.svet { background: radial-gradient(ellipse at 50% 0%, #fffaf0, rgba(255, 236, 190, .85) 40%, rgba(143, 220, 255, .4) 80%); }
+.fx-head { left: 0; right: 0; top: 33%; text-align: center; opacity: 0; will-change: transform, opacity; }
+.fx.centre .fx-head { top: 50%; } /* under the big centre card */
+.fx-big { font: 5.6vw/1.05 'Ruslan Display', 'Golos Text', serif; letter-spacing: .04em; white-space: nowrap; }
+/* A letter is its own layer: the letter itself carries the glow as a text-shadow, a copy on top of it
+   the gradient. Drawn once, then only moved and faded; a CSS filter on a moving layer would be
+   computed again every frame */
+.fx-big span { display: inline-block; position: relative; will-change: transform, opacity; }
+.fx-big span::before { content: attr(data-ch); position: absolute; left: 0; top: 0;
+  -webkit-background-clip: text; background-clip: text; color: transparent; text-shadow: none; }
+.fx-big span.sp { width: .35em; }
+.agony .fx-big span { color: #b0102a; text-shadow: 0 0 .5vw rgba(240, 67, 79, .95), 0 .25vw .2vw #000; }
+.agony .fx-big span::before { background-image: linear-gradient(to top, #5e0712, #f0434f 38%, #ffab4a 72%, #fff2c4); }
+.svet .fx-big span { color: #bfeaff; text-shadow: 0 0 .6vw rgba(255, 224, 160, .95), 0 0 1.6vw rgba(143, 220, 255, .7); }
+.svet .fx-big span::before { background-image: linear-gradient(to top, #6cc8f5, #bfeaff 30%, #fff6dc 60%, #ffffff); }
+.fx-line { margin-top: .9vw; font: 700 1.5vw/1.2 'Golos Text', system-ui, sans-serif; color: #fff; text-shadow: 0 .15vw .4vw #000, 0 0 1vw #000; }
+@keyframes fx-turn { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
+<div class="fx" id="fx" aria-hidden="true">
+  <div class="fx-vign"></div><div class="fx-top"></div><div class="fx-rays"><i></i><i></i></div><div class="fx-lake"></div>
+  <div class="fx-bed"></div><canvas></canvas><div class="fx-glow"></div>
+  <svg class="fx-cracks" viewBox="0 0 1920 1080" preserveAspectRatio="none"></svg>
+  <div class="fx-ring"></div><div class="fx-ring"></div><div class="fx-flash"></div>
+  <div class="fx-head"><div class="fx-big"></div><div class="fx-line"></div></div>
+</div>
 <div class="stage" id="stage">
   <div class="overlay" id="overlay" data-layout="feed">
     <div class="titles empty" id="titles"></div>
     <div class="list" id="list"></div>
   </div>
 </div>
+<div class="stage side" id="side"><div class="board" id="board"></div></div>
 
 <script>
 (function () {
@@ -195,8 +405,10 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
   // Everything the overlay says. {n} – a number, {who} – a nick
   var TEXT = {
     roll: 'Roll', extra: 'Доп. Roll', reroll: 'Переброс', curse: 'Проклятие', shield: 'Щит',
-    blocked: 'Переброс отбит', cleanse: 'Очищение', lift: 'Проклятие спало',
-    perks: 'Прошлый стрим', bless: 'Благословение', sglaz: 'Сглаз',
+    blocked: 'Переброс отбит', blockedCurse: 'Проклятие отбито', cleanse: 'Очищение', lift: 'Проклятие спало',
+    flask_swap: 'ФЛАСКА ОБМЕНА', flask_luck: 'ФЛАСКА УДАЧИ', flask_choke: 'ФЛАСКА УДУШЕНИЯ',
+    flask_agony: 'АГОНИЯ ЧЕРНОМИРЬЯ', flask_blessing: 'БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА',
+    perks: 'Прошлый стрим', bless: 'Благодать', sglaz: 'Сглаз',
     best: 'Достойнейший китежанин', worst: 'Подзалупный китежанин',
     newBest: 'Новый достойнейший китежанин', newWorst: 'Новый подзалупный китежанин',
     outOf: 'из {n}',
@@ -207,14 +419,33 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     curseHit: 'дальше максимум {n}, до {floor}',
     shieldUp: '{n} мин. перебросы не берут',
     blockedShield: 'у цели щит · баллы вернулись',
-    blockedBless: 'у цели Благословение · баллы вернулись',
+    blockedBless: 'у цели Благодать · баллы вернулись',
+    blockedFlask: 'цель под баффом ФЛАСКИ ОБМЕНА',
+    flaskSwap: 'обмен Roll в течение {n} мин. недоступен',
+    flaskLuck: 'Roll от {from} · шанс {max} растёт {n} мин.',
+    luckRoll: 'удача · шанс {max} был {n}%',
+    flaskChoke: 'Roll минус {step} каждую минуту · {n} мин.',
+    blockedLuck: 'цель под баффом ФЛАСКИ УДАЧИ',
+    agonyRoll: 'АГОНИЯ ЧЕРНОМИРЬЯ · не выше {n}',
+    flaskAgony: 'Roll {from}–{to} всем {n} · прокляты {cursed}',
+    flaskBlessing: 'Roll {from}–{to} всем {n} · щит {shields} · очищение {cleanses}',
+    massLine: '{who} · {sub}',
     cleanseBack: 'Roll вернулся · оберег {n} мин.',
     cleanseFree: 'Roll снова до {max} · оберег {n} мин.',
     liftFree: 'Roll снова до {n}',
-    perkBless: 'Благословение на {n} мин.',
+    perkBless: 'Благодать на {n} мин.',
     perkSglaz: 'Сглаз · первый Roll не выше {n}',
     blessOn: 'перебросы не берут {n} мин.',
+    sglazLaid: 'Сглаз · дальше максимум {n}',
     sglazOn: 'таймер пошёл · первый Roll не выше {ceiling}',
+    board: 'Китежанин месяца', boardNow: '{month}, число стримов: {n}', boardFinal: 'итоги за {month}, число стримов: {n}',
+    boardWorst: 'Подзалупные китежане', boardBest: 'Достойнейшие китежане', boardNobody: 'никого', boardMore: 'и ещё {n}', boardDrawn: 'жребий',
+    months: ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'],
+    // The strip under the titles: {month} – the month in the genitive, {n} – a number
+    monthsOf: ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'],
+    rBest: 'Китежанин {month}', rBestMany: 'Китежане {month}', rWorst: 'Подзалупыш {month}', rWorstMany: 'Подзалупыши {month}',
+    rLead: 'Лидер {month}', rLeadMany: 'Лидеры {month}', rNobody: 'пока никого', rMore: 'и ещё {n}',
+    rDays: 'ещё {n} дн.', rLastDay: 'последний день', rAfter: 'итоги после стрима',
   };
 
   var ICON = {
@@ -226,6 +457,8 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     crown: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path d="M3.5 18.5h17M4.5 16l-1-9 5 4 3.5-6 3.5 6 5-4-1 9z"/></svg>',
     down: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 4v15m-6-6l6 6 6-6"/></svg>',
     halo: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M7 21c0-3.6 2.2-6.5 5-6.5s5 2.9 5 6.5"/><circle cx="12" cy="11.5" r="2.6"/></svg>',
+    flask: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><path class="liq" d="M6.6 14.5A5.4 5.4 0 0 0 17.4 14.5Z" fill="currentColor" stroke="none"/><path d="M9.5 3h5M10.5 3v5.2a6.5 6.5 0 1 0 3 0V3"/></svg>',
+    hourglass: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12M6 21h12M7 3c0 5 10 5 10 9s-10 4-10 9M17 3c0 5-10 5-10 9s10 4 10 9"/><path d="M9.5 19h5l-2.5-2.2z" fill="currentColor" stroke="none"/></svg>',
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12S6 5.5 12 5.5 21.5 12 21.5 12 18 18.5 12 18.5 2.5 12 2.5 12z"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>',
   };
 
@@ -239,33 +472,47 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     sheet.textContent = sheet.textContent.replace(/(-?\d*\.?\d+)cqw/g, function (_, n) { return +(n * SCALE).toFixed(4) + 'vw'; });
   }
   var HIDE_NICKS = params.get('nicks') === '0';
-  var DEMO = params.get('demo') === '1';
+  var REGALIA = params.get('regalia') !== '0';
+  var DEMO = ['1', 'mass', 'board'].indexOf(params.get('demo')) >= 0;
+  var FX = params.get('fx') !== '0';
   // Minutes the titles stay after the last game event; 0 keeps them on all the time
   var TITLES_MS = (params.get('titles') === null ? 5 : Math.max(0, parseFloat(params.get('titles')) || 0)) * 60000;
+  // Seconds the month's board stays on screen
+  var BOARD_MS = (params.get('board') === null ? 10 : Math.max(1, parseFloat(params.get('board')) || 10)) * 1000;
   var overlay = document.getElementById('overlay'), list = document.getElementById('list');
   var titlesEl = document.getElementById('titles');
   overlay.setAttribute('data-layout', LAYOUT);
   var stage = document.getElementById('stage');
   stage.setAttribute('data-layout', LAYOUT);
   stage.style.setProperty('--scale', SCALE);
+  // The board sits opposite the titles: on the left only when the titles are on the right
+  var side = document.getElementById('side');
+  side.setAttribute('data-side', LAYOUT === 'feed' ? 'left' : 'right');
+  side.style.setProperty('--scale', SCALE);
 
   function fill(template, values) {
     return template.replace(/\{(\w+)\}/g, function (_, k) { return values[k] === undefined || values[k] === null ? '' : values[k]; });
   }
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
   var aliases = {};
-  function nick(n) {
+  function name(n) {
     if (!HIDE_NICKS || !n) return n || '';
     if (!aliases[n]) aliases[n] = 'Игрок ' + (Object.keys(aliases).length + 1);
     return aliases[n];
   }
-  function pair(actor, who) { return actor && actor !== who ? '@' + nick(actor) + ' → @' + nick(who) : nick(who); }
+  // The last month's champions: their nick carries a crown wherever the game names them
+  var CROWN = '\u265B', crowned = {};
+  function nick(n) { return name(n) + (n && crowned[n] ? ' ' + CROWN : ''); }
+  // Escaped text with the crown drawn as a glyph of its own: text style, not an emoji
+  function rich(s) { return esc(s).split(CROWN).join('<span class="cr">' + CROWN + '&#xFE0E;</span>'); }
+  function pair(actor, who, arrow) { return actor && actor !== who ? '@' + nick(actor) + (arrow || ' → ') + '@' + nick(who) : nick(who); }
   function rnd(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
   function pct(v, max) { return Math.round(100 * v / (max || 100)) + '%'; }
 
   // ---------- event -> cards ----------
   function curseSub(ev) {
     if (ev.ceiling === null || ev.ceiling === undefined) return null;
+    if (ev.sglaz) return fill(TEXT.sglazLaid, { n: ev.next });
     return ev.hold !== null && ev.hold !== undefined ? fill(TEXT.cursedHold, { n: ev.hold }) : fill(TEXT.cursedNext, { n: ev.next });
   }
   function curseBar(ev) {
@@ -277,19 +524,46 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     switch (ev.type) {
       case 'roll':
       case 'extra':
-        return [{ type: ev.type, icon: 'dice', what: TEXT[ev.type], who: nick(ev.who), num: ev.value, of: ev.ceiling || ev.max,
-          sub: curseSub(ev) || (ev.type === 'extra' ? TEXT.paid : null), bar: curseBar(ev), titles: ev.titles }];
+        var lucky = ev.luck !== null && ev.luck !== undefined, agonized = ev.agony !== null && ev.agony !== undefined;
+        // Under АГОНИЯ the throw is out of its cap, unless a curse caps it lower
+        return [{ type: ev.type, cls: agonized ? 'agonized' : lucky ? 'lucky' : '', icon: 'dice', what: TEXT[ev.type], who: nick(ev.who),
+          num: ev.value, of: agonized ? Math.min(ev.agony, ev.ceiling || ev.agony) : ev.ceiling || ev.max, bar: curseBar(ev), titles: ev.titles,
+          sub: curseSub(ev) || (agonized ? fill(TEXT.agonyRoll, { n: ev.agony }) : lucky ? fill(TEXT.luckRoll, { n: ev.luck, max: ev.max })
+            : ev.type === 'extra' ? TEXT.paid : null) }];
       case 'reroll':
         return [{ type: 'reroll', icon: 'swap', what: TEXT.reroll, who: pair(ev.actor, ev.who), num: ev.value, old: ev.old,
-          of: ev.ceiling || ev.max, sub: ev.old === null ? TEXT.firstRoll : curseSub(ev), bar: curseBar(ev), titles: ev.titles }];
+          of: ev.ceiling || ev.max, sub: ev.sglaz || ev.old !== null ? curseSub(ev) : TEXT.firstRoll, bar: curseBar(ev), titles: ev.titles }];
       case 'curse':
         return [{ type: 'curse', icon: 'chain', what: TEXT.curse, who: pair(ev.actor, ev.who),
           num: ev.value, of: ev.ceiling, sub: fill(TEXT.curseHit, { n: ev.next, floor: ev.floor }), bar: curseBar(ev), titles: ev.titles }];
       case 'shield':
         return [{ type: 'shield', icon: 'shield', what: TEXT.shield, who: nick(ev.who), sub: fill(TEXT.shieldUp, { n: ev.minutes }) }];
       case 'blocked':
-        return [{ type: 'blocked', icon: 'shield', what: TEXT.blocked, who: pair(ev.actor, ev.who),
-          sub: ev.by === 'bless' ? TEXT.blockedBless : TEXT.blockedShield }];
+        var potion = ev.by === 'flask' || ev.by === 'luck';
+        return [{ type: 'blocked', cls: potion ? 'by-flask' : '', icon: potion ? 'flask' : 'shield',
+          what: ev.action === 'curse' ? TEXT.blockedCurse : TEXT.blocked, who: pair(ev.actor, ev.who),
+          sub: { bless: TEXT.blockedBless, flask: TEXT.blockedFlask, luck: TEXT.blockedLuck }[ev.by] || TEXT.blockedShield }];
+      case 'flask':
+        if (ev.flask === 'choke') {
+          // The roll as it is now; the steps that wear it down move only the titles
+          return [{ type: 'flask', icon: 'flask', what: TEXT.flask_choke, who: nick(ev.who), num: ev.value, of: ev.max,
+            sub: fill(TEXT.flaskChoke, { n: ev.minutes, step: ev.step }) }];
+        }
+        if (ev.flask === 'agony' || ev.flask === 'blessing') {
+          // Everyone in chat at once: the card counts them, the titles show where it left the game
+          var agony = ev.flask === 'agony';
+          return [{ type: 'flask', cls: agony ? 'agony' : 'svet', mass: agony ? 'agony' : 'svet', icon: 'flask', what: TEXT['flask_' + ev.flask], who: nick(ev.who),
+            sub: fill(agony ? TEXT.flaskAgony : TEXT.flaskBlessing, { n: ev.crowd, from: ev.from, to: ev.to, cursed: ev.cursed,
+              shields: ev.shields, cleanses: ev.cleanses }), titles: ev.titles }];
+        }
+        if (ev.flask === 'luck') {
+          // Nothing changes hands: the card says what the next own throws will be like
+          return [{ type: 'flask', icon: 'flask', what: TEXT.flask_luck, who: nick(ev.who),
+            sub: fill(TEXT.flaskLuck, { n: ev.minutes, from: ev.from, max: ev.max }) }];
+        }
+        // The number is the buyer's: the old one went to the partner
+        return [{ type: 'flask', icon: 'flask', what: TEXT['flask_' + ev.flask] || TEXT.flask_swap, who: pair(ev.actor, ev.who, ' ⇄ '),
+          num: ev.value, old: ev.old, sub: fill(TEXT.flaskSwap, { n: ev.minutes }), titles: ev.titles }];
       case 'cleanse':
         return [{ type: 'cleanse', icon: 'spark', what: TEXT.cleanse, who: pair(ev.actor, ev.who), num: ev.value, old: ev.old,
           sub: ev.value !== null ? fill(TEXT.cleanseBack, { n: ev.minutes }) : fill(TEXT.cleanseFree, { n: ev.minutes, max: ev.max }),
@@ -319,7 +593,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 
   function cardEl(c) {
     var el = document.createElement('div');
-    el.className = 'card t-' + c.type;
+    el.className = 'card t-' + c.type + (c.cls ? ' ' + c.cls : '');
     var num = '<div class="num blank">0<small>0</small></div>';
     if (c.num !== null && c.num !== undefined) {
       var small = c.old !== null && c.old !== undefined
@@ -328,7 +602,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
       num = '<div class="num ' + tone(c.num) + '" data-final="' + c.num + '" data-of="' + (c.of || scale.max) + '">' + c.num + small + '</div>';
     }
     el.innerHTML = '<div class="ico">' + ICON[c.icon] + '</div>'
-      + '<div class="body"><div class="what">' + esc(c.what) + '</div><div class="who">' + esc(c.who) + '</div>'
+      + '<div class="body"><div class="what">' + esc(c.what) + '</div><div class="who">' + rich(c.who) + '</div>'
       + (c.sub ? '<div class="sub">' + esc(c.sub) + '</div>' : '') + '</div>' + num
       + (c.bar ? '<div class="bar"><i style="--from:' + c.bar.from + ';--to:' + c.bar.to + '"></i></div>' : '');
     return el;
@@ -362,9 +636,9 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
       var t = titles[kind], changed = changes.some(function (c) { return c.kind === kind; });
       return '<div class="title ' + kind + (changed ? ' changed' : '') + '"><div class="ico">' + ICON[kind === 'best' ? 'crown' : 'down'] + '</div>'
         + '<div style="min-width:0"><div class="lbl">' + esc(TEXT[kind]) + '</div>'
-        + '<div class="nick">' + (t ? esc(nick(t.nick)) : '–') + '</div></div><div class="val">' + (t ? t.value : '') + '</div></div>';
+        + '<div class="nick">' + (t ? rich(nick(t.nick)) : '–') + '</div></div><div class="val">' + (t ? t.value : '') + '</div></div>';
     }
-    titlesEl.innerHTML = row('best') + row('worst');
+    titlesEl.innerHTML = row('best') + row('worst') + stripHtml();
     showTitles();
     return changes;
   }
@@ -382,10 +656,452 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     showTitles();
   }
 
+  // ---------- regalia: the strip under the titles ----------
+  // From the bot at start and when a stream starts or ends; the days left are counted here, every minute
+  var regalia = null;
+  function stripHtml() {
+    var r = regalia;
+    if (!REGALIA || !r) return '';
+    function of(month) { return TEXT.monthsOf[Number(String(month).slice(5, 7)) - 1] || month; }
+    function nicks(list, more) {
+      var shown = list.slice(0, 3), rest = list.length - shown.length + (more || 0);
+      return '<b>' + shown.map(function (n) { return esc(name(n)); }).join(' · ') + '</b>'
+        + (rest > 0 ? ' ' + esc(fill(TEXT.rMore, { n: rest })) : '');
+    }
+    function row(kind, icon, label, body) {
+      return '<div class="r-row ' + kind + '"><div class="ico">' + ICON[icon] + '</div><div class="r-text">'
+        + esc(label) + ': ' + body + '</div></div>';
+    }
+    // Last month's winners, then this month's leader, then the days left in it
+    var out = '';
+    var last = r.last;
+    if (last && last.champions.length) {
+      out += row('best', 'crown', fill(last.champions.length > 1 ? TEXT.rBestMany : TEXT.rBest, { month: of(last.month) }),
+        nicks(last.champions, last.more.champions));
+    }
+    if (last && last.losers.length) {
+      out += row('worst', 'down', fill(last.losers.length > 1 ? TEXT.rWorstMany : TEXT.rWorst, { month: of(last.month) }),
+        nicks(last.losers, last.more.losers));
+    }
+    out += row('lead', 'spark', fill(r.leaders.length > 1 ? TEXT.rLeadMany : TEXT.rLead, { month: of(r.month) }),
+      r.leaders.length ? nicks(r.leaders, r.more) + ' ×' + r.titles : esc(TEXT.rNobody));
+    var now = Date.now() / 1000, span = r.ends - r.starts;
+    var share = Math.min(1, Math.max(0, (now - r.starts) / span));
+    var days = Math.ceil((r.ends - now) / 86400);
+    var left = days <= 0 ? TEXT.rAfter : days === 1 ? TEXT.rLastDay : fill(TEXT.rDays, { n: days });
+    var month = TEXT.months[Number(String(r.month).slice(5, 7)) - 1] || r.month;
+    out += '<div class="r-month"><div class="ico">' + ICON.hourglass + '</div><b>' + esc(month.charAt(0).toUpperCase() + month.slice(1)) + '</b>'
+      + '<div class="r-bar"><i style="--p:' + (100 * share).toFixed(1) + '%"></i></div><span>' + esc(left) + '</span></div>';
+    return '<div class="regalia">' + out + '</div>';
+  }
+  function updateStrip() {
+    var el = titlesEl.querySelector('.regalia'), html = stripHtml();
+    if (el) el.outerHTML = html;
+    else if (html) titlesEl.insertAdjacentHTML('beforeend', html);
+  }
+  function setRegalia(r) {
+    regalia = r || null;
+    crowned = {};
+    ((regalia && regalia.last && regalia.last.champions) || []).forEach(function (n) { crowned[n] = true; });
+    // The title plates carry the crown too
+    renderTitles(titles, false);
+  }
+  setInterval(updateStrip, 60000);
+
+  // ---------- the month's board: opposite the titles for BOARD_MS ----------
+  // Not a card: it does not wait in the queue and holds nothing up; a second one replaces it
+  var boardEl = document.getElementById('board'), boardTimer = null;
+  function showBoard(ev) {
+    // The server numbers the rows: a tie on the first place shares it, every row there is lit, a long one ends in «и ещё N»
+    function part(kind, top, more) {
+      var rows = (top || []).map(function (p, i) {
+        var place = p.place || i + 1;
+        return '<div class="b-row' + (place === 1 ? ' first' : '') + '" style="animation-delay:' + (0.3 + 0.12 * i).toFixed(2) + 's">'
+          + '<div class="b-place">' + place + '</div>'
+          + '<div class="b-nick">' + esc(name(p.nick)) + (p.drawn ? ' <small class="b-drawn">' + esc(TEXT.boardDrawn) + '</small>' : '') + '</div><div class="b-val">×' + p.titles + '</div></div>';
+      }).join('') || '<div class="b-row none">' + esc(TEXT.boardNobody) + '</div>';
+      if (more > 0) rows += '<div class="b-row none">' + esc(fill(TEXT.boardMore, { n: more })) + '</div>';
+      return '<div class="b-part ' + kind + '"><div class="b-lbl"><span class="ico">' + ICON[kind === 'best' ? 'crown' : 'down'] + '</span>'
+        + '<span>' + esc(TEXT[kind === 'best' ? 'boardBest' : 'boardWorst']) + '</span></div>' + rows + '</div>';
+    }
+    var month = TEXT.months[Number(String(ev.month).slice(5, 7)) - 1] || ev.month;
+    var sub = fill(ev.final ? TEXT.boardFinal : TEXT.boardNow, { month: month, n: ev.streams });
+    sub = sub.charAt(0).toUpperCase() + sub.slice(1);  // «Октябрь, …»: the line starts with a capital, the months stay lower case
+    boardEl.innerHTML = '<div class="b-head"><div class="b-title">' + esc(TEXT.board) + '</div><div class="b-sub">' + esc(sub) + '</div></div>'
+      + part('best', ev.champions, (ev.more || {}).champions) + part('worst', ev.losers, (ev.more || {}).losers);
+    boardEl.classList.add('on');
+    clearTimeout(boardTimer);
+    boardTimer = setTimeout(function () { boardEl.classList.remove('on'); }, BOARD_MS);
+  }
+
+  // ---------- mass flasks: the whole frame for ten seconds ----------
+  // АГОНИЯ ЧЕРНОМИРЬЯ: the edges darken, lava cracks run in, a wall of fire rises from the bottom
+  // and climbs the sides, the title burns and falls to ash. БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА: rays from the top,
+  // light falling, the lake shimmering at the bottom. A newer one cuts the older short
+  var massFx = (function () {
+    var root = document.getElementById('fx'), cv = root.querySelector('canvas'), ctx = cv.getContext('2d');
+    function q(sel) { return root.querySelector(sel); }
+    var vign = q('.fx-vign'), glow = q('.fx-glow'), bed = q('.fx-bed'), cracksEl = q('.fx-cracks'), top = q('.fx-top'),
+      rays = q('.fx-rays'), lake = q('.fx-lake'), flash = q('.fx-flash'), head = q('.fx-head'),
+      big = q('.fx-big'), line = q('.fx-line'), rings = root.querySelectorAll('.fx-ring');
+    if (LAYOUT === 'card') root.classList.add('centre');
+    var LAYERS = { agony: [vign, glow, bed, cracksEl], svet: [top, rays, lake] };
+    // The canvas is drawn at half the frame's resolution and stretched: fire and light are soft
+    // anyway, and the blending the sprites cost is a quarter
+    var END = 10, RES = .5, W = 0, H = 0, S = 1;
+    var R = Math.random;
+    function rr(a, b) { return a + R() * (b - a); }
+
+    function resize() {
+      var k = RES * Math.min(window.devicePixelRatio || 1, 2);
+      if (W === window.innerWidth && H === window.innerHeight) return;
+      W = window.innerWidth; H = window.innerHeight; S = W / 1920;
+      cv.width = Math.round(W * k); cv.height = Math.round(H * k);
+      ctx.setTransform(k, 0, 0, k, 0, 0);
+    }
+
+    // Soft discs drawn once and stamped scaled: hundreds of gradients a frame would not keep 60 fps
+    function disc(stops, size) {
+      var c = document.createElement('canvas'); c.width = c.height = size;
+      var g = c.getContext('2d'), gr = g.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+      stops.forEach(function (st) { gr.addColorStop(st[0], st[1]); });
+      g.fillStyle = gr; g.fillRect(0, 0, size, size);
+      return c;
+    }
+    function rgba(c, a) { return 'rgba(' + c[0] + ',' + c[1] + ',' + c[2] + ',' + a + ')'; }
+    var FIRE_RAMP = [[0, [255, 248, 210]], [.15, [255, 205, 90]], [.35, [255, 120, 35]], [.6, [225, 45, 50]], [.85, [120, 12, 30]], [1, [45, 0, 10]]];
+    function ramp(t) {
+      for (var i = 1; i < FIRE_RAMP.length; i++) {
+        if (t <= FIRE_RAMP[i][0]) {
+          var a = FIRE_RAMP[i - 1], b = FIRE_RAMP[i], k = (t - a[0]) / (b[0] - a[0]);
+          return [0, 1, 2].map(function (j) { return Math.round(a[1][j] + (b[1][j] - a[1][j]) * k); });
+        }
+      }
+      return FIRE_RAMP[FIRE_RAMP.length - 1][1];
+    }
+    var FIRE = [];
+    for (var f = 0; f < 16; f++) {
+      var col = ramp(f / 15);
+      FIRE.push(disc([[0, rgba(col, 1)], [.35, rgba(col, .55)], [1, rgba(col, 0)]], 64));
+    }
+    var EMBER = disc([[0, 'rgba(255,245,210,1)'], [.25, 'rgba(255,150,50,.9)'], [1, 'rgba(255,60,20,0)']], 32);
+    var SMOKE = disc([[0, 'rgba(22,4,8,.6)'], [.6, 'rgba(22,4,8,.25)'], [1, 'rgba(22,4,8,0)']], 64);
+    var ASH = disc([[0, 'rgba(70,60,66,.9)'], [1, 'rgba(70,60,66,0)']], 16);
+    var MOTE = {
+      gold: disc([[0, 'rgba(255,255,245,1)'], [.3, 'rgba(255,224,160,.8)'], [1, 'rgba(255,224,160,0)']], 32),
+      azure: disc([[0, 'rgba(240,252,255,1)'], [.3, 'rgba(143,220,255,.8)'], [1, 'rgba(143,220,255,0)']], 32),
+    };
+    var STAR = (function () {
+      var size = 96, c = document.createElement('canvas'); c.width = c.height = size;
+      var g = c.getContext('2d'), m = size / 2;
+      g.drawImage(MOTE.gold, m - 14, m - 14, 28, 28);
+      [[1, .06], [.06, 1]].forEach(function (d) {
+        var gr = g.createRadialGradient(m, m, 0, m, m, m);
+        gr.addColorStop(0, 'rgba(255,255,250,1)'); gr.addColorStop(.5, 'rgba(255,236,200,.45)'); gr.addColorStop(1, 'rgba(255,236,200,0)');
+        g.save(); g.translate(m, m); g.scale(d[0], d[1]); g.translate(-m, -m);
+        g.fillStyle = gr; g.beginPath(); g.arc(m, m, m, 0, Math.PI * 2); g.fill(); g.restore();
+      });
+      return c;
+    })();
+
+    // ---------- particles ----------
+    var parts = [], MAX = 1600, acc = {}, mode = null, lakeA = 0, looping = false, last = 0;
+    var GLINTS = [];
+    for (var g = 0; g < 70; g++) GLINTS.push({ row: Math.pow(R(), 1.4), x: R(), len: rr(30, 170), sp: rr(12, 45) * (R() < .5 ? -1 : 1), ph: R() * 6 });
+    // Nothing outlives the ten seconds: a particle born late is given only the time that is left
+    function add(p, e) {
+      if (parts.length >= MAX) return;
+      p.age = 0; p.seed = R() * 10; p.life = Math.min(p.life, END - e);
+      if (p.life > 0) parts.push(p);
+    }
+    function emit(name, rate, dt, fn) {
+      acc[name] = (acc[name] || 0) + rate * dt;
+      while (acc[name] >= 1) { acc[name] -= 1; fn(); }
+    }
+    // x across the width, crowded at the edges: the middle of the stream stays readable
+    function edgeX() {
+      var u = R();
+      return (u < .5 ? Math.pow(u * 2, 2.2) * .5 : 1 - Math.pow((1 - u) * 2, 2.2) * .5) * W;
+    }
+    function envelope(e) {
+      if (e < .35) return Math.max(0, e / .35);
+      if (e < 6.5) return 1;
+      return Math.max(0, 1 - (e - 6.5) / 2.8);
+    }
+    // Fire tongues: a slow wave along the bottom, the corners burning highest
+    function tongue(x, t) {
+      var u = x / W, wave = Math.max(0, Math.sin(u * Math.PI * 9 + t * 1.9) * Math.sin(u * Math.PI * 3.7 - t * 1.2));
+      return (.45 + .55 * wave) * (1 + .9 * Math.pow(Math.abs(u - .5) * 2, 3));
+    }
+
+    function spawnAgony(I, dt, t, e) {
+      emit('flame', 380 * I, dt, function () {
+        var x = R() * W, tg = tongue(x, t);
+        add({ k: 'flame', x: x, y: H + 30 * S, vx: rr(-25, 25) * S, vy: -rr(260, 620) * S * (.2 + .8 * I) * tg, g: -110 * S,
+          life: rr(.5, 1.1) * (.4 + .6 * I), size: rr(80, 170) * S * (.45 + .55 * I) * Math.min(1.4, tg), turb: 80 * S }, e);
+      });
+      emit('side', 170 * I, dt, function () {
+        var left = R() < .5, h = Math.pow(R(), 1.7) * H * .85 * I;
+        add({ k: 'flame', x: left ? rr(-10, 25) * S : W - rr(-10, 25) * S, y: H - h, vx: (left ? 1 : -1) * rr(15, 70) * S, vy: -rr(110, 260) * S,
+          g: -60 * S, life: rr(.3, .7), size: rr(50, 100) * S * (1 - .5 * h / H), turb: 40 * S }, e);
+      });
+      emit('ember', 70 * I, dt, function () {
+        add({ k: 'ember', x: R() < .6 ? edgeX() : R() * W, y: H - rr(0, 80) * S, vx: rr(-50, 50) * S, vy: -rr(110, 300) * S, g: -15 * S,
+          life: rr(2, 4.5), size: rr(5, 12) * S, turb: 140 * S }, e);
+      });
+      emit('smoke', 25 * Math.max(0, I - .35), dt, function () {
+        add({ k: 'smoke', x: R() < .7 ? edgeX() : R() * W, y: H - rr(30, 160) * S * I, vx: rr(-20, 20) * S, vy: -rr(40, 95) * S,
+          life: rr(2.4, 4.4), size: rr(140, 300) * S, turb: 25 * S }, e);
+      });
+    }
+    function spawnSvet(I, dt, e) {
+      emit('fall', 60 * I, dt, function () {
+        add({ k: 'mote', col: R() < .62 ? 'gold' : 'azure', x: R() < I * .6 ? R() * W : edgeX(), y: -10 * S, vx: rr(-20, 20) * S,
+          vy: rr(35, 110) * S, life: rr(4, 7.5), size: rr(6, 14) * S, turb: 45 * S }, e);
+      });
+      emit('rise', 40 * I, dt, function () {
+        add({ k: 'mote', col: R() < .75 ? 'azure' : 'gold', x: R() * W, y: H - rr(0, .1) * H, vx: rr(-15, 15) * S, vy: -rr(25, 80) * S,
+          life: rr(3, 5.5), size: rr(5, 11) * S, turb: 30 * S }, e);
+      });
+      emit('star', 24 * I, dt, function () {
+        var high = R() < .5;
+        add({ k: 'star', x: high ? R() * W : edgeX(), y: high ? rr(0, .3) * H : R() * H, vx: 0, vy: 0,
+          life: rr(.7, 1.6), size: rr(18, 46) * S, rot: R() * Math.PI }, e);
+      });
+    }
+    function burstEmbers() {
+      for (var i = 0; i < 160; i++) {
+        add({ k: 'ember', x: R() * W, y: H + 10 * S, vx: rr(-180, 180) * S, vy: -rr(450, 1100) * S, g: 380 * S, drag: .5,
+          life: rr(1.6, 3.2), size: rr(6, 14) * S, turb: 90 * S }, .35);
+      }
+    }
+    function burstLight() {
+      for (var i = 0; i < 200; i++) {
+        var a = rr(.15, Math.PI - .15), v = rr(200, 900) * S;
+        add({ k: 'mote', col: R() < .6 ? 'gold' : 'azure', x: W / 2 + rr(-.1, .1) * W, y: rr(-.02, .06) * H, vx: Math.cos(a) * v,
+          vy: Math.sin(a) * v * .7, drag: 1.4, g: 25 * S, life: rr(2.5, 5), size: rr(6, 15) * S, turb: 30 * S }, .2);
+      }
+    }
+    // The other mass flask cuts in: the light puts the fire out, the fire turns the light to ash
+    function convert(kind) {
+      parts.forEach(function (p) {
+        if (kind === 'svet') {
+          if (p.k === 'flame') p.life = Math.min(p.life, p.age + .2);
+          else if (p.k === 'smoke') p.life = Math.min(p.life, p.age + .5);
+          else if (p.k === 'ember') { p.k = 'mote'; p.col = 'azure'; p.vy = -rr(30, 90) * S; p.g = 0; p.drag = 0; p.life = p.age + rr(1.5, 3); }
+        } else if (p.k === 'mote' || p.k === 'star') {
+          p.k = 'ash'; p.size = p.size || 8 * S; p.vy = rr(30, 90) * S; p.vx *= .2; p.g = 20 * S; p.drag = 0; p.life = p.age + rr(1.5, 3);
+        }
+      });
+    }
+
+    function update(dt, now) {
+      for (var i = parts.length - 1; i >= 0; i--) {
+        var p = parts[i];
+        p.age += dt;
+        if (p.age >= p.life || p.y < -200 * S || p.y > H + 300 * S) { parts[i] = parts[parts.length - 1]; parts.pop(); continue; }
+        if (p.turb) p.vx += Math.sin(p.y * .011 / S + now * 2.3 + p.seed) * p.turb * dt;
+        if (p.drag) { var d = Math.exp(-p.drag * dt); p.vx *= d; p.vy *= d; }
+        if (p.g) p.vy += p.g * dt;
+        p.x += p.vx * dt; p.y += p.vy * dt;
+      }
+    }
+    function drawP(p) {
+      var t = p.age / p.life, s, a;
+      switch (p.k) {
+        case 'flame': // stretched upward: a tongue rather than a ball
+          s = p.size * (1 - .6 * t); ctx.globalAlpha = Math.min(1, t * 9) * (1 - t) * .85;
+          ctx.drawImage(FIRE[Math.min(15, (t * 16) | 0)], p.x - s / 2, p.y - s * 1.1, s, s * 1.6); break;
+        case 'ember':
+          s = p.size; ctx.globalAlpha = Math.max(0, (1 - t) * (.55 + .45 * Math.sin(p.age * 24 + p.seed * 7)));
+          ctx.drawImage(EMBER, p.x - s / 2, p.y - s / 2, s, s); break;
+        case 'smoke':
+          s = p.size * (.6 + t); ctx.globalAlpha = Math.sin(Math.PI * t) * .5;
+          ctx.drawImage(SMOKE, p.x - s / 2, p.y - s / 2, s, s); break;
+        case 'ash':
+          s = p.size * .7; ctx.globalAlpha = (1 - t) * .85; ctx.drawImage(ASH, p.x - s / 2, p.y - s / 2, s, s); break;
+        case 'mote':
+          s = p.size; a = Math.min(1, t / .12, (1 - t) / .3) * (.7 + .3 * Math.sin(p.age * 6 + p.seed * 5));
+          ctx.globalAlpha = Math.max(0, a); ctx.drawImage(MOTE[p.col], p.x - s / 2, p.y - s / 2, s, s); break;
+        case 'star':
+          s = p.size * Math.sin(Math.PI * t); ctx.globalAlpha = 1;
+          ctx.save(); ctx.translate(p.x, p.y); ctx.rotate(p.rot + t * .6); ctx.drawImage(STAR, -s / 2, -s / 2, s, s); ctx.restore(); break;
+      }
+    }
+    // The lake's surface: short wavy glints sliding left and right
+    function drawLake(now) {
+      if (lakeA < .01) return;
+      ctx.lineCap = 'round';
+      GLINTS.forEach(function (gl) {
+        var y = H - gl.row * H * .14, x = ((gl.x * W + now * gl.sp * S) % W + W) % W;
+        var a = lakeA * (.25 + .35 * Math.sin(now * 2.2 + gl.ph)) * (1 - gl.row * .6);
+        if (a <= 0) return;
+        ctx.globalAlpha = a; ctx.lineWidth = (1 + 2 * (1 - gl.row)) * S;
+        ctx.strokeStyle = gl.ph > 3 ? '#e8f8ff' : '#fff0c8';
+        ctx.beginPath(); ctx.moveTo(x, y);
+        ctx.quadraticCurveTo(x + gl.len * S / 2, y + Math.sin(now * 3 + gl.ph) * 3 * S, x + gl.len * S, y);
+        ctx.stroke();
+      });
+    }
+
+    // The loop runs only while something is on screen: an idle overlay costs nothing
+    function frame() {
+      var now = performance.now() / 1000, dt = Math.min(.1, now - last); last = now;
+      var e = mode ? now - mode.t0 : END, I = envelope(e);
+      if (mode && e < END) {
+        if (mode.kind === 'agony') spawnAgony(I, dt, now, e); else spawnSvet(I, dt, e);
+      } else if (mode) {
+        // Ten seconds by the clock: on a slow frame rate particles age slower than real time
+        mode = null; parts.length = 0; lakeA = 0;
+      }
+      lakeA += ((mode && mode.kind === 'svet' ? Math.min(1, I * 2) : 0) - lakeA) * Math.min(1, dt * 2.5);
+      update(dt, now);
+      ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+      ctx.clearRect(0, 0, W, H);
+      for (var i = 0; i < parts.length; i++) if (parts[i].k === 'smoke' || parts[i].k === 'ash') drawP(parts[i]);
+      ctx.globalCompositeOperation = 'lighter';
+      for (i = 0; i < parts.length; i++) if (parts[i].k !== 'smoke' && parts[i].k !== 'ash') drawP(parts[i]);
+      drawLake(now);
+      ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+      if (mode || parts.length || lakeA > .01) { requestAnimationFrame(frame); return; }
+      looping = false;
+      ctx.clearRect(0, 0, W, H);
+      root.classList.remove('on');
+    }
+
+    // ---------- the layers ----------
+    function anim(el, frames, ms, delay, easing) {
+      return el.animate(frames, { duration: ms, delay: delay || 0, easing: easing || 'ease-out', fill: 'both' });
+    }
+    // Our own animations only: the CSS ones (the throb, the turning rays) keep running
+    function stop(el) {
+      el.getAnimations().forEach(function (a) { if (!(window.CSSAnimation && a instanceof CSSAnimation)) a.cancel(); });
+    }
+    function fadeOut(el) {
+      var from = getComputedStyle(el).opacity;
+      stop(el);
+      anim(el, [{ opacity: from }, { opacity: 0 }], 600, 0);
+    }
+    // Rises, holds, fades: one timeline over the ten seconds
+    function hold(el, peak, delay) {
+      stop(el);
+      anim(el, [{ opacity: 0 }, { opacity: peak, offset: .07 }, { opacity: peak, offset: .68 }, { opacity: 0 }], END * 1000 - delay, delay, 'ease-in-out');
+    }
+
+    // Lava cracks from the edges toward the middle, branching once
+    function cracks() {
+      var out = '';
+      var origins = [[0, 1080], [1920, 1080], [0, 0], [1920, 0], [0, rr(400, 700)], [1920, rr(400, 700)], [rr(300, 700), 1080], [rr(1200, 1600), 1080], [rr(500, 1400), 0]];
+      function branch(x, y, ang, len, depth) {
+        var d = 'M' + x.toFixed(0) + ' ' + y.toFixed(0), total = 0, pts = [];
+        while (total < len) {
+          var step = rr(25, 70); ang += rr(-.55, .55);
+          x += Math.cos(ang) * step; y += Math.sin(ang) * step; total += step;
+          d += 'L' + x.toFixed(0) + ' ' + y.toFixed(0); pts.push([x, y, ang]);
+        }
+        // Three strokes, widest and faintest first: the glow without a filter
+        out += '<path d="' + d + '" pathLength="1" stroke="rgba(176,16,42,.35)" stroke-width="' + (depth ? 16 : 26) + '"/>'
+          + '<path d="' + d + '" pathLength="1" stroke="rgba(240,67,79,.6)" stroke-width="' + (depth ? 7 : 11) + '"/>'
+          + '<path d="' + d + '" pathLength="1" stroke="#ffcf9a" stroke-width="' + (depth ? 2.5 : 4) + '"/>';
+        if (!depth) pts.forEach(function (pt, k) { if (k > 1 && R() < .28) branch(pt[0], pt[1], pt[2] + (R() < .5 ? -1 : 1) * rr(.5, 1.1), len * rr(.3, .5), 1); });
+      }
+      origins.forEach(function (o) { branch(o[0], o[1], Math.atan2(540 - o[1], 960 - o[0]) + rr(-.35, .35), rr(180, 380), 0); });
+      cracksEl.innerHTML = '<g fill="none" stroke-linecap="round" stroke-linejoin="round">' + out + '</g>';
+      var paths = cracksEl.querySelectorAll('path');
+      for (var k = 0; k < paths.length; k += 3) {
+        var timing = { duration: rr(350, 650), delay: 330 + k * 3, easing: 'cubic-bezier(.2,.8,.3,1)', fill: 'both' };
+        for (var j = k; j < k + 3; j++) {
+          paths[j].style.strokeDasharray = '1';
+          paths[j].animate([{ strokeDashoffset: 1 }, { strokeDashoffset: 0 }], timing);
+        }
+      }
+    }
+
+    function title(kind, who, sub) {
+      var name = kind === 'agony' ? TEXT.flask_agony : TEXT.flask_blessing;
+      big.innerHTML = name.split('').map(function (ch) {
+        return ch === ' ' ? '<span class="sp"> </span>' : '<span data-ch="' + esc(ch) + '">' + esc(ch) + '</span>';
+      }).join('');
+      line.textContent = fill(TEXT.massLine, { who: who, sub: sub });
+      head.className = 'fx-head ' + kind;
+      stop(head); stop(line);
+      var letters = big.querySelectorAll('span:not(.sp)');
+      if (kind === 'agony') {
+        anim(head, [{ opacity: 0, transform: 'scale(1.6)' }, { opacity: 1, transform: 'scale(.97)', offset: .55 }, { opacity: 1, transform: 'scale(1)' }],
+          650, 380, 'cubic-bezier(.2,.9,.3,1)');
+        // To ash: each letter lifts away at its own moment
+        Array.prototype.forEach.call(letters, function (el) {
+          el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0,
+            transform: 'translate(' + rr(-1, 1).toFixed(2) + 'vw,' + rr(-6, -3).toFixed(2) + 'vw) rotate(' + rr(-40, 40).toFixed(0) + 'deg) scale(.6)' }],
+            { duration: rr(900, 1500), delay: 5600 + rr(0, 800), easing: 'ease-in', fill: 'forwards' });
+        });
+      } else {
+        anim(head, [{ opacity: 0, transform: 'translateY(2vw) scale(1.08)' }, { opacity: 1, transform: 'none' }],
+          1300, 250, 'cubic-bezier(.2,.8,.2,1)');
+        Array.prototype.forEach.call(letters, function (el, k) {
+          el.animate([{ opacity: 1, transform: 'none' }, { opacity: 0, transform: 'translateY(-3vw) scale(1.15)' }],
+            { duration: 1100, delay: 6000 + k * 35, easing: 'ease-in', fill: 'forwards' });
+        });
+      }
+      anim(line, [{ opacity: 1 }, { opacity: 0 }], 600, 6300);
+    }
+
+    function agony() {
+      flash.className = 'fx-flash agony';
+      stop(flash); anim(flash, [{ opacity: 0 }, { opacity: .7, offset: .25 }, { opacity: 0 }], 900, 280);
+      rings[0].className = 'fx-ring agony'; rings[1].className = 'fx-ring';
+      stop(rings[0]);
+      anim(rings[0], [{ opacity: 1, transform: 'scale(.2)' }, { opacity: 0, transform: 'scale(14)' }], 1100, 330, 'cubic-bezier(.1,.7,.3,1)');
+      hold(vign, 1, 0); hold(glow, 1, 0); hold(bed, 1, 200);
+      cracks(); hold(cracksEl, 1, 300);
+      // The overlay shakes with the blow; the stream under it cannot
+      [root, stage].forEach(function (el) {
+        el.animate([{ transform: 'none' }, { transform: 'translate(-.5vw,.3vw)' }, { transform: 'translate(.6vw,-.2vw)' }, { transform: 'translate(-.4vw,-.3vw)' },
+          { transform: 'translate(.3vw,.3vw)' }, { transform: 'translate(-.2vw,0)' }, { transform: 'none' }], { duration: 650, delay: 330 });
+      });
+      setTimeout(burstEmbers, 350);
+    }
+    function svet() {
+      flash.className = 'fx-flash svet';
+      stop(flash); anim(flash, [{ opacity: 0 }, { opacity: .8, offset: .2 }, { opacity: 0 }], 1300, 0);
+      [250, 600].forEach(function (delay, k) {
+        rings[k].className = 'fx-ring svet'; stop(rings[k]);
+        anim(rings[k], [{ opacity: 1, transform: 'scale(.2)' }, { opacity: 0, transform: 'scale(12)' }], 1800, delay, 'cubic-bezier(.15,.6,.3,1)');
+      });
+      hold(top, 1, 0); hold(rays, 1, 0); hold(lake, 1, 300);
+      setTimeout(burstLight, 200);
+    }
+
+    return function (kind, who, sub) {
+      try {
+        var other = kind === 'agony' ? 'svet' : 'agony';
+        if (mode && mode.kind === other) convert(kind);
+        LAYERS[other].forEach(fadeOut);
+        resize();
+        root.classList.add('on');
+        mode = { kind: kind, t0: performance.now() / 1000 };
+        if (kind === 'agony') agony(); else svet();
+        title(kind, who, sub);
+        if (!looping) { looping = true; last = performance.now() / 1000; requestAnimationFrame(frame); }
+      } catch (err) {
+        // The effect is decoration: the card and the titles go on without it
+        console.error(err);
+      }
+    };
+  })();
+
   // ---------- queue: one card at a time, faster when events pile up ----------
   var queue = [], busy = false;
   function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
-  function push(ev) { cards(ev).forEach(function (c) { queue.push(c); }); if (!busy) run(); }
+  // Titles ride on their card and change as it lands. An event with titles and no card (a choke step,
+  // a type the page does not know yet) queues the titles alone, so a card ahead of it in the queue
+  // cannot land later and draw its older titles over them; a card that fails to render still moves them
+  function push(ev) {
+    var made = cards(ev);
+    if (ev.titles && !made.some(function (c) { return c.titles; })) made.push({ only: true, titles: ev.titles });
+    made.forEach(function (c) { queue.push(c); });
+    if (!busy) run();
+  }
 
   // The left slot: the last card stays SLOT_HOLD_MS after its number lands; in a series each card
   // stays SERIES_MS before the next takes its place – nothing is skipped, ten !roll are ten cards
@@ -431,7 +1147,8 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     try {
       while (queue.length) {
         while (queue.length) {
-          try { await show(queue.shift(), queue.length > 1); } catch (err) { console.error(err); }
+          var c = queue.shift();
+          try { await show(c, queue.length > 1); } catch (err) { console.error(err); if (c.titles) renderTitles(c.titles, true); }
         }
         if (LAYOUT === 'card') {
           await wait(1600);
@@ -444,32 +1161,45 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
   }
 
   async function show(c, fast) {
+    if (c.only) {
+      var moved = renderTitles(c.titles, true);
+      if (LAYOUT === 'card') queueTitleCards(moved);
+      return;
+    }
     var el = cardEl(c);
     place(el);
     fit(el);
     spin(el, fast);
+    // The whole frame starts with the card it belongs to, not when the event arrived
+    if (c.mass && FX) massFx(c.mass, c.who, c.sub);
     var changes = c.titles ? renderTitles(c.titles, true) : [];
     await wait(LAYOUT === 'left' ? SERIES_MS : fast ? 800 : 2000);
-    if (LAYOUT === 'card') {
-      changes.forEach(function (ch) {
-        queue.unshift({ type: 'title', icon: ch.kind === 'best' ? 'crown' : 'down',
-          what: ch.kind === 'best' ? TEXT.newBest : TEXT.newWorst, who: nick(ch.title.nick), num: ch.title.value });
-      });
-    }
+    if (LAYOUT === 'card') queueTitleCards(changes);
+  }
+
+  // The big centre card has no plate: a title that changed hands gets a card of its own
+  function queueTitleCards(changes) {
+    changes.forEach(function (ch) {
+      queue.unshift({ type: 'title', icon: ch.kind === 'best' ? 'crown' : 'down',
+        what: ch.kind === 'best' ? TEXT.newBest : TEXT.newWorst, who: nick(ch.title.nick), num: ch.title.value });
+    });
   }
 
   function onEvent(ev) {
     if (typeof ev.min === 'number') scale.min = ev.min;
     if (typeof ev.max === 'number') scale.max = ev.max;
+    if (ev.type === 'regalia') { setRegalia(ev); return; }
     if (ev.type === 'state') {
       live = ev.live;
+      if (ev.regalia !== undefined) setRegalia(ev.regalia);
       // A reloaded page keeps what is left of the hold since the bot's last game event
       if (ev.quiet !== null && ev.quiet !== undefined) wake(Math.max(0, TITLES_MS - ev.quiet * 1000));
       renderTitles(ev.titles || {}, false);
       return;
     }
     wake(TITLES_MS);
-    if (ev.type !== 'wake') push(ev);
+    if (ev.type === 'board') showBoard(ev);
+    else if (ev.type !== 'wake') push(ev);
   }
 
   // ---------- connection to the bot ----------
@@ -497,37 +1227,65 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
   function demo() {
     var NAMES = ['m1ndsh1ft_', 'vo1dptr', 'nosok222', 'dv4mp1r3', 'uberterminal', 'hininn'];
     var MAX = 100, CEIL = 75, STEP = 10, FLOOR = 25, players = {}, seq = 0;
+    // The previous stream's loser: the Сглаз waits for the first throw on them
+    var sglazFor = 'uberterminal';
     function pick(a) { return a[Math.floor(Math.random() * a.length)]; }
-    function p(n) { return players[n] || (players[n] = { v: null, at: 0, curse: null, before: null, shield: false }); }
+    function p(n) { return players[n] || (players[n] = { v: null, at: 0, curse: null, before: null, shield: false, flask: 0, luck: 0, lucky: 0, choke: 0 }); }
+    // A swap holds both players for the next few throws, standing in for its minutes
+    function held(n) { return players[n] && players[n].flask > seq; }
+    function inLuck(n) { return players[n] && players[n].luck > seq; }
+    // АГОНИЯ caps every throw at 25 for the next few moves, standing in for its minutes; БЛАГОСЛОВЕНИЕ ends it
+    var agonyTill = 0;
     function rolled() { return Object.keys(players).filter(function (n) { return players[n].v !== null; }); }
     function standings() {
       var r = rolled();
       if (!r.length) return { best: null, worst: null };
       function by(sign) { return r.slice().sort(function (a, b) { return sign * (players[a].v - players[b].v) || players[b].at - players[a].at; })[0]; }
-      var worst = by(1), best = by(-1);
+      var best = by(-1), rest = r.filter(function (n) { return n !== best; });
+      var worst = rest.length ? rest.sort(function (a, b) { return players[a].v - players[b].v || players[b].at - players[a].at; })[0] : null;
       function t(n) { return n ? { nick: n, value: players[n].v } : null; }
-      return { best: best === worst ? null : t(best), worst: t(worst) };
+      return { best: t(best), worst: t(worst) };
     }
-    function throwFor(n) {
-      var x = p(n), old = x.v, cap = x.curse || null, v = rnd(1, cap || MAX), next = null;
+    function throwFor(n, own) {
+      var x = p(n), old = x.v;
+      if (seq < agonyTill) {
+        var top = Math.min(25, x.curse || 25), capped = rnd(1, top), was = x.curse || null;
+        if (was) x.curse = Math.max(FLOOR, was - STEP);
+        x.v = capped; x.at = ++seq;
+        return { value: capped, old: old, ceiling: was, next: was ? x.curse : null, hold: null, max: MAX, floor: FLOOR,
+          sglaz: false, luck: null, agony: 25 };
+      }
+      if (inLuck(n)) {
+        // The luck flask: own throws from 50, the chance of 100 grows by 2% a throw; no curse acts
+        var chance = null, v;
+        if (own) { x.lucky++; chance = 0.02 * Math.min(x.lucky, 10); v = Math.random() < chance ? MAX : rnd(50, MAX - 1); }
+        else v = rnd(1, MAX);
+        x.v = v; x.at = ++seq;
+        return { value: v, old: old, ceiling: null, next: null, hold: null, max: MAX, floor: FLOOR, sglaz: false,
+          luck: chance === null ? null : Math.round(100 * chance) };
+      }
+      var cap = x.curse || null, sglaz = !cap && n === sglazFor;
+      if (sglaz) { cap = CEIL; sglazFor = null; }
+      var v = rnd(1, cap || MAX), next = null;
       x.v = v; x.at = ++seq;
       if (cap) { next = Math.max(FLOOR, cap - STEP); x.curse = next; }
-      return { value: v, old: old, ceiling: cap, next: next, hold: null, max: MAX, floor: FLOOR };
+      return { value: v, old: old, ceiling: cap, next: next, hold: null, max: MAX, floor: FLOOR, sglaz: sglaz };
     }
     function ev(type, who, actor, t) {
       var e = Object.assign({ type: type, who: who, actor: actor }, t || {});
       if (t) e.titles = standings();
       return e;
     }
+    function free() { return NAMES.filter(function (n) { return !held(n); }); }
     var MAKE = {
-      roll: function () { var w = pick(NAMES); return ev('roll', w, null, throwFor(w)); },
-      extra: function () { var w = pick(NAMES); return ev('extra', w, w, throwFor(w)); },
+      roll: function () { var w = pick(free()); return ev('roll', w, null, throwFor(w, true)); },
+      extra: function () { var w = pick(free()); return ev('extra', w, w, throwFor(w, true)); },
       reroll: function () {
-        var w = pick(rolled().filter(function (n) { return !players[n].shield; })) || pick(NAMES);
+        var w = pick(rolled().filter(function (n) { return !players[n].shield && !held(n); })) || pick(free());
         return ev('reroll', w, pick(NAMES.filter(function (n) { return n !== w; })), throwFor(w));
       },
       curse: function () {
-        var w = pick(rolled().filter(function (n) { return !players[n].curse; })) || pick(NAMES), x = p(w);
+        var w = pick(rolled().filter(function (n) { return !players[n].curse && !inLuck(n); })) || pick(NAMES), x = p(w);
         x.before = x.v; x.curse = CEIL;
         return ev('curse', w, pick(NAMES.filter(function (n) { return n !== w; })), throwFor(w));
       },
@@ -553,13 +1311,154 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
         p(w).curse = null;
         return { type: 'lift', who: w, max: MAX };
       },
+      // A reroll on the previous stream's loser lays the Сглаз; a new loser is picked when none waits
+      sglaz: function () {
+        var fresh = NAMES.filter(function (n) { return !players[n] || players[n].v === null; });
+        var w = sglazFor || pick(fresh.length ? fresh : NAMES);
+        sglazFor = w; p(w).curse = null;
+        return ev('reroll', w, pick(NAMES.filter(function (n) { return n !== w; })), throwFor(w));
+      },
+      bless: function () {
+        var best = standings().best, w = best ? best.nick : pick(NAMES);
+        return { type: 'blocked', who: w, actor: pick(NAMES.filter(function (n) { return n !== w; })), by: 'bless', minutes: rnd(20, 59) };
+      },
+      perks: function () {
+        var best = standings().best;
+        sglazFor = pick(NAMES.filter(function (n) { return !best || n !== best.nick; }));
+        return { type: 'perks', best: best ? best.nick : null, worst: sglazFor, minutes: 60, ceiling: CEIL };
+      },
+      blessOn: function () {
+        var best = standings().best;
+        return { type: 'perk', who: best ? best.nick : pick(NAMES), perk: 'bless', minutes: 60, ceiling: CEIL };
+      },
+      sglazOn: function () {
+        sglazFor = sglazFor || pick(NAMES);
+        return { type: 'perk', who: sglazFor, perk: 'sglaz', minutes: 60, ceiling: CEIL };
+      },
+      flask: function () {
+        var buyer = pick(rolled().filter(function (n) { return !held(n); }));
+        var partners = buyer ? rolled().filter(function (n) {
+          return n !== buyer && !held(n) && !players[n].shield && players[n].v !== players[buyer].v;
+        }) : [];
+        if (!partners.length) return MAKE.roll();
+        var w = pick(partners), a = p(buyer), b = p(w), old = a.v;
+        a.v = b.v; b.v = old; a.flask = b.flask = seq + 8;
+        return { type: 'flask', flask: 'swap', who: w, actor: buyer, value: a.v, old: old, max: MAX, minutes: 15, titles: standings() };
+      },
+      // The luck flask, then a few throws of the lucky one; a cursed buyer would have got the points back
+      luck: function () {
+        var w = pick(NAMES.filter(function (n) { return !held(n) && !inLuck(n) && !(players[n] && players[n].curse); }));
+        if (!w) return MAKE.roll();
+        var x = p(w);
+        x.luck = seq + 12; x.lucky = 0;
+        return { type: 'flask', flask: 'luck', who: w, actor: w, from: 50, max: MAX, chance: 2, minutes: 15 };
+      },
+      luckRoll: function () {
+        var w = pick(NAMES.filter(inLuck));
+        if (!w) return MAKE.luck();
+        return ev('roll', w, null, throwFor(w, true));
+      },
+      // The choking flask, then its steps: every few moves the choked roll loses 10, only the titles move
+      choke: function () {
+        var w = pick(rolled().filter(function (n) { return !held(n) && !inLuck(n) && !players[n].choke; }));
+        if (!w) return MAKE.roll();
+        p(w).choke = 15;
+        return { type: 'flask', flask: 'choke', who: w, actor: w, value: players[w].v, max: MAX, step: 10, minutes: 15 };
+      },
+      chokeTick: function () {
+        var choked = rolled().filter(function (n) { return players[n].choke > 0; });
+        if (!choked.length) return MAKE.choke();
+        choked.forEach(function (n) { var x = players[n]; x.v = Math.max(1, x.v - 10); x.choke--; });
+        return { type: 'choke', titles: standings() };
+      },
+      luckBlocked: function () {
+        var w = pick(NAMES.filter(inLuck));
+        if (!w) return MAKE.luck();
+        return { type: 'blocked', who: w, actor: pick(NAMES.filter(function (n) { return n !== w; })),
+          action: 'curse', by: 'luck', minutes: rnd(1, 15) };
+      },
+      flaskBlocked: function () {
+        var w = pick(rolled().filter(held));
+        if (!w) return MAKE.flask();
+        return { type: 'blocked', who: w, actor: pick(NAMES.filter(function (n) { return n !== w; })),
+          action: 'reroll', by: 'flask', minutes: rnd(1, 15) };
+      },
+      // The two flasks for everyone in chat: a roll each, then curses at a coin flip or a shield or cleanse each
+      agony: function () {
+        var buyer = pick(rolled()) || pick(NAMES), cursed = 0;
+        NAMES.forEach(function (n) {
+          var x = p(n);
+          x.v = rnd(1, 10); x.at = ++seq;
+          if (!x.curse && Math.random() < 0.5) { x.curse = CEIL; x.before = null; }
+          if (x.curse) cursed++;
+        });
+        agonyTill = seq + 10;
+        return { type: 'flask', flask: 'agony', who: buyer, actor: buyer, crowd: NAMES.length, cursed: cursed,
+          from: 1, to: 10, max: MAX, minutes: 15, titles: standings() };
+      },
+      blessing: function () {
+        var buyer = pick(rolled()) || pick(NAMES), shields = 0;
+        agonyTill = 0;
+        NAMES.forEach(function (n) {
+          var x = p(n), shield = !x.curse && Math.random() < 0.5;
+          x.v = rnd(90, MAX); x.at = ++seq; x.curse = null; x.before = null; x.choke = 0;
+          if (shield) { x.shield = true; shields++; }
+        });
+        return { type: 'flask', flask: 'blessing', who: buyer, actor: buyer, crowd: NAMES.length, shields: shields,
+          cleanses: NAMES.length - shields, from: 90, to: MAX, max: MAX, minutes: 15, titles: standings() };
+      },
+      wake: function () { return { type: 'wake' }; },
+      // The month's board, by turns the one going on and the last month's results
+      board: function () {
+        boardTurn++;
+        // A month going on shares a tied first place; a finished one gives it to the lot's winner
+        function top(final) {
+          return NAMES.slice().sort(function () { return Math.random() - 0.5; }).slice(0, 3)
+            .map(function (n, i) { return { nick: n, titles: 3 - i + rnd(0, 1) }; })
+            .sort(function (a, b) { return b.titles - a.titles; })
+            .map(function (r, i, all) {
+              r.place = final || r.titles !== all[0].titles ? i + 1 : 1;
+              r.drawn = final && i === 0 && all[1].titles === r.titles;
+              return r;
+            });
+        }
+        var final = boardTurn % 2 === 0;
+        return { type: 'board', month: final ? '2026-09' : '2026-10', final: final, streams: final ? 18 : 9,
+          champions: top(final), losers: top(final) };
+      },
     };
+    var boardTurn = 0;
     [['nosok222', 63], ['m1ndsh1ft_', 91], ['vo1dptr', 12], ['dv4mp1r3', 47]].forEach(function (s, i) { p(s[0]).v = s[1]; p(s[0]).at = i + 1; seq = i + 1; });
     onEvent({ type: 'state', live: true, titles: standings() });
-    onEvent({ type: 'perks', best: 'm1ndsh1ft_', worst: 'vo1dptr', minutes: 60, ceiling: CEIL });
-    var SCRIPT = ['roll', 'roll', 'reroll', 'roll', 'curse', 'roll', 'shield', 'blocked', 'roll', 'cleanse', 'extra', 'reroll', 'roll', 'curse', 'lift', 'roll'];
-    var step = 0;
-    setInterval(function () { if (queue.length < 2) onEvent(MAKE[SCRIPT[step++ % SCRIPT.length]]()); }, 2600);
+    var today = new Date(), monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+    var nextStart = new Date(today.getFullYear(), today.getMonth() + 1, 1), lastStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+    function ym(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+    onEvent({ type: 'regalia', month: ym(monthStart), starts: monthStart / 1000, ends: nextStart / 1000,
+      leaders: ['m1ndsh1ft_'], titles: 2, more: 0,
+      last: { month: ym(lastStart), champions: ['nosok222'], losers: ['vo1dptr'], more: { champions: 0, losers: 0 } } });
+    onEvent({ type: 'perks', best: 'm1ndsh1ft_', worst: sglazFor, minutes: 60, ceiling: CEIL });
+    var SCRIPT = ['roll', 'roll', 'reroll', 'roll', 'curse', 'roll', 'shield', 'blocked', 'roll', 'cleanse', 'extra', 'flask',
+                  'reroll', 'roll', 'luck', 'luckRoll', 'curse', 'flaskBlocked', 'luckRoll', 'lift', 'roll', 'luckBlocked',
+                  'choke', 'roll', 'extra', 'agony', 'roll', 'roll', 'blessing', 'roll', 'board'];
+    // demo=mass: the two mass flasks in turn, each with ten seconds of the frame and throws under it
+    if (params.get('demo') === 'mass') SCRIPT = ['agony', 'roll', 'roll', 'roll', 'wake', 'blessing', 'roll', 'roll', 'roll', 'wake'];
+    // demo=board: the board, then throws under it until it has gone, about fifteen seconds a turn
+    if (params.get('demo') === 'board') SCRIPT = ['board', 'roll', 'reroll', 'roll', 'curse', 'roll'];
+    var step = 0, auto = true;
+    var beat = 0;
+    setInterval(function () {
+      if (!auto) return;
+      // A choked roll loses its step every third beat, standing in for a minute
+      if (++beat % 3 === 0 && rolled().some(function (n) { return players[n].choke > 0; })) onEvent(MAKE.chokeTick());
+      if (queue.length < 2) onEvent(MAKE[SCRIPT[step++ % SCRIPT.length]]());
+    }, 2600);
+    // A page embedding the demo drives it: {make: 'curse', times: 1}, {auto: false}, {live: false}
+    window.addEventListener('message', function (e) {
+      var d = e.data || {};
+      if (typeof d.auto === 'boolean') auto = d.auto;
+      if (typeof d.live === 'boolean') onEvent({ type: 'state', live: d.live, titles: standings(), quiet: 0 });
+      for (var i = 0; MAKE[d.make] && i < (d.times || 1); i++) onEvent(MAKE[d.make]());
+    });
   }
 
   if (DEMO) demo(); else connect();

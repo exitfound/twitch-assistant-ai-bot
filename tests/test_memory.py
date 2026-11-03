@@ -9,6 +9,7 @@ from src.core.database import get_db
 from src.gemini.client import BLOCK_INPUT, ERROR
 from src.gemini.memory import build, storage
 from src.gemini.memory.storage import Block
+from src.twitch.local.roll.storage import save_roll
 
 
 async def _say(username: str, message: str, hours_ago: float) -> int:
@@ -353,3 +354,18 @@ def test_thinking_does_not_eat_the_answer_cap(monkeypatch, budget, extra):
     """Thinking tokens count against max_output_tokens: a raised budget must not cut the JSON."""
     monkeypatch.setattr(Gemini, 'THINKING_BUDGET', budget)
     assert build._config(build._Dossier, build.PROFILE_MAX_TOKENS).max_output_tokens == build.PROFILE_MAX_TOKENS + extra
+
+
+async def test_the_game_line_names_whom_the_game_named(db, monkeypatch):
+    """The chronicle takes the game's own titles: a lone player is the champion, not the loser."""
+    monkeypatch.setattr(storage, 'block_session', _session('s'))
+    await save_roll('s', 'solo', 30, free_throw=True)
+    assert await build._game_line(Block('s', 1, 10, 10)) == 'китежанин стрима – solo (30)'
+    await save_roll('s', 'late', 30, free_throw=True)
+    assert await build._game_line(Block('s', 1, 10, 10)) == 'залупа стрима – late (30), китежанин стрима – solo (30)'
+
+
+def _session(session_id):
+    async def block_session(block):
+        return session_id
+    return block_session

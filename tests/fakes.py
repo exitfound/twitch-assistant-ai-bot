@@ -39,6 +39,8 @@ class FakeBot:
         self.rewards_active = False
         self.send_chat_message = AsyncMock(return_value=True)
         self.create_clip = AsyncMock(return_value='https://clips.twitch.tv/FakeClip')
+        # Who Twitch says is in chat; None – the list did not come
+        self.fetch_chatters = AsyncMock(return_value=None)
         self._cooldowns: dict[str, float] = {}
 
     def create_partialuser(self, user_id: str) -> SimpleNamespace:
@@ -62,3 +64,22 @@ class FakeBot:
 
     def clear_cooldown(self, user: str, scope: str) -> None:
         self._cooldowns.pop(f'{scope}:{user}', None)
+
+
+def always(monkeypatch, flask) -> None:
+    """The random flask always comes up as `flask`. A swap needs a free partner before the draw;
+    for any other flask a lone test player gets one, so a test of that flask needs no extra player.
+    The rule itself is tested on its own."""
+    from src.twitch.local.roll import game
+    monkeypatch.setattr(game, 'FLASKS', {flask: 1})
+    if flask == game.Flask.SWAP:
+        monkeypatch.setattr(game, '_partners', _REAL_PARTNERS.setdefault('partners', game._partners))
+        return
+    real = _REAL_PARTNERS.setdefault('partners', game._partners)
+
+    async def partners(session_id, actor, row):
+        return await real(session_id, actor, row) or [('', 0)]
+    monkeypatch.setattr(game, '_partners', partners)
+
+
+_REAL_PARTNERS: dict = {}

@@ -122,6 +122,13 @@ def _env_ids(name: str) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _env_logins(name: str, default: str) -> frozenset[str]:
+    """Comma-separated Twitch logins, lowercased, a leading @ dropped; an empty value – none."""
+    raw = os.getenv(name)
+    logins = default if raw is None else raw
+    return frozenset(part.strip().lstrip('@').lower() for part in logins.split(',') if part.strip())
+
+
 def _env_zone(name: str, default: str) -> ZoneInfo:
     """A time zone by its IANA name. A wrong name stops the start: falling back to UTC
     would silently move every session id and memory key by hours."""
@@ -339,6 +346,15 @@ def _curse_step() -> int:
     return _env_int('REWARD_CURSE_STEP', 10, 1, 1000)
 
 
+def _luck_floor() -> int:
+    # Inside the roll's own range: the lucky throw goes from here to ROLL_MAX
+    floor = _env_int('REWARD_FLASK_LUCK_FLOOR', 50, 1, 1000)
+    if not Roll.MIN <= floor <= Roll.MAX:
+        logger.warning('REWARD_FLASK_LUCK_FLOOR=%s вне ROLL_MIN–ROLL_MAX, взят ближайший край', floor)
+        floor = max(Roll.MIN, min(floor, Roll.MAX))
+    return floor
+
+
 class Rewards:
     # Channel-points rewards. They work only when the channel token is present –
     # without it the flag enables nothing, and the bot logs an authorization link
@@ -349,6 +365,7 @@ class Rewards:
     COST_CURSE: int = _env_int('REWARD_COST_CURSE', 750, 1, 1_000_000)
     COST_SHIELD: int = _env_int('REWARD_COST_SHIELD', 500, 1, 1_000_000)
     COST_CLEANSE: int = _env_int('REWARD_COST_CLEANSE', 1000, 1, 1_000_000)
+    COST_FLASK: int = _env_int('REWARD_COST_FLASK', 300, 1, 1_000_000)
     # Curse: the victim's throw is at most CURSE_CEILING, every further throw
     # on them – their own or someone's reroll – lowers the ceiling by CURSE_STEP, not below CURSE_FLOOR.
     # On the floor the ceiling holds for CURSE_HOLD_MINUTES, then the curse lifts
@@ -359,7 +376,7 @@ class Rewards:
     # Twitch's limit counts each attacker separately, and a crowd finishes off one target.
     # A curse pierces this protection, like the shield. 0 – no protection
     REROLL_PROTECT_MINUTES: int = _env_int('REWARD_REROLL_PROTECT_MINUTES', 1, 0, 1440)
-    # How many rerolls, shields, curses and cleanses a buyer may buy, by the status chat
+    # How many rerolls, shields, curses, cleanses and flasks a buyer may buy, by the status chat
     # last showed this stream (a redemption carries no badges): rerolls per window of
     # REROLL_WINDOW_MINUTES, opened by the first successful one, the rest per stream.
     # A moderator sits between VIP and subscriber, the broadcaster is not limited.
@@ -374,6 +391,38 @@ class Rewards:
     # A cleansed player cannot be cursed again for this many minutes: without it a
     # cheaper curse would undo a cleanse right away
     CLEANSE_PROTECT_MINUTES: int = _env_int('REWARD_CLEANSE_PROTECT_MINUTES', 30, 1, 1440)
+    # How long a flask's effect holds: the swap keeps both players out of every reroll and
+    # off their own throws, the luck flask lifts the player's own throws, the choking one wears
+    # their roll down; after АГОНИЯ ЧЕРНОМИРЬЯ or БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА only throws and flasks work
+    FLASK_MINUTES: int = _env_int('REWARD_FLASK_MINUTES', 15, 1, 1440)
+    # A swap drunk by a player another swap still holds: their new hold is longer by this many
+    # minutes for every hold still on them
+    SWAP_EXTRA_MINUTES: int = _env_int('REWARD_FLASK_SWAP_EXTRA_MINUTES', 5, 0, 1440)
+    # The luck flask: the player's own throws go from LUCK_FLOOR to ROLL_MAX, and the chance of
+    # ROLL_MAX grows by LUCK_STEP percent with each of them, for at most LUCK_THROWS throws
+    LUCK_FLOOR: int = _luck_floor()
+    LUCK_STEP: int = _env_int('REWARD_FLASK_LUCK_STEP', 2, 0, 100)
+    LUCK_THROWS: int = _env_int('REWARD_FLASK_LUCK_THROWS', 10, 1, 1000)
+    # The choking flask: the player's roll loses CHOKE_STEP every minute from the drink,
+    # whatever they throw meanwhile, never below ROLL_MIN
+    CHOKE_STEP: int = _env_int('REWARD_FLASK_CHOKE_STEP', 10, 1, 1000)
+    # The two flasks for everyone in chat: АГОНИЯ ЧЕРНОМИРЬЯ throws each a roll from ROLL_MIN to
+    # AGONY_TOP and curses each with AGONY_CURSE; БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА throws each from
+    # BLESS_FLOOR to ROLL_MAX. Clamped into the roll's own range by game.py
+    AGONY_TOP: int = _env_int('REWARD_FLASK_AGONY_TOP', 10, 1, 1000)
+    # While АГОНИЯ ЧЕРНОМИРЬЯ holds (FLASK_MINUTES), every throw goes from ROLL_MIN to AGONY_THROW_TOP
+    AGONY_THROW_TOP: int = _env_int('REWARD_FLASK_AGONY_THROW_TOP', 25, 1, 1000)
+    # The luck flask under АГОНИЯ: own throws reach up to AGONY_LUCK_TOP, past the cap above, at
+    # half the luck's strength. Under БЛАГОСЛОВЕНИЕ the luck is twice as strong, the choke the
+    # other way round (rules.luck_of(), rules.choke_step())
+    AGONY_LUCK_TOP: int = _env_int('REWARD_FLASK_AGONY_LUCK_TOP', 50, 1, 1000)
+    AGONY_CURSE: float = _env_percent('REWARD_FLASK_AGONY_CURSE_PERCENT', 50)
+    BLESS_FLOOR: int = _env_int('REWARD_FLASK_BLESS_FLOOR', 90, 1, 1000)
+    # Accounts the chat list holds that the mass flasks leave alone: other bots. The bot itself
+    # is always left out
+    FLASK_IGNORE: frozenset[str] = _env_logins(
+        'REWARD_FLASK_IGNORE', 'nightbot,streamelements,streamlabs,moobot,fossabot,wizebot,soundalerts,sery_bot',
+    )
     # How many times one viewer may redeem each reward per stream, counted by Twitch
     # itself. 0 – no limit. A limit set by hand in the Twitch dashboard is reset to
     # these on the next start
@@ -382,6 +431,7 @@ class Rewards:
     CURSE_MAX_PER_USER: int = _env_int('REWARD_CURSE_MAX_PER_USER', 0, 0, 1000)
     SHIELD_MAX_PER_USER: int = _env_int('REWARD_SHIELD_MAX_PER_USER', 0, 0, 1000)
     CLEANSE_MAX_PER_USER: int = _env_int('REWARD_CLEANSE_MAX_PER_USER', 0, 0, 1000)
+    FLASK_MAX_PER_USER: int = _env_int('REWARD_FLASK_MAX_PER_USER', 0, 0, 1000)
 
 
 class Context:
@@ -389,7 +439,12 @@ class Context:
     # What the chat is about goes in retold (Pulse): raw lines are what the model pastes
     CHAT_MESSAGES: int = _env_int('CONTEXT_CHAT_MESSAGES', 20, 1, 1000)
     # Dossier facts of the asker in a free-text answer; people named in it get half
-    DOSSIER_FACTS: int = _env_int('CONTEXT_DOSSIER_FACTS', 6, 0, 50)
+    DOSSIER_FACTS: int = _env_int('CONTEXT_DOSSIER_FACTS', 3, 0, 50)
+    # A dossier fact rests (src/gemini/fact_rest.py) once it went into FACT_SHOWS answers or
+    # was used in FACT_USES of them within FACT_REST_MINUTES; 0 switches a rule off
+    FACT_SHOWS: int = _env_int('CONTEXT_FACT_SHOWS', 3, 0, 100)
+    FACT_USES: int = _env_int('CONTEXT_FACT_USES', 2, 0, 100)
+    FACT_REST_MINUTES: int = _env_int('CONTEXT_FACT_REST_MINUTES', 60, 1, 24 * 60)
     # !summary takes its stream whole; this only caps a runaway stream. The longest
     # stream on record holds 1521 messages
     STREAM_MAX_MESSAGES: int = _env_int('CONTEXT_STREAM_MAX_MESSAGES', 2000, 100, 20_000)

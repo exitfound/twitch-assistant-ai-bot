@@ -3,13 +3,15 @@ announcement.
 
     rules.py       the rules as pure functions: a throw, a curse, minutes left, a nick
     game.py        mechanics – the only place that changes rolls
-    storage.py     queries on rolls, rewards, roll_actions, roll_perks and roll_tiers
+    storage.py     queries on rolls, rewards, roll_actions, roll_perks, roll_tiers and roll_chokes
     perks.py       perks from the previous stream: announce, start the countdown
     tiers.py       the viewer's status in the stream, from chat, for the rewards
     command.py     !roll
+    board.py       !rollboard: the month's top threes, the last month's results at the month's first stream
     texts.py       shared message pieces: китежанин (champion), curse, reward titles
     redemption.py  apply a redemption and say it in chat
     rewards.py     Twitch: reward creation, subscription, statuses, pause
     announce.py    background announcement of a curse lift
+    choke.py       background steps of the choking flask
     overlay.py     the game on the stream: events for the OBS page overlay.html
 """

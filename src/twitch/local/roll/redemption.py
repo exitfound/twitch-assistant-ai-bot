@@ -12,10 +12,11 @@ from src.core.content import Content
 from src.core.database import save_bot_interaction
 from src.twitch.core.port import BotPort
 from src.twitch.core.viewer import Tier, tier_sub_hint
-from src.twitch.local.roll import game, overlay
+from src.twitch.local.roll import game, overlay, perks, rules
 from src.twitch.local.roll.storage import get_action_status, get_tier
 from src.twitch.local.roll.texts import (
-    champion_note, compose, curse_note, curse_values, input_preview, reward_title,
+    champion_note, compose, curse_note, curse_values, input_preview, loser_note, luck_values,
+    mass_values, out_of, reward_title, sglaz_note, split_message,
 )
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,7 @@ _DONE = {
     game.Action.CURSE: 'reward_curse_hit',
     game.Action.SHIELD: 'reward_shield_up',
     game.Action.CLEANSE: 'reward_cleanse_done',
+    game.Action.FLASK: 'reward_flask_swap',
 }
 
 _REFUND = {
@@ -47,11 +49,19 @@ _REFUND = {
     game.Status.PERK_SHIELDED: 'reward_refund_perk_shield',
     game.Status.NOT_CURSED: 'reward_refund_not_cursed',
     game.Status.CLEANSED: 'reward_refund_cleansed',
+    game.Status.FLASK_LIMIT: 'reward_refund_flask_limit',
+    game.Status.UNDER_FLASK: 'reward_refund_under_flask',
+    game.Status.FLASK_GUARDED: 'reward_refund_flask_guarded',
+    game.Status.NO_ROLL: 'reward_refund_flask_no_roll',
+    game.Status.NO_PARTNER: 'reward_refund_flask_no_partner',
+    game.Status.LUCK_GUARDED: 'reward_refund_luck_guarded',
+    game.Status.AGONY_LOCK: 'reward_refund_agony_lock',
+    game.Status.BLESS_LOCK: 'reward_refund_bless_lock',
 }
 
 # Refusals by the buyer's limit: a subscription would raise it, and the refusal says so
 _LIMITS = (game.Status.REROLL_LIMIT, game.Status.SHIELD_LIMIT, game.Status.CURSE_LIMIT,
-           game.Status.CLEANSE_LIMIT)
+           game.Status.CLEANSE_LIMIT, game.Status.FLASK_LIMIT)
 
 # After these rewards a note about the target's curse is appended to the text
 _WITH_CURSE_NOTE = (game.Action.EXTRA, game.Action.REROLL)
@@ -82,9 +92,25 @@ async def handle_redemption(
             # Points accrue without a follow, and the game is closed to a non-follower in chat
             return await _refuse(bot, session_id, action, user, user_input, redemption_id,
                                  game.Status.NOT_FOLLOWER, 'reward_refund_follow')
-        outcome = await game.redeem(action, session_id, user, user_input, redemption_id)
+        # A purchase is the buyer's appearance, as a chat message is: a perk of the previous
+        # stream starts here, said in chat, rather than silently inside the game
+        await perks.on_chat(bot, session_id, user)
+        # The flask is drawn first: Twitch's chat list is asked only for a mass flask, and before
+        # the game's lock, so its answer holds nothing up
+        flask = game.draw_flask() if action == game.Action.FLASK else None
+        chatters = await bot.fetch_chatters() if flask in game.MASS else None
+        outcome = await game.redeem(action, session_id, user, user_input, redemption_id,
+                                    flask=flask, chatters=chatters)
     except Exception:
         logger.exception('Награда %s от %s не применена', action, user)
+        # Journaled like a refusal: the points go back, and a redelivery must not apply it after all
+        try:
+            if not await game.refuse(action, session_id, user, user_input, redemption_id, game.Status.ERROR):
+                # Another delivery of it is in the journal already: its status stands, chat heard it
+                logger.info('Повтор выкупа %s, пропускаю', redemption_id)
+                return None
+        except Exception:
+            logger.exception('Сбой выкупа %s не записан в журнал', redemption_id)
         await _say(bot, session_id, action, Content.text(
             'reward_error', user=user, reward=reward_title(action),
         ))
@@ -145,6 +171,14 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
         # The target has not rolled yet: there is no «было – стало» (before – after) to write
         elif action == game.Action.REROLL and outcome.old_value is None:
             key = 'reward_reroll_first'
+        elif action == game.Action.FLASK:
+            key = f'reward_flask_{outcome.flask}'
+            # A cursed buyer's luck waits for the curse to lift
+            if outcome.flask == game.Flask.LUCK and outcome.ceiling is not None:
+                key = 'reward_flask_luck_cursed'
+            # Drunk again while another swap holds the buyer: they are held longer
+            elif outcome.flask == game.Flask.SWAP and outcome.extra:
+                key = 'reward_flask_swap_again'
         elif action == game.Action.CLEANSE:
             # value is set only when the cleanse returned the roll the curse threw over
             yourself = outcome.target == user
@@ -154,26 +188,35 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
                 key = 'reward_cleanse_self'
     else:
         key = _REFUND.get(outcome.status, 'reward_error')
-    loser, loser_val = outcome.loser or ('', '')
+    # {protect} in the texts is the one number of minutes a refusal names: a protection
+    # left or the wait until the buyer may buy again. An outcome sets at most one of them
+    protect = outcome.guard_minutes if outcome.guard_minutes is not None else outcome.wait_minutes
+    # A throw's «из» (out of): the curse's ceiling or the top, lowered while АГОНИЯ holds
+    ceiling, top = out_of(outcome) if action == game.Action.EXTRA else (outcome.ceiling, Roll.MAX)
+    if outcome.flask == game.Flask.LUCK:
+        # The luck flask names the top of its lucky throws, lower under АГОНИЯ
+        top = rules.luck_of(outcome.mode, outcome.stacks or 1).top
     text = Content.text(
         key, user=user, reward=reward_title(action), target=outcome.target,
         input=input_preview(user_input),
         old=outcome.old_value, value=outcome.value, free_left=outcome.free_left,
-        shield=Rewards.SHIELD_MINUTES,
-        loser=loser, loser_val=loser_val, max=Roll.MAX,
-        ceiling=outcome.ceiling, next=outcome.next_ceiling,
-        minutes=outcome.curse_minutes_left, protect=outcome.protect_minutes_left,
-        limit=outcome.limit, window=Rewards.REROLL_WINDOW_MINUTES,
-        **curse_values(),
+        shield=Rewards.SHIELD_MINUTES, max=top,
+        ceiling=ceiling, next=outcome.next_ceiling,
+        minutes=outcome.curse_minutes_left, protect=protect,
+        limit=outcome.limit, window=Rewards.REROLL_WINDOW_MINUTES, chance=outcome.luck,
+        choke_step=rules.choke_step(outcome.mode), crowd=outcome.crowd, cursed=outcome.cursed,
+        shields=outcome.shields, cleanses=outcome.cleanses,
+        swap_hold=(outcome.guard_minutes or 0) + (outcome.extra or 0), stacks=outcome.stacks,
+        **curse_values(), **luck_values(outcome.mode, outcome.stacks), **mass_values(),
     )
-    # A shield and a cleanse that returned nothing do not change the roll – no champion
+    # A shield and a cleanse that returned nothing do not change the roll – no titles
     # or curse note is appended
     changed = action != game.Action.CLEANSE or outcome.value is not None
     if outcome.ok and action != game.Action.SHIELD and changed:
-        note = ''
+        notes = []
         if action in _WITH_CURSE_NOTE:
-            note = curse_note(outcome)
-        text = compose(text, champion_note(outcome), note)
+            notes = [curse_note(outcome), sglaz_note(outcome)]
+        text = compose(text, loser_note(outcome), champion_note(outcome), *notes)
     return text
 
 
@@ -182,7 +225,11 @@ async def _say(bot: BotPort, session_id: str, action: str, text: str) -> None:
     # recorded does not change anything about the points, and must not keep the caller
     # from setting the redemption's status
     try:
-        if text and await bot.send_chat_message(text):
+        # An outcome with its titles can pass Twitch's limit: it goes out in as many messages as it needs
+        sent = False
+        for piece in split_message(text) if text else []:
+            sent = await bot.send_chat_message(piece) or sent
+        if sent:
             await save_bot_interaction(session_id, '_reward_', f'[reward:{action}]', text)
     except Exception:
         logger.exception('Итог награды %s не записан', action)

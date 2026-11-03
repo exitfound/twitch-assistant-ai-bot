@@ -2,7 +2,7 @@
 answers to chat and the per-stream limits. Every call to the model is a stub."""
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from google.genai import errors, types
@@ -14,6 +14,7 @@ from src.core.config import Caps, Emote, Gemini, PerStream
 from src.core.database import count_bot_uses, get_db, record_bot_use
 from src.twitch.core import limits
 from src.gemini import client, ladder
+from src.gemini.memory import storage
 from src.twitch.gemini import commands, responder
 from src.gemini.client import BLOCK_INPUT, BLOCK_OUTPUT, EMPTY, ERROR
 from src.twitch.gemini.responder import CHUNK_SLACK, respond_and_save, send_chunked
@@ -377,6 +378,23 @@ async def test_twitch_down_leaves_the_handler_quietly(db, ctx, monkeypatch):
     ctx.message.respond.side_effect = RuntimeError('dns')
     await commands.handle_default(ctx)
     assert [c.args[0] for c in ctx.message.respond.await_args_list] == ['@gop Привет!', 'texts.no_answer']
+
+
+async def test_only_an_answer_that_reached_chat_counts_its_facts(db, ctx, monkeypatch):
+    fact = storage.Fact(1, 'tease', 'разбил макбук', '2026-10-01 20:00', 1)
+
+    async def answer(question, config, shown):
+        shown.append(fact)
+        return 'Привет!', 'всё'
+    monkeypatch.setattr(commands, 'answer', answer)
+    answered = Mock()
+    monkeypatch.setattr(commands.fact_rest, 'answered', answered)
+    await commands.handle_default(ctx)
+    answered.assert_called_once_with('Привет!', [fact])
+    answered.reset_mock()
+    ctx.message.respond.side_effect = RuntimeError('twitch down')
+    await commands.handle_default(ctx)
+    answered.assert_not_called()
 
 
 async def test_a_generation_error_answers_with_its_text(db, ctx, monkeypatch):

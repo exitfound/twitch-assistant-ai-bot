@@ -15,7 +15,7 @@ from src.core.config import Clip
 from src.core.content import Content
 from src.core.database import count_all_bot_uses
 from src.twitch.core.limits import PerStreamLimit
-from src.twitch.core.tokens import OAUTH_SCOPES_FOLLOWS, oauth_link
+from src.twitch.core.tokens import BOT_LOGIN, oauth_link
 from src.core.utils import local_time
 from src.twitch.core.replies import reply
 
@@ -143,7 +143,7 @@ def _refusal_key(error: twitchio.HTTPException) -> str:
         return 'clip_rejected'
     if error.status == 401:
         logger.warning('!clip: у токена бота нет права clips:edit. Открой в браузере и войди '
-                       'под аккаунтом бота:\n%s', oauth_link(OAUTH_SCOPES_FOLLOWS))
+                       'под аккаунтом бота:\n%s', oauth_link(BOT_LOGIN))
         return 'clip_failed'
     logger.warning('!clip: ошибка Twitch (%d): %s', error.status, detail)
     return 'clip_failed'

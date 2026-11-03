@@ -31,14 +31,14 @@ import collections
 
 import pytest
 
-from fakes import FakeBot
+from fakes import FakeBot, always
 from src.core import content, database, speech
 from src.core.db import chat as db_chat
 from src.core.db import connection
 from src.core.db import knowledge as db_knowledge
 from src.core.config import Gemini
 from src.discord.local.voice import stress
-from src.gemini import client, pulse
+from src.gemini import client, fact_rest, pulse
 from src.twitch.gemini import commands
 from src.gemini.memory import build
 from src.twitch.gemini import picture as picture_command
@@ -47,6 +47,7 @@ from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot import mood as mascot_mood
 from src.twitch.local.roll import game, perks, tiers
 from src.twitch.local.roll import overlay as roll_overlay
+from src.twitch.local.roll import board as roll_board
 
 def content_text() -> str:
     """A CONTENT.md with every required key: the value is the key's own name, so a test
@@ -81,10 +82,16 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(client, '_background', asyncio.Semaphore(client.BACKGROUND_CONCURRENCY))
     monkeypatch.setattr(build, '_lock', asyncio.Lock())
     monkeypatch.setattr(pulse, '_pulse', None)
+    monkeypatch.setattr(fact_rest, '_shown', {})
+    monkeypatch.setattr(fact_rest, '_used', {})
+    monkeypatch.setattr(fact_rest, '_checks', set())
     for limit in [*commands.LIMITS.values(), picture_command.LIMIT, clip.LIMIT]:
         monkeypatch.setattr(limit, 'busy', set())
     monkeypatch.setattr(picture_command, '_cache', collections.OrderedDict())
     monkeypatch.setattr(perks, '_pending', {})
+    monkeypatch.setattr(roll_board, '_lock', asyncio.Lock())
+    monkeypatch.setattr(roll_board, '_draw_lock', asyncio.Lock())
+    monkeypatch.setattr(roll_board, '_announced', None)
     monkeypatch.setattr(tiers, '_written', {})
     monkeypatch.setattr(help_announce, '_help_shown_at', 0.0)
     monkeypatch.setattr(follow, '_sent_at', collections.deque(maxlen=follow.GREETINGS_PER_MINUTE))
@@ -95,7 +102,8 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(mascot_feed.feed, 'clients', set())
     monkeypatch.setattr(roll_overlay.feed, 'clients', set())
     monkeypatch.setattr(roll_overlay, '_state',
-                        {'type': 'state', 'live': False, 'titles': {'best': None, 'worst': None}})
+                        {'type': 'state', 'live': False, 'titles': {'best': None, 'worst': None},
+                         'regalia': None})
     monkeypatch.setattr(roll_overlay, '_active_at', None)
     monkeypatch.setattr(speech, '_listeners', [])
     # ruaccent is not loaded in tests: a test that needs stresses sets a fake accentuator
@@ -124,3 +132,15 @@ async def db(monkeypatch, tmp_path):
 @pytest.fixture
 def bot() -> FakeBot:
     return FakeBot()
+
+
+@pytest.fixture
+def swap(monkeypatch):
+    """The random flask always comes up as the swap."""
+    always(monkeypatch, game.Flask.SWAP)
+
+
+@pytest.fixture
+def luck(monkeypatch):
+    """The random flask always comes up as the luck flask."""
+    always(monkeypatch, game.Flask.LUCK)

@@ -59,7 +59,9 @@ backup:
 # recreated container
 oauth:
 	@echo "Бот в контейнере останавливается: два процесса на одной паре токенов разлогинят друг друга."
-	@echo "Открой ссылку из лога, войди нужным аккаунтом, затем Ctrl+C – контейнер поднимется сам."
+	@echo "Когда в логе появится «Бот запущен», открой ссылку и войди нужным аккаунтом, затем Ctrl+C –"
+	@echo "контейнер поднимется сам."
+	@$(PY) -c "from src.twitch.core.tokens import print_login_links; print_login_links()"
 	docker compose stop bot
 	@trap "true" INT; cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py; cd .. && docker compose up -d bot
 

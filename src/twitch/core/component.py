@@ -12,7 +12,7 @@ import twitchio
 from twitchio.ext import commands
 
 from src.twitch.core.commands import (
-    CommandContext, CommandEntry, CommandRegistry, Kind,
+    PUBLIC_SCOPE, CommandContext, CommandEntry, CommandRegistry, Kind,
 )
 from src.core.config import Clip, Cooldown, Follow, Picture, Quota, Twitch
 from src.core.content import Content
@@ -36,6 +36,7 @@ from src.twitch.local.clip import handle_clip
 from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
 from src.twitch.local.follow import handle_follow
 from src.twitch.local.mascot import feed as mascot
+from src.twitch.local.roll.board import TRIGGER as ROLLBOARD_TRIGGER, handle_rollboard
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
 from src.twitch.local.roll.perks import on_chat as roll_perks_on_chat
 from src.twitch.local.roll.tiers import on_chat as roll_tiers_on_chat
@@ -58,8 +59,6 @@ CLIP_TRIGGER = '!clip'
 # Cooldown scope for the «follow the channel» hint: so the bot does not repeat it
 # on every message of a non-following viewer
 FOLLOW_HINT_SCOPE = 'follow_hint'
-# Cooldown scope of help and channel commands: one per trigger for the whole chat
-PUBLIC_SCOPE = 'public'
 # Cooldown scope of the «wait N seconds» refusal: said once per pause, then silence
 COOLDOWN_TOLD_SCOPE = 'cooldown_told'
 
@@ -137,10 +136,14 @@ class ChatComponent(commands.Component):
         add(HELP_INDEX_TRIGGER, handle_help_index, public=True)
         add(HELP_TRIGGER,      handle_help,      public=True)
         add(HELP_CHANNEL_TRIGGER, handle_help_channel, public=True)
-        add(STATS_TRIGGER,     handle_stats,     prefix=True)
-        # Longer trigger first, by the rule above. !roll takes a prefix only to answer
-        # «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out
-        add(ROLLSTAT_TRIGGER,  handle_rollstat)
+        # The chat's numbers are for the streamer: not in the help, silent for anyone else
+        add(STATS_TRIGGER,     handle_stats,     prefix=True, broadcaster=True)
+        # Longer triggers first, by the rule above. The game's commands take a prefix only
+        # to answer «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out of !roll
+        add(ROLLSTAT_TRIGGER,  handle_rollstat,  prefix=True)
+        # The month's board is the same for everyone and sits on the stream for a while:
+        # one shared pause, like help
+        add(ROLLBOARD_TRIGGER, handle_rollboard, prefix=True, public=True)
         add(ROLL_TRIGGER,      handle_roll,      prefix=True)
         add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=Kind.GEMINI)
         add(WHO_TRIGGER,       handle_who,       prefix=True, kind=Kind.GEMINI)
@@ -196,6 +199,8 @@ class ChatComponent(commands.Component):
         await roll_tiers_on_chat(self.bot, session_id, message.chatter)
 
         if entry is None and prompt is None:
+            return
+        if entry is not None and entry.broadcaster and not message.chatter.broadcaster:
             return
 
         user = message.chatter.name

@@ -97,12 +97,12 @@ async def test_a_channel_command_takes_no_personal_cooldown(db, component, monke
     """!tg must not hold back !roll, nor the other way round."""
     _channel('### !tg', 'телега')
     stat = AsyncMock()
-    monkeypatch.setattr(component._registry.resolve('!stat'), 'handler', stat)
-    await component.event_message(make_message('!stat', make_chatter('gop')))
+    monkeypatch.setattr(component._registry.resolve('!rollstat'), 'handler', stat)
+    await component.event_message(make_message('!rollstat', make_chatter('gop')))
     message = make_message('!tg', make_chatter('gop'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('телега')
-    await component.event_message(make_message('!stat', make_chatter('kek')))
+    await component.event_message(make_message('!rollstat', make_chatter('kek')))
     assert stat.await_count == 2
 
 

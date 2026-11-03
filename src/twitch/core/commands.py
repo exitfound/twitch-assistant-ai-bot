@@ -15,6 +15,10 @@ Handler = Callable[['CommandContext'], Awaitable[None]]
 # Separators between the trigger and the args: "!who ник", "!ask: вопрос"
 ARG_SEPARATORS = ' :,'
 
+# Cooldown scope of the public commands (help, the channel's own, !rollboard): one per
+# trigger for the whole chat, keyed by the trigger
+PUBLIC_SCOPE = 'public'
+
 # Command classes. Local ones answer from SQLite and CONTENT.md at no cost, a Gemini
 # call costs money, waiting and a semaphore slot. The class is also the cooldown scope,
 # while the status ladder is shared – see _cooldown_seconds() in src/twitch/core/component.py.
@@ -80,6 +84,8 @@ class CommandEntry:
     # Served without the follow check: help and the channel's own commands are how a
     # newcomer learns about the channel in the first place
     public: bool = False
+    # The broadcaster's own command: anyone else's is dropped silently, before the gate
+    broadcaster: bool = False
 
     def match(self, prompt: str) -> bool:
         if not self.prefix:
@@ -104,13 +110,15 @@ class CommandRegistry:
     def add(self, trigger: str, handler: Handler, *,
             prefix: bool = False,
             kind: Kind = Kind.LOCAL,
-            public: bool = False) -> None:
+            public: bool = False,
+            broadcaster: bool = False) -> None:
         self._entries.append(CommandEntry(
             trigger=trigger,
             handler=handler,
             prefix=prefix,
             kind=kind,
             public=public,
+            broadcaster=broadcaster,
         ))
 
     def set_fallback(self, resolve: Callable[[str], CommandEntry | None]) -> None:

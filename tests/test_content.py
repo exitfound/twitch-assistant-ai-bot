@@ -120,7 +120,7 @@ def test_reward_titles_and_descriptions_fit_twitch(real_content, monkeypatch):
 
 _FULL = {'target': 'victim', 'old_value': 10, 'value': 20, 'free_left': 2, 'loser': ('loser', 3),
          'champion': ('champ', 99), 'ceiling': 75, 'next_ceiling': 65, 'curse_minutes_left': 12,
-         'protect_minutes_left': 7, 'limit': 5}
+         'guard_minutes': 7, 'wait_minutes': 9, 'limit': 5, 'sglaz': True}
 
 
 @pytest.mark.parametrize('action', list(game.Action))

@@ -993,11 +993,19 @@ async def test_a_swap_skips_the_shielded_the_blessed_and_the_equal(db, swap):
     await _players(buyer=10, shielded=90, blessed=80, same=10)
     assert (await redeem(game.Action.SHIELD, 'shielded')).ok
     await add_perk(S, 'blessed', game.Perk.SHIELD, 'previous')
+    # A free player with the buyer's number is left: the refusal names the number, not the guards
     refused = await redeem(game.Action.FLASK, 'buyer')
-    assert refused.status == game.Status.NO_PARTNER
+    assert refused.status == game.Status.SAME_ROLL
     await game.appear(S, 'blessed')
-    assert (await redeem(game.Action.FLASK, 'buyer')).status == game.Status.NO_PARTNER
+    assert (await redeem(game.Action.FLASK, 'buyer')).status == game.Status.SAME_ROLL
     assert (await get_perk(S, 'blessed', game.Perk.SHIELD)).active_until is not None
+
+
+async def test_everyone_else_guarded_is_its_own_refusal(db, swap):
+    await _players(buyer=10, shielded=90, blessed=80)
+    assert (await redeem(game.Action.SHIELD, 'shielded')).ok
+    await add_perk(S, 'blessed', game.Perk.SHIELD, 'previous')
+    assert (await redeem(game.Action.FLASK, 'buyer')).status == game.Status.NO_PARTNER
 
 
 async def test_a_swap_skips_players_another_swap_holds(db, swap):
@@ -1699,9 +1707,12 @@ async def test_a_lone_buyer_gets_no_flask_and_learns_nothing(db, monkeypatch):
     """With nobody a swap could draw the flask is refused before the draw, as without a roll:
     a refund after it would be a free redraw, and the text names no flask."""
     monkeypatch.setattr(game, 'FLASKS', {game.Flask.LUCK: 1})
-    await _players(buyer=50, same=50)
+    await _players(buyer=50)
     refused = await redeem(game.Action.FLASK, 'buyer')
-    assert (refused.status, refused.flask) == (game.Status.NO_PARTNER, None)
+    assert (refused.status, refused.flask) == (game.Status.NO_PLAYERS, None)
+    await _players(same=50)
+    refused = await redeem(game.Action.FLASK, 'buyer')
+    assert (refused.status, refused.flask) == (game.Status.SAME_ROLL, None)
     await _players(other=70)
     assert (await redeem(game.Action.FLASK, 'buyer')).ok
 

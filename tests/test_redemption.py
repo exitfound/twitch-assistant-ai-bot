@@ -315,7 +315,8 @@ async def test_a_swap_drunk_again_names_the_longer_hold(db, swap):
 
 @pytest.mark.parametrize(('rolls', 'text'), [
     ({}, 'texts.reward_refund_flask_no_roll'),
-    ({'gop': 10}, 'texts.reward_refund_flask_no_partner'),
+    ({'gop': 10}, 'texts.reward_refund_flask_no_players'),
+    ({'gop': 10, 'other': 10}, 'texts.reward_refund_flask_same_roll'),
 ])
 async def test_a_swap_with_nothing_to_trade_is_refunded(db, swap, rolls, text):
     bot = FakeBot()
@@ -323,6 +324,16 @@ async def test_a_swap_with_nothing_to_trade_is_refunded(db, swap, rolls, text):
         await save_roll(bot.session_id, user, value, free_throw=True)
     assert await redeem(bot, game.Action.FLASK, 'r1', 'gop', '') is False
     bot.send_chat_message.assert_awaited_once_with(text)
+
+
+async def test_a_flask_with_everyone_else_shielded_says_so(db, swap):
+    bot = FakeBot()
+    await save_roll(bot.session_id, 'gop', 10, free_throw=True)
+    await save_roll(bot.session_id, 'other', 90, free_throw=True)
+    assert await redeem(bot, game.Action.SHIELD, 'r1', 'other', '') is True
+    bot.send_chat_message.reset_mock()
+    assert await redeem(bot, game.Action.FLASK, 'r2', 'gop', '') is False
+    bot.send_chat_message.assert_awaited_once_with('texts.reward_refund_flask_no_partner')
 
 
 async def test_a_reroll_on_a_held_player_is_refunded(db, swap):

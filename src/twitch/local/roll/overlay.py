@@ -4,7 +4,7 @@ GET /roll/        – the page (overlay.html), the Browser Source in OBS
 GET /roll/events  – text/event-stream, event `roll`: the state on connect, then every event
 GET /roll/state   – the state once, for a quick look from a browser
 
-The state carries the regalia too: the strip under the titles that board.regalia() counts.
+The state carries the regalia too: the strip above the titles that board.regalia() counts.
 
 The callers that tell chat about the game tell the page too; publish() never raises and
 never waits, so the game and chat are unaffected by the page. Nicks leave the port here,
@@ -150,7 +150,7 @@ def board(month: str, final: bool, streams: int,
 def regalia(month: str, starts: float, ends: float, leaders: tuple[list[str], int], titles: int, *,
             last_month: str | None = None, last_champions: tuple[list[str], int] = ([], 0),
             last_losers: tuple[list[str], int] = ([], 0)) -> dict:
-    """The strip under the titles: the last month's first places and the race of this one.
+    """The strip above the titles: the last month's first places and the race of this one.
 
     starts / ends – the month's bounds in epoch seconds of BOT_TIMEZONE, so the page counts the
     days left itself; titles – the count behind this month's first place among the champions.

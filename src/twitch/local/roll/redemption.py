@@ -54,6 +54,8 @@ _REFUND = {
     game.Status.FLASK_GUARDED: 'reward_refund_flask_guarded',
     game.Status.NO_ROLL: 'reward_refund_flask_no_roll',
     game.Status.NO_PARTNER: 'reward_refund_flask_no_partner',
+    game.Status.NO_PLAYERS: 'reward_refund_flask_no_players',
+    game.Status.SAME_ROLL: 'reward_refund_flask_same_roll',
     game.Status.LUCK_GUARDED: 'reward_refund_luck_guarded',
     game.Status.AGONY_LOCK: 'reward_refund_agony_lock',
     game.Status.BLESS_LOCK: 'reward_refund_bless_lock',

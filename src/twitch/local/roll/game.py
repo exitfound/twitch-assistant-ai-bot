@@ -86,7 +86,9 @@ class Status(StrEnum):
     UNDER_FLASK = 'under_flask'             # a throw or reroll by a player a swap holds
     FLASK_GUARDED = 'flask_guarded'         # a reroll on a player a swap holds
     NO_ROLL = 'no_roll'                     # a flask by a buyer who has not rolled
-    NO_PARTNER = 'no_partner'               # a flask while a swap would have nobody to swap with
+    NO_PARTNER = 'no_partner'               # a flask while a shield, a Благодать or a swap holds everyone else
+    NO_PLAYERS = 'no_players'               # a flask while nobody else has rolled
+    SAME_ROLL = 'same_roll'                 # a flask while every free player has the buyer's roll
     LUCK_GUARDED = 'luck_guarded'           # a curse on a player the luck flask holds
     AGONY_LOCK = 'agony_lock'               # a reroll, curse, shield or cleanse while АГОНИЯ ЧЕРНОМИРЬЯ holds
     BLESS_LOCK = 'bless_lock'               # the same while БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА holds
@@ -769,7 +771,7 @@ async def _flask(session_id: str, actor: str, redemption_id: str, flask: Flask,
     # The same for a swap with nobody to swap with: the effect stays hidden
     partners = await _partners(session_id, actor, row)
     if not partners:
-        return Outcome(Status.NO_PARTNER, target=actor)
+        return Outcome(await _why_no_partner(session_id, actor), target=actor)
     mode = await _mass(session_id)
     if flask == Flask.SWAP:
         return await _swap(session_id, actor, row, partners)
@@ -832,14 +834,28 @@ async def _luck_left(session_id: str, user: str) -> int | None:
     return None if run is None else rules.whole_minutes(run.end - time.time())
 
 
-async def _partners(session_id: str, actor: str, row: RollRow) -> list[tuple[str, int]]:
-    """Who a swap could draw, (name, roll): those it would change something for – not a player a
-    shield, a Благодать or another swap holds, and not one with the buyer's own number."""
+async def _blocked(session_id: str) -> set[str]:
+    """Who a swap may not draw now: a shield, a Благодать or another swap holds them."""
     now = time.time()
-    blocked = (await get_shielded(session_id, now, Rewards.SHIELD_MINUTES * 60)
-               | await get_held(session_id, now, Rewards.FLASK_MINUTES * 60))
+    return (await get_shielded(session_id, now, Rewards.SHIELD_MINUTES * 60)
+            | await get_held(session_id, now, Rewards.FLASK_MINUTES * 60))
+
+
+async def _partners(session_id: str, actor: str, row: RollRow) -> list[tuple[str, int]]:
+    """Who a swap could draw, (name, roll): those it would change something for – not a player
+    _blocked() names, and not one with the buyer's own number."""
+    blocked = await _blocked(session_id)
     return [(name, value) for name, value in await get_players(session_id)
             if name != actor and value != row.value and name not in blocked]
+
+
+async def _why_no_partner(session_id: str, actor: str) -> Status:
+    """Why _partners() came up empty, for the refusal's text: nobody else rolled, everyone else
+    is held, or every free player has the buyer's number."""
+    others = {name for name, _ in await get_players(session_id) if name != actor}
+    if not others:
+        return Status.NO_PLAYERS
+    return Status.NO_PARTNER if others <= await _blocked(session_id) else Status.SAME_ROLL
 
 
 async def _swap(session_id: str, actor: str, row: RollRow, partners: list[tuple[str, int]]) -> Outcome:

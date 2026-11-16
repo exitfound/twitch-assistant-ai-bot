@@ -14,7 +14,7 @@
                            с новым; 0 – видны всегда
     board=10               сколько секунд плашка !rollboard («Китежанин месяца») стоит напротив титулов
     nicks=0                ники заменяются на «Игрок 1, 2…»
-    regalia=0              без полосы под титулами: победители прошлого месяца, шкала и лидер этого
+    regalia=0              без полосы над титулами: победители прошлого месяца, шкала и лидер этого
     demo=1                 страница сама играет – проверить вид без эфира и без бота; встроенную в другую
                            страницу ведут сообщения postMessage: {make: 'curse'}, {auto: false}, {live: false}
     demo=mass              то же, но по кругу АГОНИЯ ЧЕРНОМИРЬЯ и БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА с бросками между ними
@@ -49,7 +49,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
   --o-num: 'Unbounded', 'Golos Text', sans-serif;
   --o-radius: .5cqw; --o-border: .12cqw solid var(--o-line); --o-shadow: 0 .6cqw 2cqw #0009;
   /* The gap between the frame's edge and the plates: the titles, the board and the feed share it */
-  --o-edge: calc(1.6cqw - 10px);
+  --o-edge: calc(1.6cqw - 13px);
   color: var(--o-fg); font-family: var(--o-body);
 }
 .stage[data-layout="feed"] { left: auto; right: 0; }
@@ -222,8 +222,9 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .title .val { color: var(--ink, var(--tone)); }
 .title.changed { animation: flash .9s ease-out; }
 
-/* ---------- regalia: the strip under the titles, it fades with them ---------- */
-/* The last month's first places, this month's days on a bar and its leader. Across both columns of hud */
+/* ---------- regalia: the strip above the titles, it fades with them ---------- */
+/* The last month's first places, this month's days on a bar and its leader. Across both columns of hud.
+   Set like a title plate: the label in the display face tinted by its row, the nicks bold, numbers in Unbounded */
 .regalia {
   grid-column: 1 / -1; display: grid; gap: .3cqw; padding: .5cqw .9cqw .6cqw; min-width: 0;
   background: var(--o-bg); border: var(--o-border); border-radius: var(--o-radius); box-shadow: var(--o-shadow);
@@ -236,9 +237,11 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 .regalia .ico { width: 1.2cqw; height: 1.2cqw; color: var(--ink, var(--tone)); }
 .regalia .ico svg { width: 100%; height: 100%; display: block; }
 .regalia .r-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.regalia b { color: var(--o-fg); font-weight: 700; }
+.regalia .r-lbl { font: .92cqw/1.3 var(--o-display); color: var(--o-muted); color: color-mix(in srgb, var(--tone) 40%, var(--o-fg)); }
+.regalia .r-row .r-lbl::after { content: ':'; }
+.regalia b { color: var(--o-fg); font: 700 .92cqw/1.3 var(--o-body); }
+.regalia .r-val { font: 900 .85cqw/1 var(--o-num); font-variant-numeric: tabular-nums; color: var(--ink, var(--tone)); }
 .regalia .r-month { display: grid; grid-template-columns: 1.2cqw auto 1fr auto; align-items: center; column-gap: .5cqw; white-space: nowrap; }
-.regalia .r-month b { margin-right: .1cqw; }
 .regalia .r-bar { height: .35cqw; border-radius: .2cqw; background: rgba(255, 255, 255, .1); overflow: hidden; }
 .regalia .r-bar i { display: block; height: 100%; width: var(--p); background: linear-gradient(90deg, var(--o-line), var(--o-light)); }
 /* The last month's champion wears a crown next to the nick, on cards and title plates */
@@ -295,14 +298,14 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 /* ---------- layout: titles in the top left corner, one event slot right under them ---------- */
 /* An empty titles plate keeps its place, so the slot never jumps when it appears; the outgoing
    and the incoming card share one grid cell and cross-fade */
-.overlay[data-layout="left"] { display: flex; flex-direction: column; align-items: flex-start; gap: 1.8cqw; padding: var(--o-edge); }
+.overlay[data-layout="left"] { display: flex; flex-direction: column; align-items: flex-start; gap: calc(1.8cqw - 15px); padding: var(--o-edge); }
 .overlay[data-layout="left"] .titles, .overlay[data-layout="left"] .list { width: 27.75cqw; }
 .overlay[data-layout="left"] .list { display: grid; }
 .overlay[data-layout="left"] .list .card { grid-area: 1 / 1; }
 /* Three lines tall whatever the card holds – heading, nick, hint – so a plain Roll is as high
-   as a card with a hint and the slot does not jump; the title plates take the same height */
-.overlay[data-layout="left"] .card, .overlay[data-layout="feed"] .card,
-.overlay[data-layout="left"] .title, .overlay[data-layout="feed"] .title { grid-template-rows: minmax(3.75cqw, auto); }
+   as a card with a hint and the slot does not jump; a title plate holds two lines and is 5px lower */
+.overlay[data-layout="left"] .card, .overlay[data-layout="feed"] .card { grid-template-rows: minmax(3.75cqw, auto); }
+.overlay[data-layout="left"] .title, .overlay[data-layout="feed"] .title { grid-template-rows: minmax(calc(3.75cqw - 5px), auto); }
 
 /* ---------- layout: one big card in the centre ---------- */
 .overlay[data-layout="card"] .titles { display: none; }
@@ -316,7 +319,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
 
 /* ---------- layout: titles bar at the bottom + short lines ---------- */
 /* Each title as wide as in the feed (26.25cqw): a narrower one runs the label into a 100. A column
-   growing from the bottom: the strip under the titles lifts the lines with them instead of under them */
+   growing from the bottom: the strip above the titles lifts the lines with them instead of running into them */
 .overlay[data-layout="hud"] { display: flex; flex-direction: column; justify-content: flex-end; align-items: flex-start;
   gap: 2.3cqw; padding: 0 0 var(--o-edge) 22.4cqw; }
 .overlay[data-layout="hud"] .titles { width: 53cqw; grid-template-columns: 1fr 1fr; }
@@ -441,7 +444,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     board: 'Китежанин месяца', boardNow: '{month}, число стримов: {n}', boardFinal: 'итоги за {month}, число стримов: {n}',
     boardWorst: 'Подзалупные китежане', boardBest: 'Достойнейшие китежане', boardNobody: 'никого', boardMore: 'и ещё {n}', boardDrawn: 'жребий',
     months: ['январь', 'февраль', 'март', 'апрель', 'май', 'июнь', 'июль', 'август', 'сентябрь', 'октябрь', 'ноябрь', 'декабрь'],
-    // The strip under the titles: {month} – the month in the genitive, {n} – a number
+    // The strip above the titles: {month} – the month in the genitive, {n} – a number
     monthsOf: ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'],
     rBest: 'Китежанин {month}', rBestMany: 'Китежане {month}', rWorst: 'Подзалупыш {month}', rWorstMany: 'Подзалупыши {month}',
     rLead: 'Лидер {month}', rLeadMany: 'Лидеры {month}', rNobody: 'пока никого', rMore: 'и ещё {n}',
@@ -638,7 +641,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
         + '<div style="min-width:0"><div class="lbl">' + esc(TEXT[kind]) + '</div>'
         + '<div class="nick">' + (t ? rich(nick(t.nick)) : '–') + '</div></div><div class="val">' + (t ? t.value : '') + '</div></div>';
     }
-    titlesEl.innerHTML = row('best') + row('worst') + stripHtml();
+    titlesEl.innerHTML = stripHtml() + row('best') + row('worst');
     showTitles();
     return changes;
   }
@@ -656,7 +659,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     showTitles();
   }
 
-  // ---------- regalia: the strip under the titles ----------
+  // ---------- regalia: the strip above the titles ----------
   // From the bot at start and when a stream starts or ends; the days left are counted here, every minute
   var regalia = null;
   function stripHtml() {
@@ -670,7 +673,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
     }
     function row(kind, icon, label, body) {
       return '<div class="r-row ' + kind + '"><div class="ico">' + ICON[icon] + '</div><div class="r-text">'
-        + esc(label) + ': ' + body + '</div></div>';
+        + '<span class="r-lbl">' + esc(label) + '</span> ' + body + '</div></div>';
     }
     // Last month's winners, then this month's leader, then the days left in it
     var out = '';
@@ -684,20 +687,20 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
         nicks(last.losers, last.more.losers));
     }
     out += row('lead', 'spark', fill(r.leaders.length > 1 ? TEXT.rLeadMany : TEXT.rLead, { month: of(r.month) }),
-      r.leaders.length ? nicks(r.leaders, r.more) + ' ×' + r.titles : esc(TEXT.rNobody));
+      r.leaders.length ? nicks(r.leaders, r.more) + ' <span class="r-val">×' + r.titles + '</span>' : esc(TEXT.rNobody));
     var now = Date.now() / 1000, span = r.ends - r.starts;
     var share = Math.min(1, Math.max(0, (now - r.starts) / span));
     var days = Math.ceil((r.ends - now) / 86400);
     var left = days <= 0 ? TEXT.rAfter : days === 1 ? TEXT.rLastDay : fill(TEXT.rDays, { n: days });
     var month = TEXT.months[Number(String(r.month).slice(5, 7)) - 1] || r.month;
-    out += '<div class="r-month"><div class="ico">' + ICON.hourglass + '</div><b>' + esc(month.charAt(0).toUpperCase() + month.slice(1)) + '</b>'
-      + '<div class="r-bar"><i style="--p:' + (100 * share).toFixed(1) + '%"></i></div><span>' + esc(left) + '</span></div>';
+    out += '<div class="r-month"><div class="ico">' + ICON.hourglass + '</div><span class="r-lbl">' + esc(month.charAt(0).toUpperCase() + month.slice(1)) + '</span>'
+      + '<div class="r-bar"><i style="--p:' + (100 * share).toFixed(1) + '%"></i></div><span class="r-lbl">' + esc(left) + '</span></div>';
     return '<div class="regalia">' + out + '</div>';
   }
   function updateStrip() {
     var el = titlesEl.querySelector('.regalia'), html = stripHtml();
     if (el) el.outerHTML = html;
-    else if (html) titlesEl.insertAdjacentHTML('beforeend', html);
+    else if (html) titlesEl.insertAdjacentHTML('afterbegin', html);
   }
   function setRegalia(r) {
     regalia = r || null;

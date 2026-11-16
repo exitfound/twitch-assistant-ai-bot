@@ -87,6 +87,7 @@ REQUIRED = {
         'reward_refund_perk_shield', 'reward_refund_offline', 'reward_refund_follow', 'reward_refund_not_cursed',
         'reward_refund_cleansed', 'reward_refund_flask_limit', 'reward_refund_under_flask',
         'reward_refund_flask_guarded', 'reward_refund_flask_no_roll', 'reward_refund_flask_no_partner',
+        'reward_refund_flask_no_players', 'reward_refund_flask_same_roll',
         'reward_refund_luck_guarded', 'reward_refund_agony_lock', 'reward_refund_bless_lock',
         'reward_error', 'rewards_down',
         'ask_usage', 'ask_error',

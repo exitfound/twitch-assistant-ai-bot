@@ -12,7 +12,7 @@ from src.twitch.core.chat_socket import SocketWatch, check_private_api, keep_mig
 from src.twitch.core import sse
 from src.twitch.core.component import ChatComponent
 from src.twitch.core.followers import FollowerCache
-from src.core.config import Emote, Help, Mascot, Memory, Proactive, Pulse, Rewards, Roll, Twitch
+from src.core.config import Emote, Film, Help, Mascot, Memory, Proactive, Pulse, Rewards, Roll, Twitch
 from src.core.content import Content
 from src.core.cooldowns import Cooldowns
 from src.twitch.core.stream import StreamTracker, watch_stream
@@ -26,7 +26,7 @@ from src.gemini.memory import build as memory
 from src.twitch.gemini.proactive import proactive_loop
 from src.twitch.gemini.pulse import pulse_loop
 from src.twitch.local.emote_spam import emote_spam_loop
-from src.twitch.local import clip
+from src.twitch.local import clip, film, film_bridge
 from src.twitch.local.help_announce import help_loop
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot.feed import mascot_loop
@@ -48,6 +48,9 @@ REWARDS_RETRY_MAX_SECONDS = 600
 # How long a mass flask waits for Twitch's chat list before it takes who has written instead
 CHATTERS_TIMEOUT = 5
 
+
+# The cinema hall's session left open at the stream end, closed after the resume window
+FILM_CLOSE_TASK = 'film_close'
 
 class Bot(commands.Bot):
 
@@ -177,6 +180,8 @@ class Bot(commands.Bot):
     async def stream_went_online(self, stream_id: str, started_at: float) -> None:
         """Stream is live: stream session, rewards open, old curses gone, perks."""
         await self.stream.online(stream_id, started_at)
+        # Back within the resume window: the same stream, the cinema hall stays open
+        self._tasks.cancel(FILM_CLOSE_TASK)
         await self._rewards.set_open(True)
         await self.tell_rewards_down()
         await roll_overlay.refresh(self.session_id, live=True)
@@ -188,7 +193,12 @@ class Bot(commands.Bot):
         """Stream ended: session by date, game closed, rewards paused."""
         # The overlay keeps the titles of the stream that ended, not of the date session after it
         ended = self.session_id
+        # A rerun or a premiere ending, or a redelivered offline, ends no stream of ours
+        was_live = self.stream.stream_id is not None
         await self.stream.offline()
+        # Before the steps below: one of them failing must not leave the hall open
+        if Film.ENABLED and was_live:
+            self._tasks.start(FILM_CLOSE_TASK, lambda: film.close_after_stream(self), once=True)
         await self._rewards.set_open(False)
         await roll_overlay.refresh(ended, live=False)
         await roll_board.regalia(ended, live=False)
@@ -286,6 +296,12 @@ class Bot(commands.Bot):
             self._tasks.start('overlays', lambda: sse.serve(app, feeds, Mascot.HOST, Mascot.PORT))
 
     def _start_background_tasks(self) -> None:
+        # The !film commands work without the channel id, so the session they open needs
+        # its heartbeat too, or the gate ends it after GATE_LEASE_SECONDS
+        if Film.ENABLED:
+            self._tasks.start('film_heartbeat', lambda: film.heartbeat_loop(self))
+        if Film.BRIDGE and self._tasks.start('film_bridge', film_bridge.bridge_loop):
+            logger.info('Мост чата Twitch в кинозал включён (пока открыт сеанс)')
         if not self._channel_id:
             if Proactive.ENABLED or Emote.SPAM_ENABLED or Rewards.ENABLED:
                 logger.warning('ID канала не получен – фоновые задачи не запущены')
@@ -420,14 +436,20 @@ class Bot(commands.Bot):
             await self._start_rewards()
 
     async def close(self, **options) -> None:
+        # close() runs more than once on shutdown; the hall is closed by the first one
+        first = not self._shutting_down
         # The chat watch must not resubscribe a bot that is shutting down
         self._shutting_down = True
         # The loops go first: they send to chat and call Helix through the HTTP session
         # that super().close() is about to close
         await self.stop_background_tasks()
         # Pause rewards before the HTTP session closes: without the bot a redemption
-        # would take the points, and nobody would be there to apply it
+        # would take the points, and nobody would be there to apply it. Before the hall:
+        # a gate that does not answer takes up to 4 s of the container's 10
         await self._rewards.stop()
+        # The cinema hall lives while the bot does; the chat line needs the HTTP session too
+        if Film.ENABLED and first:
+            await film.close_on_shutdown(self)
         await super().close(**options)
 
     async def send_chat_message(self, text: str) -> bool:

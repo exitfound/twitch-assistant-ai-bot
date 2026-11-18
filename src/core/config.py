@@ -129,6 +129,29 @@ def _env_logins(name: str, default: str) -> frozenset[str]:
     return frozenset(part.strip().lstrip('@').lower() for part in logins.split(',') if part.strip())
 
 
+# Viewer roles a command may be limited to: `all` – anyone, `follower` – a follow checked
+# through Helix, the rest are chat badges
+ROLES = frozenset({'all', 'follower', 'vip', 'sub', 'mod', 'broadcaster'})
+
+
+def _env_roles(name: str, default: str) -> frozenset[str]:
+    """Comma-separated roles from ROLES; an unknown one is skipped with a warning, none left – the default."""
+    raw = _env_raw(name)
+    roles = set()
+    for part in (raw or default).split(','):
+        part = part.strip().lower()
+        if not part:
+            continue
+        if part in ROLES:
+            roles.add(part)
+        else:
+            logger.warning('%s: %r – неизвестная роль (%s), пропущена', name, part, ', '.join(sorted(ROLES)))
+    if not roles:
+        logger.warning('%s=%r: ни одной роли, используется %s', name, raw, default)
+        return frozenset(default.split(','))
+    return frozenset(roles)
+
+
 def _env_zone(name: str, default: str) -> ZoneInfo:
     """A time zone by its IANA name. A wrong name stops the start: falling back to UTC
     would silently move every session id and memory key by hours."""
@@ -291,12 +314,25 @@ class Clip:
     MIN_SECONDS, DEFAULT_SECONDS = _clip_lengths()
 
 
-class Kino:
-    # !кино: the cinema hall's site and the API token of its gate, which holds the session
-    # and its code. Without either the command is not registered
-    URL: str | None = (_env_raw('KINO_URL') or '').rstrip('/') or None
-    API_TOKEN: str | None = _env_raw('KINO_API_TOKEN')
+class Film:
+    # !film: the cinema hall's site and the API token of its gate, which holds the session,
+    # its code and the film's title. Without either the commands are not registered
+    URL: str | None = (_env_raw('FILM_URL') or '').rstrip('/') or None
+    API_TOKEN: str | None = _env_raw('FILM_API_TOKEN')
     ENABLED: bool = bool(URL and API_TOKEN)
+    # Who gets the link, the code and the title, and who opens, renames and closes a
+    # session; the broadcaster always may
+    INFO_ACCESS: frozenset[str] = _env_roles('FILM_INFO_ACCESS', 'follower,vip,sub,mod')
+    CONTROL_ACCESS: frozenset[str] = _env_roles('FILM_CONTROL_ACCESS', 'broadcaster')
+    # The chat bridge while a session is open: Twitch chat into the hall's chat through the
+    # gate. The hall's lines come to Twitch from the gate, as the viewers themselves
+    BRIDGE: bool = ENABLED and _env_bool('FILM_BRIDGE', False)
+    # The mark the gate puts before a hall line in Twitch (HALL_MARK on its server): such a
+    # line is not bridged back. Empty – nothing is left out
+    HALL_MARK: str = (_env_raw('FILM_HALL_MARK') or '[KINOZAL]').strip()
+    # While a session is open the bot repeats the link and the code every REMIND_MINUTES,
+    # the first time that long after the start's own announcement. 0 – no reminders
+    REMIND_MINUTES: int = _env_int('FILM_REMIND_MINUTES', 15, 0, 240)
 
 
 class Stream:

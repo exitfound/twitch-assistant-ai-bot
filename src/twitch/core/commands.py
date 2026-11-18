@@ -84,8 +84,11 @@ class CommandEntry:
     # Served without the follow check: help and the channel's own commands are how a
     # newcomer learns about the channel in the first place
     public: bool = False
-    # The broadcaster's own command: anyone else's is dropped silently, before the gate
-    broadcaster: bool = False
+    # Roles from config.ROLES allowed to use it; anyone else is dropped silently, a
+    # non-follower who would pass as a follower gets the follow hint. None – no limit
+    roles: frozenset[str] | None = None
+    # The texts key said to someone without the role; None – they are dropped silently
+    refusal: str | None = None
 
     def match(self, prompt: str) -> bool:
         if not self.prefix:
@@ -111,14 +114,16 @@ class CommandRegistry:
             prefix: bool = False,
             kind: Kind = Kind.LOCAL,
             public: bool = False,
-            broadcaster: bool = False) -> None:
+            roles: frozenset[str] | None = None,
+            refusal: str | None = None) -> None:
         self._entries.append(CommandEntry(
             trigger=trigger,
             handler=handler,
             prefix=prefix,
             kind=kind,
             public=public,
-            broadcaster=broadcaster,
+            roles=roles,
+            refusal=refusal,
         ))
 
     def set_fallback(self, resolve: Callable[[str], CommandEntry | None]) -> None:

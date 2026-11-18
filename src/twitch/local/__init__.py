@@ -5,6 +5,9 @@
     clip.py        !clip – a clip of the stream's last seconds
     film.py        !film – the cinema hall's link, code and film, its session opened, renamed, closed
     film_bridge.py the chat bridge Twitch ↔ cinema hall while a session is open
+    schedule.py    !schedule – the nearest stream from the channel's schedule on Twitch
+    project.py     !project – what the stream is working on, set by the streamer
+    lastseen.py    !lastseen – when a viewer last wrote in chat
     follow.py      reply to a new follow
     emote_spam.py  a batch of emotes in chat once per interval
     roll/          the «залупа стрима» (session loser) game: !roll, channel-points rewards,

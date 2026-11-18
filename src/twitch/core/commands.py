@@ -89,6 +89,8 @@ class CommandEntry:
     roles: frozenset[str] | None = None
     # The texts key said to someone without the role; None – they are dropped silently
     refusal: str | None = None
+    # About the channel, not the bot: listed by !channel beside the commands of CONTENT.md
+    channel: bool = False
 
     def match(self, prompt: str) -> bool:
         if not self.prefix:
@@ -115,7 +117,8 @@ class CommandRegistry:
             kind: Kind = Kind.LOCAL,
             public: bool = False,
             roles: frozenset[str] | None = None,
-            refusal: str | None = None) -> None:
+            refusal: str | None = None,
+            channel: bool = False) -> None:
         self._entries.append(CommandEntry(
             trigger=trigger,
             handler=handler,
@@ -124,7 +127,12 @@ class CommandRegistry:
             public=public,
             roles=roles,
             refusal=refusal,
+            channel=channel,
         ))
+
+    def channel_triggers(self) -> list[str]:
+        """The registered channel commands, in registration order."""
+        return [entry.trigger for entry in self._entries if entry.channel]
 
     def set_fallback(self, resolve: Callable[[str], CommandEntry | None]) -> None:
         """Commands not known at startup, looked up after the registered ones."""

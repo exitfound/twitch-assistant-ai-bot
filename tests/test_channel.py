@@ -1,6 +1,8 @@
 """The channel's own commands: a fixed reply from the `channel` section of CONTENT.md."""
 import logging
 import os
+import re
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -10,7 +12,7 @@ from src.core import content
 from src.twitch.core.component import ChatComponent
 from src.core.config import Cooldown, Follow
 from src.core.content import Content, validate_content
-from src.twitch.local.channel import MESSAGE_MAX
+from src.twitch.local.channel import MESSAGE_MAX, ChannelCommands
 from src.twitch.local.roll.command import handle_roll
 
 
@@ -23,9 +25,19 @@ def _channel(*lines: str) -> None:
     os.utime(path, (stat.st_atime, stat.st_mtime + 5))
 
 
+def _reply_template(template: str) -> None:
+    """Set texts.channel_reply, the wrapper around a reply without {user}."""
+    path = content.CONTENT_PATH
+    text = re.sub(r'(### channel_reply\n).*', lambda m: m.group(1) + template,
+                  path.read_text(encoding='utf-8'))
+    path.write_text(text, encoding='utf-8')
+
+
 @pytest.fixture
 def component(monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', True)
+    # The bare reply, so the tests of pauses and lengths see the command's own text
+    _reply_template('{reply}')
     return ChatComponent(FakeBot())
 
 
@@ -72,6 +84,23 @@ async def test_the_reply_goes_to_a_viewer_who_does_not_follow(db, component):
     await component.event_message(message)
     message.respond.assert_awaited_once_with('телега для gop')
     assert component.bot.follow_checks == 0
+
+
+async def test_a_reply_without_the_nick_is_addressed_to_whoever_asked(db, component):
+    _reply_template('@{user} – {reply}')
+    _channel('### !tg', 'телега – https://t.me/x')
+    message = make_message('!tg', make_chatter('gop'))
+    await component.event_message(message)
+    message.respond.assert_awaited_once_with('@gop – телега – https://t.me/x')
+
+
+def test_the_length_check_counts_the_nick_it_adds(component, caplog):
+    _reply_template('@{user} – {reply}')
+    # Fits alone, but not with «@» + 25 characters + « – » in front
+    _channel('### !edge', 'x' * (MESSAGE_MAX - 10))
+    with caplog.at_level(logging.WARNING):
+        component._route(make_message('привет'))
+    assert '!edge' in caplog.text
 
 
 async def test_a_command_is_not_saved_as_chat(db, component):
@@ -162,12 +191,14 @@ async def test_help_channel_fills_the_list(db, component):
     _channel('### !tg', 'телега', '### !donate', 'донат')
     message = make_message('!channel', make_chatter('gop'))
     await component.event_message(message)
-    message.respond.assert_awaited_once_with('@gop – !tg | !donate')
+    # The file's commands in file order, then the registered channel commands
+    message.respond.assert_awaited_once_with('@gop – !tg | !donate | !schedule | !project | !lastseen')
 
 
-async def test_help_channel_without_commands(db, component):
+async def test_help_channel_without_commands(db):
+    commands = ChannelCommands(lambda trigger: False)
     message = make_message('!channel', make_chatter('gop'))
-    await component.event_message(message)
+    await commands.handle_help(SimpleNamespace(message=message, user='gop'))
     message.respond.assert_awaited_once_with('texts.help_channel_empty')
 
 
@@ -189,3 +220,8 @@ def test_a_reply_or_a_list_too_long_for_twitch_is_logged(component, caplog):
         component._route(make_message('привет'))
     assert '!long' in caplog.text
     assert 'список !channel' in caplog.text
+
+
+def test_a_file_command_shadowed_by_a_bot_command_is_not_listed(component):
+    _channel('### !schedule', 'своё расписание', '### !tg', 'телега')
+    assert component._channel.listing().count('!schedule') == 1

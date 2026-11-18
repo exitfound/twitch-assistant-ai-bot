@@ -27,6 +27,7 @@ from src.twitch.gemini.proactive import proactive_loop
 from src.twitch.gemini.pulse import pulse_loop
 from src.twitch.local.emote_spam import emote_spam_loop
 from src.twitch.local import clip, film, film_bridge
+from src.twitch.local import schedule
 from src.twitch.local.help_announce import help_loop
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot.feed import mascot_loop
@@ -511,6 +512,12 @@ class Bot(commands.Bot):
                 logger.warning('Боту нужно право moderator:read:chatters и модерка в канале. Открой в '
                                'браузере и войди под аккаунтом бота:\n%s', oauth_link(BOT_LOGIN))
             return None
+
+    async def fetch_schedule(self) -> dict | None:
+        """The channel's schedule on Twitch (src/twitch/local/schedule.py); None – Twitch did not say."""
+        if not self._channel_id:
+            return None
+        return await schedule.fetch(self._http, self._channel_id)
 
     async def stop_background_tasks(self) -> None:
         await self._tasks.stop()

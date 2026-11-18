@@ -47,7 +47,11 @@ REQUIRED = {
         'pulse', 'dossier', 'catchphrases', 'dossier_facts', 'dossier_relations', 'chronicle', 'replied',
     ),
     'texts': (
-        'help', 'help_channel', 'help_channel_empty', 'help_announce', 'discord_help', 'discord_no_rights',
+        'help', 'help_channel', 'help_channel_empty', 'channel_reply', 'help_announce',
+        'schedule', 'schedule_slot', 'schedule_vacation', 'schedule_empty', 'schedule_failed',
+        'project', 'project_none', 'project_set', 'project_usage', 'project_too_long',
+        'lastseen', 'lastseen_unknown', 'lastseen_usage', 'lastseen_today', 'lastseen_yesterday', 'lastseen_date',
+        'discord_help', 'discord_no_rights',
         'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
         'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',
         'cooldown_local', 'cooldown_gemini', 'per_stream_no_left', 'per_stream_trial_used', 'sub_hint',
@@ -87,6 +91,7 @@ REQUIRED = {
         'reward_refund_perk_shield', 'reward_refund_offline', 'reward_refund_follow', 'reward_refund_not_cursed',
         'reward_refund_cleansed', 'reward_refund_flask_limit', 'reward_refund_under_flask',
         'reward_refund_flask_guarded', 'reward_refund_flask_no_roll', 'reward_refund_flask_no_partner',
+        'reward_refund_flask_no_players', 'reward_refund_flask_same_roll',
         'reward_refund_luck_guarded', 'reward_refund_agony_lock', 'reward_refund_bless_lock',
         'reward_error', 'rewards_down',
         'ask_usage', 'ask_error',
@@ -102,7 +107,7 @@ REQUIRED = {
         'versus_usage', 'versus_unknown', 'versus_unknown_one', 'versus_failed',
         'no_answer', 'filtered', 'gen_error', 'gen_failed',
     ),
-    'lists': ('emotes', 'follow', 'banned', 'voice_nicks', 'voice_words', 'months'),
+    'lists': ('emotes', 'follow', 'banned', 'voice_nicks', 'voice_words', 'months', 'weekdays'),
 }
 
 # The channel's own commands: `### !tg` and its reply. The keys are whatever the owner

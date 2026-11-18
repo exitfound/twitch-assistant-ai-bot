@@ -41,6 +41,8 @@ class FakeBot:
         self.create_clip = AsyncMock(return_value='https://clips.twitch.tv/FakeClip')
         # Who Twitch says is in chat; None – the list did not come
         self.fetch_chatters = AsyncMock(return_value=None)
+        # The channel's schedule as Helix gives it; None – Twitch did not say
+        self.fetch_schedule = AsyncMock(return_value={})
         self._cooldowns: dict[str, float] = {}
 
     def create_partialuser(self, user_id: str) -> SimpleNamespace:

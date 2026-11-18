@@ -95,6 +95,19 @@ async def get_user_messages(username: str, limit: int = 30) -> list[str]:
     return [row[0] for row in reversed(rows)]
 
 
+async def get_last_message_time(username: str) -> float | None:
+    """time.time() of the nick's last chat message, all time; None – never wrote."""
+    db = await get_db()
+    async with db.execute(
+        # Old rows may still hold commands: they are not what «last wrote» means
+        "SELECT CAST(strftime('%s', created_at) AS REAL) FROM chat_messages"
+        " WHERE username = ? AND message NOT LIKE '!%' ORDER BY id DESC LIMIT 1",
+        (username,),
+    ) as cursor:
+        row = await cursor.fetchone()
+    return row[0] if row else None
+
+
 async def has_chatted(username: str) -> bool:
     """Whether the nick has ever written in the channel chat, all time.
 

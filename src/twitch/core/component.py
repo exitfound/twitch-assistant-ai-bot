@@ -31,10 +31,12 @@ from src.twitch.gemini.commands import (
 )
 from src.twitch.gemini.picture import handle_ascii
 from src.twitch.local import channel
-from src.twitch.local.channel import handle_help_channel
 from src.twitch.local.clip import handle_clip
 from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
 from src.twitch.local.follow import handle_follow
+from src.twitch.local import project
+from src.twitch.local.lastseen import TRIGGER as LASTSEEN_TRIGGER, handle_lastseen
+from src.twitch.local.schedule import TRIGGER as SCHEDULE_TRIGGER, handle_schedule
 from src.twitch.local.mascot import feed as mascot
 from src.twitch.local.roll.board import TRIGGER as ROLLBOARD_TRIGGER, handle_rollboard
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
@@ -131,11 +133,15 @@ class ChatComponent(commands.Component):
         self._registry = CommandRegistry()
         self._seen: OrderedDict[str, None] = OrderedDict()
         add = self._registry.add
+        # The channel's own commands come from CONTENT.md and change while the bot runs;
+        # !channel lists them with the registered ones marked `channel`
+        self._channel = channel.ChannelCommands(lambda trigger: self._registry.resolve_own(trigger) is not None,
+                                                self._registry.channel_triggers)
         # All commands work as bare text, without addressing the bot.
         # Order matters: longer triggers are registered first.
         add(HELP_INDEX_TRIGGER, handle_help_index, public=True)
         add(HELP_TRIGGER,      handle_help,      public=True)
-        add(HELP_CHANNEL_TRIGGER, handle_help_channel, public=True)
+        add(HELP_CHANNEL_TRIGGER, self._channel.handle_help, public=True)
         # The chat's numbers are for the streamer: not in the help, silent for anyone else
         add(STATS_TRIGGER,     handle_stats,     prefix=True, broadcaster=True)
         # Longer triggers first, by the rule above. The game's commands take a prefix only
@@ -155,8 +161,13 @@ class ChatComponent(commands.Component):
             add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI)
         if Clip.ENABLED:
             add(CLIP_TRIGGER,  handle_clip,  prefix=True)
-        # The channel's own commands come from CONTENT.md and change while the bot runs
-        self._channel = channel.ChannelCommands(lambda trigger: self._registry.resolve_own(trigger) is not None)
+        # About the channel, not the bot: no follow needed, one answer for the whole chat
+        add(SCHEDULE_TRIGGER, handle_schedule, prefix=True, public=True, channel=True)
+        # The streamer sets the project, anyone asks; the longer trigger goes first
+        add(project.TITLE_TRIGGER, project.handle_project_title, prefix=True, broadcaster=True)
+        add(project.TRIGGER, project.handle_project, prefix=True, public=True, channel=True)
+        # Listed by !channel, but a personal cooldown: the nick differs from call to call
+        add(LASTSEEN_TRIGGER, handle_lastseen, prefix=True, channel=True)
         self._registry.set_fallback(self._channel.resolve)
         self._channel.check()
 

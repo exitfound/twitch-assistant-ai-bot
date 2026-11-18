@@ -3,6 +3,9 @@
     commands.py    !help, !bot, !stat
     channel.py     the channel's own commands (!tg …) from CONTENT.md, !channel
     clip.py        !clip – a clip of the stream's last seconds
+    schedule.py    !schedule – the nearest stream from the channel's schedule on Twitch
+    project.py     !project – what the stream is working on, set by the streamer
+    lastseen.py    !lastseen – when a viewer last wrote in chat
     follow.py      reply to a new follow
     emote_spam.py  a batch of emotes in chat once per interval
     roll/          the «залупа стрима» (session loser) game: !roll, channel-points rewards,

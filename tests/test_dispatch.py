@@ -11,7 +11,6 @@ from src.twitch.core.component import ChatComponent, route
 from src.core.config import Follow, Quota, Twitch
 from src.core.database import count_bot_uses, record_bot_use
 from src.twitch.gemini.commands import handle_who
-from src.twitch.local.channel import handle_help_channel
 from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
 from src.twitch.local.roll.board import handle_rollboard
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
@@ -139,7 +138,6 @@ async def test_stat_is_the_broadcasters_and_silent_for_anyone_else(db, monkeypat
 @pytest.mark.parametrize(('text', 'handler'), [
     ('!help', handle_help_index),
     ('!bot', handle_help),
-    ('!channel', handle_help_channel),
     ('!stat', handle_stats),
     ('!stat nick', handle_stats),
     ('!rollstat', handle_rollstat),
@@ -155,6 +153,10 @@ async def test_stat_is_the_broadcasters_and_silent_for_anyone_else(db, monkeypat
 def test_registry_resolves_the_real_commands(component, text, handler):
     entry = component._registry.resolve(text)
     assert (entry.handler if entry else None) is handler
+
+
+def test_help_channel_is_served_by_the_channel_commands(component):
+    assert component._registry.resolve('!channel').handler == component._channel.handle_help
 
 
 @pytest.mark.parametrize('text', ['!whoever', '!rolls', '!rollstats', 'привет'])

@@ -42,7 +42,7 @@ from src.gemini import client, fact_rest, pulse
 from src.twitch.gemini import commands
 from src.gemini.memory import build
 from src.twitch.gemini import picture as picture_command
-from src.twitch.local import clip, follow, help_announce
+from src.twitch.local import clip, follow, help_announce, schedule
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot import mood as mascot_mood
 from src.twitch.local.roll import game, perks, tiers
@@ -94,6 +94,7 @@ def _isolation(monkeypatch, tmp_path):
     monkeypatch.setattr(roll_board, '_announced', None)
     monkeypatch.setattr(tiers, '_written', {})
     monkeypatch.setattr(help_announce, '_help_shown_at', 0.0)
+    monkeypatch.setattr(schedule, '_cache', None)
     monkeypatch.setattr(follow, '_sent_at', collections.deque(maxlen=follow.GREETINGS_PER_MINUTE))
     monkeypatch.setattr(follow, '_greeted', set())
     monkeypatch.setattr(client, 'usage', {'prompt': 0, 'cached': 0, 'output': 0})

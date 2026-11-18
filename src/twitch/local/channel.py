@@ -2,7 +2,8 @@
 
 Nothing about the bot itself: links and the like, the way other chat bots serve them.
 The list is the `channel` section of CONTENT.md, re-read live, so a command added there
-works without a restart and shows up in !channel.
+works without a restart and shows up in !channel – beside the registered ones marked
+`channel` (!schedule), which need code.
 """
 import functools
 import logging
@@ -25,9 +26,12 @@ NICK_MAX = 25
 class ChannelCommands:
     """The registry's fallback: the section is checked again whenever it changes."""
 
-    def __init__(self, is_taken: Callable[[str], bool]) -> None:
+    def __init__(self, is_taken: Callable[[str], bool],
+                 registered: Callable[[], list[str]] = list) -> None:
         # Whether a bot command answers this trigger first
         self._is_taken = is_taken
+        # The registered channel commands, listed after the file's
+        self._registered = registered
         self._checked: dict[str, str] | None = None
 
     def resolve(self, prompt: str) -> CommandEntry | None:
@@ -45,40 +49,56 @@ class ChannelCommands:
         commands = Content.channel_commands()
         if commands != self._checked:
             self._checked = commands
-            _report(commands, self._is_taken)
+            _report(commands, self._is_taken, self._registered())
         return commands
 
+    def listing(self) -> list[str]:
+        """What !channel names: the file's commands in file order, then the registered ones."""
+        return _triggers(self.check(), self._is_taken, self._registered())
 
-def _report(commands: dict[str, str], is_taken: Callable[[str], bool]) -> None:
+    async def handle_help(self, ctx: CommandContext) -> None:
+        """!channel – the list of the channel's commands, without their replies."""
+        help_announce.note_help_shown()
+        triggers = self.listing()
+        if not triggers:
+            await reply(ctx.message, Content.text('help_channel_empty', user=ctx.user))
+            return
+        await reply(ctx.message, _listing(ctx.user, triggers))
+
+
+def _report(commands: dict[str, str], is_taken: Callable[[str], bool], registered: list[str]) -> None:
     shadowed = [trigger for trigger in commands if is_taken(trigger)]
     if shadowed:
         logger.error('CONTENT.md: команды канала %s совпадают с командами бота и не сработают',
                      ', '.join(shadowed))
     for trigger, text in commands.items():
-        if len(safe_format(text, user='x' * NICK_MAX)) > MESSAGE_MAX:
+        if len(_render(text, 'x' * NICK_MAX)) > MESSAGE_MAX:
             logger.warning('CONTENT.md: ответ %s длиннее %d символов – Twitch его не пропустит',
                            trigger, MESSAGE_MAX)
-    if commands and len(_listing('x' * NICK_MAX, commands)) > MESSAGE_MAX:
+    triggers = _triggers(commands, is_taken, registered)
+    if triggers and len(_listing('x' * NICK_MAX, triggers)) > MESSAGE_MAX:
         logger.warning('CONTENT.md: список !channel длиннее %d символов – Twitch его не пропустит',
                        MESSAGE_MAX)
 
 
-def _listing(user: str, commands: dict[str, str]) -> str:
-    return Content.text('help_channel', user=user, commands=' | '.join(commands))
+def _triggers(commands: dict[str, str], is_taken: Callable[[str], bool], registered: list[str]) -> list[str]:
+    # A file command shadowed by a bot command never answers: listing it would name one twice
+    return [*(trigger for trigger in commands if not is_taken(trigger)), *registered]
 
 
-async def handle_help_channel(ctx: CommandContext) -> None:
-    """!channel – the list of the channel's own commands, without their replies."""
-    help_announce.note_help_shown()
-    commands = Content.channel_commands()
-    if not commands:
-        await reply(ctx.message, Content.text('help_channel_empty', user=ctx.user))
-        return
-    await reply(ctx.message, _listing(ctx.user, commands))
+def _listing(user: str, triggers: list[str]) -> str:
+    return Content.text('help_channel', user=user, commands=' | '.join(triggers))
+
+
+def _render(text: str, user: str) -> str:
+    """A command's reply addressed to whoever asked: a text naming {user} places the nick itself."""
+    if '{user}' in text:
+        return safe_format(text, user=user)
+    return Content.text('channel_reply', user=user, reply=text)
 
 
 async def _answer(ctx: CommandContext, trigger: str) -> None:
     text = Content.channel_commands().get(trigger)
     # Removed from CONTENT.md between the lookup and the answer: nothing to say
     if text:
-        await reply(ctx.message, safe_format(text, user=ctx.user))
+        await reply(ctx.message, _render(text, ctx.user))

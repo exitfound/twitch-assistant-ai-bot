@@ -86,6 +86,8 @@ class CommandEntry:
     public: bool = False
     # The broadcaster's own command: anyone else's is dropped silently, before the gate
     broadcaster: bool = False
+    # About the channel, not the bot: listed by !channel beside the commands of CONTENT.md
+    channel: bool = False
 
     def match(self, prompt: str) -> bool:
         if not self.prefix:
@@ -111,7 +113,8 @@ class CommandRegistry:
             prefix: bool = False,
             kind: Kind = Kind.LOCAL,
             public: bool = False,
-            broadcaster: bool = False) -> None:
+            broadcaster: bool = False,
+            channel: bool = False) -> None:
         self._entries.append(CommandEntry(
             trigger=trigger,
             handler=handler,
@@ -119,7 +122,12 @@ class CommandRegistry:
             kind=kind,
             public=public,
             broadcaster=broadcaster,
+            channel=channel,
         ))
+
+    def channel_triggers(self) -> list[str]:
+        """The registered channel commands, in registration order."""
+        return [entry.trigger for entry in self._entries if entry.channel]
 
     def set_fallback(self, resolve: Callable[[str], CommandEntry | None]) -> None:
         """Commands not known at startup, looked up after the registered ones."""

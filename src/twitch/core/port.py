@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 class BotPort(Protocol):
-    """The session, the stream state, sending to chat, clips, the chat list and the cooldown store."""
+    """The session, the stream state, sending to chat, clips, the chat list, the schedule and the cooldown store."""
 
     @property
     def session_id(self) -> str: ...
@@ -34,6 +34,8 @@ class BotPort(Protocol):
     async def create_clip(self, seconds: int, title: str | None) -> str | None: ...
 
     async def fetch_chatters(self) -> set[str] | None: ...
+
+    async def fetch_schedule(self) -> dict | None: ...
 
     def cooldown_remaining(self, user: str, scope: str) -> float: ...
 

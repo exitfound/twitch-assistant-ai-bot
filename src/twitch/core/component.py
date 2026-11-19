@@ -173,8 +173,10 @@ class ChatComponent(commands.Component):
             add(film.START_TRIGGER, film.handle_film_start, prefix=True, **control)
             add(film.TITLE_TRIGGER, film.handle_film_title, prefix=True, **control)
             add(film.STOP_TRIGGER,  film.handle_film_stop,  **control)
-            # The link and the code are the same for everyone: one shared pause, like help
-            add(film.TRIGGER,       film.handle_film,       prefix=True, public=True, roles=Film.INFO_ACCESS)
+            # The link and the code are the same for everyone: one shared pause, like help.
+            # About the channel, not the bot: listed by !channel
+            add(film.TRIGGER,       film.handle_film,       prefix=True, public=True, roles=Film.INFO_ACCESS,
+                channel=True)
         # About the channel, not the bot: no follow needed, one answer for the whole chat
         add(SCHEDULE_TRIGGER, handle_schedule, prefix=True, public=True, channel=True)
         # The streamer sets the project, anyone asks; the longer trigger goes first

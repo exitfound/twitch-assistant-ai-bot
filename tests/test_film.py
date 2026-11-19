@@ -578,3 +578,14 @@ async def test_shutdown_with_the_gate_down_is_only_logged(hall):
     bot = FakeBot()
     await film.close_on_shutdown(bot)
     bot.send_chat_message.assert_not_awaited()
+
+
+def test_film_is_listed_by_help_channel_and_its_controls_are_not(hall):
+    listing = ChatComponent(FakeBot())._channel.listing()
+    assert '!film' in listing
+    assert not {'!film start', '!film title', '!film stop'} & set(listing)
+
+
+def test_without_the_hall_film_is_not_listed(monkeypatch):
+    monkeypatch.setattr(Film, 'ENABLED', False)
+    assert '!film' not in ChatComponent(FakeBot())._channel.listing()

@@ -128,7 +128,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `bot.py` – the entry point: `__main__` delegates to `src/cli/main.py`, otherwise `run_bot()` – logging, config and content checks, signal handling, the Twitch bot and, beside it, the Discord bot (`start_discord()` / `stop_discord()`: its own task, a failure there never stops Twitch), `close_db()` on the way out. BOT.md «Жизненный цикл бота»
 
 **core** (shared)
-- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_env_ids`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Roll`, `Rewards`, `Context`, `Memory`, `Pulse`, `Help`, `Proactive`, `Emote`, `Mascot`, `Discord` (with `missing()`), `Voice`
+- `config.py` – every environment variable, parsed and validated (`_env_int`, `_env_float`, `_env_bool`, `_env_percent`, `_env_ids`, `_interval_range()`), in classes `Files`, `Clock`, `Logging`, `Twitch`, `Gemini`, `Chat`, `Caps`, `Cooldown`, `Quota`, `Follow`, `PerStream`, `Picture`, `Clip`, `Stream`, `Film` (with `_env_roles()`), `Roll`, `Rewards`, `Context`, `Memory`, `Pulse`, `Help`, `Proactive`, `Emote`, `Mascot`, `Discord` (with `missing()`), `Voice`
 - `paths.py` – `DB_PATH`, `CONTENT_PATH`, `ACCENT_PATH`: `chat_history.db` in the repository root, `docs/CONTENT.md` and `ruaccent/`, or `BOT_DB_PATH` / `BOT_CONTENT_PATH` / `BOT_ACCENT_PATH` (the image sets it to the models it carries)
 - `content.py` – `CONTENT.md` access (`Content.prompt/label/text/items`), mtime cache, `REQUIRED`, `validate_content()`
 - `database.py` – facade re-exporting `src/core/db/`: callers import every query from here
@@ -143,7 +143,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `activity.py` – `ChatWatch`: «has anyone written since» for the chat loops
 - `cooldowns.py` – `Cooldowns` on the monotonic clock
 - `speech.py` – `say(text, source)` / `listen()`: an answer that reached a platform's chat, handed to whoever voices it; never blocks or raises. BOT.md «Голос в Discord»
-- `tasks.py` – `BackgroundTasks`: loops by name, never started twice; `once=True` for a task meant to finish
+- `tasks.py` – `BackgroundTasks`: loops by name, never started twice; `once=True` for a task meant to finish; `cancel(name)` for one task
 - `logging_setup.py` – `setup_logging()`, `make_formatter()` (log times in `BOT_TIMEZONE`, secrets replaced by `redact()`)
 - `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `safe_format`, `defuse`, `find_banned` (the stop list), `local_time`, `random_delay`, `gather_cancelling`. `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
 
@@ -165,7 +165,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 
 **twitch/core**
 - `component.py` – `ChatComponent`: the registry of all commands, `event_message`, the pure `route()` and the gate `_gate()` (follow, cooldown, quota), `event_follow`. BOT.md «Обработка сообщений»
-- `commands.py` – `CommandContext`, `CommandEntry` (`public` – served without the follow check; `channel` – a command about the channel, listed by `!channel`), `CommandRegistry` (`set_fallback()` – commands looked up after the registered ones, `channel_triggers()`), `Kind` (`StrEnum`: its values are the plain strings stored in cooldown keys and `bot_uses.kind`)
+- `commands.py` – `CommandContext`, `CommandEntry` (`public` – served without the follow check; `roles` / `refusal` – who may use it and what anyone else is told; `channel` – a command about the channel, listed by `!channel`), `CommandRegistry` (`set_fallback()` – commands looked up after the registered ones, `channel_triggers()`), `Kind` (`StrEnum`: its values are the plain strings stored in cooldown keys and `bot_uses.kind`)
 - `stream.py` – `StreamTracker` (session = stream, resume rules), `watch_stream()`, `fetch_live_stream()`, `end_from_vod()`. BOT.md «Сессии»
 - `chat_socket.py` – `SocketWatch` (resubscribes when no socket carries the chat or the redemption subscription; after a failure only the minute check retries), `check_private_api()`, `keep_migrated_sockets()` (keeps a migrated socket in twitchio's registry)
 - `tokens.py` – the bot's and the channel's tokens (`add_bot_token()`, `add_broadcaster_token()`), token saving, OAuth links (`OAUTH_SCOPES_FULL`: what the bot reads as the channel's moderator – followers and the chat list; `add_login_routes()` – the short `/bot` and `/channel` on twitchio's OAuth server, which a terminal cannot wrap and a copy cut short; `print_login_links()` – both, printed by `make oauth`), `token_problem()`, `token_dead()` (a revoked authorization: retrying is pointless)
@@ -187,6 +187,8 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `commands.py` – `handle_help_index` (`!help`), `handle_help` (`!bot`), `handle_stats`
 - `channel.py` – the channel's own commands (`!tg` …) from `## channel` of `CONTENT.md`, each reply wrapped in `texts.channel_reply` unless it names `{user}` (`_render()`): `ChannelCommands` (`resolve()`, the registry's fallback; `check()` logs clashes with bot commands and replies too long for Twitch on every edit; `listing()` and `handle_help()` – `!channel`, the file's commands, then the registry's `channel` entries). BOT.md «Шаг 7а4»
 - `clip.py` – `!clip`: `parse()`, `default_title()`, `handle_clip`, `make_clip()` (create the clip as the bot, wait until Twitch lists it). BOT.md «Шаг 7з»
+- `film.py` – `!film`: the hall's link, session code and film title, kept by its gate (`request()` – any gate call, `gate()` – the session API, `GateError`, `NoSession`, `is_open()` – the last answer, read by the bridge); the handlers of `!film`, `!film start [title]` (refused while a session is open, under `_start_lock`), `!film title`, `!film stop`; `close_after_stream()` – the `film_close` task started by `Bot.stream_went_offline()` after a stream of ours, cancelled on stream start; `heartbeat_loop()` – the `film_heartbeat` task, started even without the channel id: renews the gate's lease and feeds `Reminder` (the link and the code every `FILM_REMIND_MINUTES`); `close_on_shutdown()` – from `Bot.close()`. Roles – `FILM_INFO_ACCESS` / `FILM_CONTROL_ACCESS`, checked by `ChatComponent._has_role()`. BOT.md «Шаг 7и»
+- `film_bridge.py` – the chat bridge Twitch → hall while a session is open (`FILM_BRIDGE`, the `film_bridge` task `bridge_loop()`): `from_twitch()` – a viewer's or the bot's line, with `look(message)` (colour, emotes, badges), queued for the gate's `POST /_gate/api/chat`; `from_hall()` – a hall line without its `FILM_HALL_MARK`, which the dispatcher routes like any line. Hall → Twitch is the gate's: it posts as the viewer, with the viewer's own token. BOT.md «Мост чатов кинозала»
 - `schedule.py` – `!schedule`: `fetch()` (a raw Helix request, 404 – no schedule), `parse()` (the nearest upcoming slots not cancelled, `SLOTS` of them; a vacation while it lasts), `render()`, `handle_schedule` (Helix's answer cached for `CACHE_SECONDS`, a failure is not). BOT.md «Шаг 7а6»
 - `project.py` – `!project` (anyone, a channel command) and `!project title <text>` (the streamer's): the text in `bot_state.channel_project`, kept until the next title. BOT.md «Шаг 7а7»
 - `lastseen.py` – `!lastseen <nick>`: the nick's last chat line (`get_last_message_time()`), «сегодня / вчера / date» in `BOT_TIMEZONE` (`when()`); listed by `!channel` but with the usual gate and a personal cooldown, since the nick differs per call. BOT.md «Шаг 7а8»
@@ -253,7 +255,7 @@ Each is explained in `BOT.md` or `README.md`; this is the list to keep in mind w
 
 ## Environment Variables
 
-Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (172 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
+Required: `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET`, `TWITCH_BOT_ID`, `TWITCH_CHANNEL`, `GEMINI_API_KEY`. `.env.example` is the authoritative list (178 variables, grouped by section, each commented; `MASCOT_PUBLISH` is read by compose, not by the bot) and `README.md` has the table; keep both in sync with `src/core/config.py`. **No text belongs here** – it goes to `CONTENT.md`.
 
 ## When changing things
 

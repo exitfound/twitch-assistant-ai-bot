@@ -14,7 +14,7 @@ from twitchio.ext import commands
 from src.twitch.core.commands import (
     PUBLIC_SCOPE, CommandContext, CommandEntry, CommandRegistry, Kind,
 )
-from src.core.config import Clip, Cooldown, Follow, Picture, Quota, Twitch
+from src.core.config import Clip, Cooldown, Film, Follow, Picture, Quota, Twitch
 from src.core.content import Content
 from src.core.database import (
     count_bot_uses, count_channel_bot_uses, oldest_bot_use_age, record_bot_use,
@@ -34,6 +34,7 @@ from src.twitch.local import channel
 from src.twitch.local.clip import handle_clip
 from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
 from src.twitch.local.follow import handle_follow
+from src.twitch.local import film, film_bridge
 from src.twitch.local import project
 from src.twitch.local.lastseen import TRIGGER as LASTSEEN_TRIGGER, handle_lastseen
 from src.twitch.local.schedule import TRIGGER as SCHEDULE_TRIGGER, handle_schedule
@@ -63,6 +64,10 @@ CLIP_TRIGGER = '!clip'
 FOLLOW_HINT_SCOPE = 'follow_hint'
 # Cooldown scope of the «wait N seconds» refusal: said once per pause, then silence
 COOLDOWN_TOLD_SCOPE = 'cooldown_told'
+# The «not your level» refusal of a role-limited command: once per 30 s per viewer, so
+# command spam does not turn into refusal spam
+ROLE_REFUSAL_SCOPE = 'role_refusal'
+ROLE_REFUSAL_SECONDS = 30
 
 # EventSub may deliver a message more than once, and a second chat subscription doubles
 # everything: ids of this many recent messages are remembered to drop the repeat
@@ -143,7 +148,7 @@ class ChatComponent(commands.Component):
         add(HELP_TRIGGER,      handle_help,      public=True)
         add(HELP_CHANNEL_TRIGGER, self._channel.handle_help, public=True)
         # The chat's numbers are for the streamer: not in the help, silent for anyone else
-        add(STATS_TRIGGER,     handle_stats,     prefix=True, broadcaster=True)
+        add(STATS_TRIGGER,     handle_stats,     prefix=True, roles=frozenset({'broadcaster'}))
         # Longer triggers first, by the rule above. The game's commands take a prefix only
         # to answer «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out of !roll
         add(ROLLSTAT_TRIGGER,  handle_rollstat,  prefix=True)
@@ -161,10 +166,22 @@ class ChatComponent(commands.Component):
             add(ASCII_TRIGGER, handle_ascii, prefix=True, kind=Kind.GEMINI)
         if Clip.ENABLED:
             add(CLIP_TRIGGER,  handle_clip,  prefix=True)
+        if Film.ENABLED:
+            # The control triggers go ahead of the bare one: anyone without the role is refused,
+            # not answered as if it were «!film» with args
+            control = {'roles': Film.CONTROL_ACCESS, 'refusal': 'film_no_rights'}
+            add(film.START_TRIGGER, film.handle_film_start, prefix=True, **control)
+            add(film.TITLE_TRIGGER, film.handle_film_title, prefix=True, **control)
+            add(film.STOP_TRIGGER,  film.handle_film_stop,  **control)
+            # The link and the code are the same for everyone: one shared pause, like help.
+            # About the channel, not the bot: listed by !channel
+            add(film.TRIGGER,       film.handle_film,       prefix=True, public=True, roles=Film.INFO_ACCESS,
+                channel=True)
         # About the channel, not the bot: no follow needed, one answer for the whole chat
         add(SCHEDULE_TRIGGER, handle_schedule, prefix=True, public=True, channel=True)
         # The streamer sets the project, anyone asks; the longer trigger goes first
-        add(project.TITLE_TRIGGER, project.handle_project_title, prefix=True, broadcaster=True)
+        add(project.TITLE_TRIGGER, project.handle_project_title, prefix=True,
+            roles=frozenset({'broadcaster'}))
         add(project.TRIGGER, project.handle_project, prefix=True, public=True, channel=True)
         # Listed by !channel, but a personal cooldown: the nick differs from call to call
         add(LASTSEEN_TRIGGER, handle_lastseen, prefix=True, channel=True)
@@ -185,11 +202,25 @@ class ChatComponent(commands.Component):
     async def event_message(self, message: twitchio.ChatMessage) -> None:
         # The mascot overlay counts everyone who writes, the bot and the streamer included
         mascot.on_chat(message.chatter.name)
+        name = getattr(message.chatter, 'display_name', None) or message.chatter.name
         if str(message.chatter.id) == str(self.bot.bot_id):
+            # The cinema hall hears the bot too: its answers, announcements and remarks
+            if not self._repeated(message.id):
+                film_bridge.from_twitch(name, message.text, *film_bridge.look(message))
             return
         if not self.bot.bot_name:
             return
         if self._repeated(message.id):
+            return
+        # A line from the cinema hall comes as the viewer's own, with the hall's mark: without
+        # the mark it is read like any other line – a command, a call to the bot – and it does
+        # not go back to the hall. Any other line goes to the hall while it is open
+        text = film_bridge.from_hall(message.text)
+        if text is None:
+            text = message.text
+            film_bridge.from_twitch(name, text, *film_bridge.look(message))
+        elif not text:
+            # A bare mark carries nothing to read or save
             return
 
         # session_id is taken once: it changes when a stream starts or ends, and coroutines outlive that
@@ -197,12 +228,12 @@ class ChatComponent(commands.Component):
         # Routing runs before saving: it decides whether this is a command (commands
         # are not saved) and whether the message addressed the bot (a call word,
         # an @mention, a reply) – that is stored with the message and counted in !stat
-        entry, prompt, addressed = self._route(message)
+        entry, prompt, addressed = self._route(message, text)
         # Only live conversation goes into the DB: bot commands (!roll, !who …) say
         # nothing about the person and clutter the Gemini context, !who and !summary
         if entry is None:
             await save_chat_message(
-                session_id, message.chatter.name, message.text, addressed=addressed,
+                session_id, message.chatter.name, text, addressed=addressed,
             )
         # A first appearance in the stream starts the countdown of the previous stream's game perks
         await roll_perks_on_chat(self.bot, session_id, message.chatter.name)
@@ -211,7 +242,7 @@ class ChatComponent(commands.Component):
 
         if entry is None and prompt is None:
             return
-        if entry is not None and entry.broadcaster and not message.chatter.broadcaster:
+        if entry is not None and entry.roles is not None and not await self._has_role(message, entry):
             return
 
         user = message.chatter.name
@@ -225,7 +256,7 @@ class ChatComponent(commands.Component):
             message=message,
             user=user,
             prompt=prompt,
-            original_text=message.text,
+            original_text=text,
             session_id=session_id,
             bot=self.bot,
             kind=kind,
@@ -317,11 +348,36 @@ class ChatComponent(commands.Component):
             return True
         if await self._followers.is_follower(self.bot, message.chatter.id):
             return True
-        # The hint repeats at most once per FOLLOW_HINT_MINUTES: otherwise command
-        # spam would turn into refusal spam
+        await self._follow_hint(message, user)
+        return False
+
+    async def _follow_hint(self, message: twitchio.ChatMessage, user: str) -> None:
+        """The follow suggestion, at most once per FOLLOW_HINT_MINUTES: otherwise command
+        spam would turn into refusal spam."""
         if not self.bot.cooldown_remaining(user, FOLLOW_HINT_SCOPE):
             self.bot.set_cooldown(user, Follow.HINT_MINUTES * 60, FOLLOW_HINT_SCOPE)
             await reply(message, Content.text('follow_required', user=user, command=HELP_INDEX_TRIGGER))
+
+    async def _has_role(self, message: twitchio.ChatMessage, entry: CommandEntry) -> bool:
+        """Whether the chatter holds one of the command's roles. False – refused, hinted or dropped.
+
+        Badges are checked before the follow, which costs a Helix call. The follow is
+        checked here even with FOLLOW_REQUIRED off: the role asks for it explicitly.
+        """
+        chatter, roles = message.chatter, entry.roles or frozenset()
+        if chatter.broadcaster or 'all' in roles:
+            return True
+        badges = {'mod': chatter.moderator, 'vip': chatter.vip, 'sub': chatter.subscriber or chatter.founder}
+        if any(badges.get(role) for role in roles):
+            return True
+        if 'follower' in roles:
+            if await self._followers.is_follower(self.bot, chatter.id):
+                return True
+            await self._follow_hint(message, chatter.name)
+            return False
+        if entry.refusal and not self.bot.cooldown_remaining(chatter.name, ROLE_REFUSAL_SCOPE):
+            self.bot.set_cooldown(chatter.name, ROLE_REFUSAL_SECONDS, ROLE_REFUSAL_SCOPE)
+            await reply(message, Content.text(entry.refusal, user=chatter.name))
         return False
 
     async def _within_channel_quota(self, message: twitchio.ChatMessage, user: str, tier: Tier) -> bool:
@@ -359,9 +415,11 @@ class ChatComponent(commands.Component):
         await deny(self.bot, message, user, text + sub_hint(message.chatter, limit, Quota.SUB_PER_HOUR))
         return False
 
-    def _route(self, message: twitchio.ChatMessage) -> tuple[CommandEntry | None, str | None, bool]:
+    def _route(self, message: twitchio.ChatMessage,
+               text: str | None = None) -> tuple[CommandEntry | None, str | None, bool]:
+        """`text` – the line as read (a hall line without its mark); the message's own by default."""
         is_reply = reply_to_bot(message, self.bot.bot_id) is not None
-        return route(message.text, self._registry, self.bot.bot_name, is_reply)
+        return route(message.text if text is None else text, self._registry, self.bot.bot_name, is_reply)
 
     @commands.Component.listener()
     async def event_follow(self, payload: twitchio.ChannelFollow) -> None:

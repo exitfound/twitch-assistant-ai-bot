@@ -454,7 +454,8 @@ def lifecycle(live_bot, monkeypatch):
         async def call(*args, **kwargs):
             calls.append((name, *args))
         return call
-    live_bot.stream = SimpleNamespace(online=record('stream.online'), offline=record('stream.offline'))
+    live_bot.stream = SimpleNamespace(online=record('stream.online'), offline=record('stream.offline'),
+                                      stream_id='s0')
     monkeypatch.setattr(live_bot._rewards, 'set_open', record('rewards.set_open'))
     monkeypatch.setattr(live_bot._rewards, 'stop', record('rewards.stop'))
     monkeypatch.setattr(bot_module.perks, 'on_stream_start', record('perks'))
@@ -473,6 +474,30 @@ async def test_shutdown_pauses_the_rewards_before_twitchio_closes(lifecycle):
     assert bot._shutting_down
 
 
+async def test_shutdown_closes_the_cinema_before_the_http_session_goes(lifecycle, monkeypatch):
+    bot, calls = lifecycle
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', True)
+
+    async def close_on_shutdown(_bot):
+        calls.append(('film.close',))
+    monkeypatch.setattr(bot_module.film, 'close_on_shutdown', close_on_shutdown)
+    await bot.close()
+    assert [c[0] for c in calls] == ['tasks.stop', 'rewards.stop', 'film.close', 'twitchio.close']
+
+
+async def test_a_repeated_close_does_not_ask_the_gate_again(lifecycle, monkeypatch):
+    """close() runs more than once on shutdown: a gate that does not answer must not eat 4 s twice."""
+    bot, calls = lifecycle
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', True)
+
+    async def close_on_shutdown(_bot):
+        calls.append(('film.close',))
+    monkeypatch.setattr(bot_module.film, 'close_on_shutdown', close_on_shutdown)
+    await bot.close()
+    await bot.close()
+    assert [c[0] for c in calls].count('film.close') == 1
+
+
 async def test_a_stream_end_pauses_the_rewards(lifecycle):
     bot, calls = lifecycle
     await bot.stream_went_offline()
@@ -486,6 +511,71 @@ async def test_a_stream_start_opens_the_rewards_and_hands_out_perks(lifecycle):
     assert ('rewards.set_open', True) in calls
     assert ('perks', bot, bot.session_id) in calls
     assert ('curses.drop', bot.session_id) in calls
+
+
+async def test_a_stream_end_schedules_the_cinema_close_and_a_start_cancels_it(lifecycle, monkeypatch):
+    """A session left open at the end waits out the resume window; a stream back in it keeps it."""
+    import asyncio
+
+    bot, _ = lifecycle
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', True)
+    waiting = asyncio.Event()
+
+    async def close_after_stream(_bot):
+        waiting.set()
+        await asyncio.sleep(3600)
+    monkeypatch.setattr(bot_module.film, 'close_after_stream', close_after_stream)
+    await bot.stream_went_offline()
+    await bot.stream_went_offline()
+    await waiting.wait()
+    assert bot._tasks.running(bot_module.FILM_CLOSE_TASK)
+    await bot.stream_went_online('s1', 1000.0)
+    await asyncio.sleep(0)
+    assert not bot._tasks.running(bot_module.FILM_CLOSE_TASK)
+
+
+async def test_an_end_without_a_stream_of_ours_leaves_the_cinema_alone(lifecycle, monkeypatch):
+    """A rerun or a premiere ending, or an offline delivered twice, ends no stream: an off-stream film stays."""
+    bot, _ = lifecycle
+    bot.stream.stream_id = None
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', True)
+    close_after_stream = AsyncMock()
+    monkeypatch.setattr(bot_module.film, 'close_after_stream', close_after_stream)
+    await bot.stream_went_offline()
+    assert not bot._tasks.running(bot_module.FILM_CLOSE_TASK)
+    close_after_stream.assert_not_called()
+
+
+async def test_a_failing_stream_end_step_still_schedules_the_cinema_close(lifecycle, monkeypatch):
+    import asyncio
+
+    bot, _ = lifecycle
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', True)
+    monkeypatch.setattr(bot._rewards, 'set_open', AsyncMock(side_effect=RuntimeError('helix')))
+    monkeypatch.setattr(bot_module.film, 'close_after_stream', lambda _bot: asyncio.sleep(3600))
+    with pytest.raises(RuntimeError):
+        await bot.stream_went_offline()
+    assert bot._tasks.running(bot_module.FILM_CLOSE_TASK)
+    bot._tasks.cancel(bot_module.FILM_CLOSE_TASK)
+
+
+async def test_the_cinema_heartbeat_runs_without_the_channel_id(live_bot, monkeypatch):
+    """The !film commands work without it, so the session they open must not lapse after 180 s."""
+    import asyncio
+
+    live_bot._channel_id = None
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.film, 'heartbeat_loop', lambda _bot: asyncio.sleep(3600))
+    live_bot._start_background_tasks()
+    assert live_bot._tasks.running('film_heartbeat')
+    live_bot._tasks.cancel('film_heartbeat')
+
+
+async def test_without_the_cinema_a_stream_end_schedules_nothing(lifecycle, monkeypatch):
+    bot, _ = lifecycle
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', False)
+    await bot.stream_went_offline()
+    assert not bot._tasks.running(bot_module.FILM_CLOSE_TASK)
 
 
 @pytest.mark.parametrize(('kind', 'started'), [('live', True), ('rerun', False), ('premiere', False)])

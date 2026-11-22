@@ -28,6 +28,14 @@ class BackgroundTasks:
         self._tasks[name] = task
         return True
 
+    def cancel(self, name: str) -> bool:
+        """Cancel one task without waiting for it. True – it was running."""
+        task = self._tasks.get(name)
+        if task is None or task.done():
+            return False
+        task.cancel()
+        return True
+
     async def stop(self) -> None:
         """Cancel the loops and wait for them, before the database is closed.
 

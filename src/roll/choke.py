@@ -5,8 +5,8 @@ Chat hears nothing of a step; the OBS page gets the titles only when a step chan
 import asyncio
 import logging
 
-from src.twitch.core.port import BotPort
-from src.twitch.local.roll import game, overlay
+from src.roll.port import RollPort
+from src.roll import game, overlay
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 CHOKE_CHECK_SECONDS = 5
 
 
-async def choke_loop(bot: BotPort) -> None:
+async def choke_loop(bot: RollPort) -> None:
     """Takes the choking flask's due steps off the rolls while a stream is live."""
     try:
         while True:

@@ -6,9 +6,9 @@ first message in the stream and again whenever the badges change.
 """
 import logging
 
-from src.twitch.core.port import BotPort
-from src.twitch.core.viewer import tier_of
-from src.twitch.local.roll.storage import save_tier
+from src.roll.port import RollPort
+from src.core.tier import Tier
+from src.roll.storage import save_tier
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 _written: dict[str, dict[str, str]] = {}
 
 
-async def on_chat(bot: BotPort, session_id: str, chatter) -> None:
+async def on_chat(bot: RollPort, session_id: str, user: str, tier: Tier) -> None:
     """A chat message: store the viewer's status if it is new for this stream."""
     if not bot.stream_live:
         return
@@ -25,7 +25,6 @@ async def on_chat(bot: BotPort, session_id: str, chatter) -> None:
         _written.clear()
         _written[session_id] = {}
     written = _written[session_id]
-    user, tier = chatter.name, tier_of(chatter)
     if written.get(user) == tier:
         return
     try:

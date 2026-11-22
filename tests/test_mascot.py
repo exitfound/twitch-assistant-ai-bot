@@ -10,8 +10,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from src.twitch import bot as bot_module
-from fakes import FakeBot, make_chatter, make_message
-from src.twitch.core.component import ChatComponent
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core.config import Mascot
 from src.core import sse
 from src.twitch.local.mascot import feed, mood
@@ -299,14 +298,14 @@ async def test_the_bots_own_message_is_counted(monkeypatch):
     bot = FakeBot()
     itself = make_chatter('securityexpert')
     itself.id = bot.bot_id
-    await ChatComponent(bot).event_message(make_message('hi', itself))
+    await chat_component(bot).event_message(make_message('hi', itself))
     mood.tracker.update()
     assert mood.tracker.chatters == 1
 
 
 async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
     monkeypatch.setattr(Mascot, 'ENABLED', True)
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     message = make_message('привет', make_chatter('gop'))
     await component.event_message(message)
     await component.event_message(message)

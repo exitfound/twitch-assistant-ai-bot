@@ -45,9 +45,9 @@ from src.twitch.gemini import picture as picture_command
 from src.twitch.local import clip, film, film_bridge, follow, help_announce, schedule
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot import mood as mascot_mood
-from src.twitch.local.roll import game, perks, tiers
-from src.twitch.local.roll import overlay as roll_overlay
-from src.twitch.local.roll import board as roll_board
+from src.roll import game, perks, tiers
+from src.roll import overlay as roll_overlay
+from src.roll import board as roll_board
 
 def content_text() -> str:
     """A CONTENT.md with every required key: the value is the key's own name, so a test

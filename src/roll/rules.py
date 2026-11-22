@@ -9,7 +9,7 @@ from typing import NamedTuple
 
 from src.core.config import Rewards, Roll
 from src.core.tier import Tier, by_tier
-from src.twitch.local.roll.storage import RollRow
+from src.roll.storage import RollRow
 
 # Twitch login: Latin letters, digits and underscore, up to 25 characters
 

@@ -9,7 +9,7 @@ from src.core.database import get_db
 from src.gemini.client import BLOCK_INPUT, ERROR
 from src.gemini.memory import build, storage
 from src.gemini.memory.storage import Block
-from src.twitch.local.roll.storage import save_roll
+from src.roll.storage import save_roll
 
 
 async def _say(username: str, message: str, hours_ago: float) -> int:

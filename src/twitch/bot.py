@@ -31,14 +31,11 @@ from src.twitch.local import schedule
 from src.twitch.local.help_announce import help_loop
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot.feed import mascot_loop
-from src.twitch.local.roll import overlay as roll_overlay
-from src.twitch.local.roll import announce as roll_announce
-from src.twitch.local.roll import board as roll_board
-from src.twitch.local.roll import perks
-from src.twitch.local.roll.announce import curse_lift_loop
-from src.twitch.local.roll.choke import choke_loop
-from src.twitch.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
-from src.twitch.local.roll.storage import get_reward_ids
+from src.roll import overlay as roll_overlay
+from src.roll.announce import curse_lift_loop
+from src.roll.choke import choke_loop
+from src.twitch.roll.client import LocalRoll
+from src.twitch.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService, get_reward_ids
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +66,8 @@ class Bot(commands.Bot):
         self._channel_id: str | None = None
         self._tasks = BackgroundTasks()
         self._followers = FollowerCache()
-        self._rewards = RewardService(self, self._followers)
+        self._roll = LocalRoll(self, self._followers)
+        self._rewards = RewardService(self, self._roll)
         self._broadcaster_token = False
         self._chat = SocketWatch(
             self, 'чат', lambda: str(self.bot_id), eventsub.ChatMessageSubscription.type,
@@ -145,7 +143,7 @@ class Bot(commands.Bot):
             await self._sync_stream()
         else:
             logger.error('Канал %s не найден – проактив и отправка в чат работать не будут', Twitch.CHANNEL)
-        await self.add_component(ChatComponent(self, self._followers))
+        await self.add_component(ChatComponent(self, self._followers, self._roll))
         await self.add_component(RewardComponent(self._rewards))
 
     async def _add_broadcaster_token(self) -> None:
@@ -185,10 +183,7 @@ class Bot(commands.Bot):
         self._tasks.cancel(FILM_CLOSE_TASK)
         await self._rewards.set_open(True)
         await self.tell_rewards_down()
-        await roll_overlay.refresh(self.session_id, live=True)
-        await roll_board.regalia(self.session_id, live=True)
-        await roll_announce.on_stream_start(self.session_id)
-        await perks.on_stream_start(self, self.session_id)
+        await self._tell_roll(self.session_id)
 
     async def stream_went_offline(self) -> None:
         """Stream ended: session by date, game closed, rewards paused."""
@@ -201,8 +196,7 @@ class Bot(commands.Bot):
             self._tasks.start(FILM_CLOSE_TASK, lambda: film.close_after_stream(self), once=True)
         await self.stream.offline()
         await self._rewards.set_open(False)
-        await roll_overlay.refresh(ended, live=False)
-        await roll_board.regalia(ended, live=False)
+        await self._tell_roll(ended)
 
     def _start_memory(self) -> None:
         """The memory check (src/gemini/memory/): runs for as long as the bot does.
@@ -268,20 +262,19 @@ class Bot(commands.Bot):
                 )
         self._start_background_tasks()
         self._start_overlays()
-        await roll_overlay.refresh(self.session_id, live=self.stream_live)
-        await roll_board.regalia(self.session_id, live=self.stream_live)
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
-        if self.stream_live:
-            # The curses of finished streams go first: the perks granted below lay new ones
-            await roll_announce.on_stream_start(self.session_id)
         await self._start_rewards()
         await self.tell_rewards_down()
-        if self.stream_live and not self._rewards.active:
-            # Perks from the previous stream. Rewards that came up granted them already
-            # (_rewards_started()); without them only the Сглаз goes out, and what was
-            # granted is not granted twice, so a restart mid-stream duplicates nothing
-            await perks.on_stream_start(self, self.session_id)
+        if not (self.stream_live and self._rewards.active):
+            # The game's titles, regalia and perks. Rewards that came up mid-stream told the
+            # game already (_rewards_started()); without them only the Сглаз goes out, and what
+            # was granted is not granted twice, so a restart mid-stream duplicates nothing
+            await self._tell_roll(self.session_id)
+
+    async def _tell_roll(self, session_id: str) -> None:
+        """The stream state to the game: titles and regalia for the overlay, old curses, perks."""
+        await self._roll.stream(session_id, live=self.stream_live, rewards_active=self._rewards.active)
 
     def _start_overlays(self) -> None:
         """The OBS pages' server and the mascot's recount. Neither needs the channel id."""
@@ -361,9 +354,9 @@ class Bot(commands.Bot):
 
     async def _rewards_started(self) -> None:
         """The rewards came up. Mid-stream the champion's Благодать, held back while
-        they were down, is granted now; perks.on_stream_start() grants nothing twice."""
+        they were down, is granted now; the game grants nothing twice."""
         if self.stream_live:
-            await perks.on_stream_start(self, self.session_id)
+            await self._tell_roll(self.session_id)
 
     async def _retry_rewards(self) -> None:
         """Start the rewards again until it works, the channel's token dies or the bot stops."""

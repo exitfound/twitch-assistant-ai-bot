@@ -7,18 +7,17 @@ import time
 
 import pytest
 
-from fakes import FakeBot, always, make_chatter, make_message
+from fakes import FakeBot, always, make_chatter, make_message, play, chat_component
 from src.twitch.core.commands import CommandContext
 from src.core.config import Follow, Rewards, Roll, Twitch
-from src.twitch.core.component import ChatComponent
 from src.core.tier import Tier
 from src.core.database import get_db, save_chat_message, save_stream
 from src.core.utils import parse_nick
-from src.twitch.local.roll import game, perks, rules
-from src.twitch.local.roll import command as command_module
-from src.twitch.local.roll.command import handle_roll, handle_rollstat
-from src.twitch.local.roll.texts import compose
-from src.twitch.local.roll.storage import (
+from src.roll import game, perks, rules
+from src.roll import command as command_module
+from src.roll.command import handle_roll, handle_rollstat
+from src.roll.texts import compose
+from src.roll.storage import (
     RollRow, add_choke, add_perk, get_due_chokes, get_pending_perk_users, get_perk, get_roll, get_session_champion,
     count_actions, get_session_loser, save_roll, save_tier, set_curse,
 )
@@ -734,7 +733,7 @@ async def test_rollstat_shows_the_champions_shield_once_it_runs(db):
     await game.grant_perks(S)
     await game.appear(S, 'champ')
     message = make_message('!rollstat', make_chatter('champ'))
-    await handle_rollstat(CommandContext(message=message, user='champ', prompt='!rollstat',
+    await play(handle_rollstat, CommandContext(message=message, user='champ', prompt='!rollstat',
                                          original_text='!rollstat', session_id=S, bot=FakeBot(session_id=S)))
     assert (await game.status(S, 'champ', limit=3)).shield_minutes_left == Roll.PERK_MINUTES
     assert 'texts.rollstat_perk_shield' in message.respond.await_args.args[0]
@@ -866,7 +865,7 @@ async def test_roll_after_a_burst_says_chill_once(db):
     for _ in range(Roll.BURST_THROWS + 3):
         message = make_message('!roll', chatter)
         messages.append(message)
-        await handle_roll(CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
+        await play(handle_roll, CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
                                          session_id=S, bot=bot))
     refusals = [m.respond.await_args.args[0] for m in messages[Roll.BURST_THROWS:] if m.respond.await_args]
     assert refusals == ['texts.roll_too_fast']
@@ -881,7 +880,7 @@ async def test_no_free_throws_is_said_once_per_30_seconds(db, monkeypatch):
 
     async def roll():
         message = make_message('!roll', chatter)
-        await handle_roll(CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
+        await play(handle_roll, CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
                                          session_id=S, bot=bot))
         return message.respond.await_args.args[0] if message.respond.await_args else None
 
@@ -904,7 +903,7 @@ async def test_roll_is_silent_for_the_whole_pause_not_just_30_seconds(db, monkey
 
     async def roll():
         message = make_message('!roll', chatter)
-        await handle_roll(CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
+        await play(handle_roll, CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
                                          session_id=S, bot=bot))
         return message.respond.await_args.args[0] if message.respond.await_args else None
 
@@ -925,7 +924,7 @@ async def test_the_status_from_chat_reaches_the_reroll_limit(db, monkeypatch):
     """Only a chat message carries badges: if the dispatcher stopped storing them, every
     buyer would count as a follower."""
     monkeypatch.setattr(Follow, 'REQUIRED', False)
-    await ChatComponent(FakeBot(session_id=S)).event_message(
+    await chat_component(FakeBot(session_id=S)).event_message(
         make_message('всем привет', make_chatter('buyer', subscriber=True)))
     *done, last = await _rerolls('buyer', Rewards.LIMIT_SUB + 1)
     assert all(outcome.ok for outcome in done)
@@ -1093,7 +1092,7 @@ async def test_a_held_roll_is_refused_once_per_30_seconds(db, swap):
 
     async def roll():
         message = make_message('!roll', make_chatter('sub', subscriber=True))
-        await handle_roll(CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
+        await play(handle_roll, CommandContext(message=message, user='sub', prompt='!roll', original_text='!roll',
                                          session_id=S, bot=bot))
         return message.respond.await_args.args[0] if message.respond.await_args else None
 
@@ -1106,7 +1105,7 @@ async def test_rollstat_shows_the_swaps_minutes(db, swap):
     await _players(buyer=10, partner=90)
     assert (await redeem(game.Action.FLASK, 'buyer')).ok
     message = make_message('!rollstat', make_chatter('partner'))
-    await handle_rollstat(CommandContext(message=message, user='partner', prompt='!rollstat',
+    await play(handle_rollstat, CommandContext(message=message, user='partner', prompt='!rollstat',
                                          original_text='!rollstat', session_id=S, bot=FakeBot(session_id=S)))
     assert 'texts.rollstat_flask' in message.respond.await_args.args[0]
 
@@ -1271,11 +1270,11 @@ async def test_only_rollstat_names_the_luck(db, luck):
     assert (standing.luck_left, standing.luck_next) == (Rewards.FLASK_MINUTES, _percent(1))
     # A lucky !roll says nothing extra: the chance is for !rollstat, not for every throw
     message = make_message('!roll', make_chatter('buyer'))
-    await handle_roll(CommandContext(message=message, user='buyer', prompt='!roll', original_text='!roll',
+    await play(handle_roll, CommandContext(message=message, user='buyer', prompt='!roll', original_text='!roll',
                                      session_id=S, bot=FakeBot(session_id=S)))
     assert 'luck' not in message.respond.await_args.args[0]
     message = make_message('!rollstat', make_chatter('buyer'))
-    await handle_rollstat(CommandContext(message=message, user='buyer', prompt='!rollstat',
+    await play(handle_rollstat, CommandContext(message=message, user='buyer', prompt='!rollstat',
                                          original_text='!rollstat', session_id=S, bot=FakeBot(session_id=S)))
     assert 'texts.rollstat_luck' in message.respond.await_args.args[0]
 
@@ -1283,12 +1282,12 @@ async def test_only_rollstat_names_the_luck(db, luck):
 
 async def test_a_long_rollstat_goes_out_in_pieces(db, luck, monkeypatch):
     """Many effects at once can pass Twitch's limit: the answer is cut, not dropped."""
-    from src.twitch.local.roll import texts
+    from src.roll import texts
     monkeypatch.setattr(texts, 'MESSAGE_MAX', 40)
     await _players(buyer=50)
     assert (await redeem(game.Action.FLASK, 'buyer')).ok
     message = make_message('!rollstat', make_chatter('buyer'))
-    await handle_rollstat(CommandContext(message=message, user='buyer', prompt='!rollstat',
+    await play(handle_rollstat, CommandContext(message=message, user='buyer', prompt='!rollstat',
                                          original_text='!rollstat', session_id=S, bot=FakeBot(session_id=S)))
     pieces = [c.args[0] for c in message.respond.await_args_list]
     assert len(pieces) > 1 and all(len(piece) <= 40 for piece in pieces)
@@ -1308,7 +1307,7 @@ async def test_rollstat_names_a_doubled_curse_and_the_agony_cap(db, agony, monke
         return real(key, **values)
     monkeypatch.setattr(command_module.Content, 'text', text)
     message = make_message('!rollstat', make_chatter('victim'))
-    await handle_rollstat(CommandContext(message=message, user='victim', prompt='!rollstat',
+    await play(handle_rollstat, CommandContext(message=message, user='victim', prompt='!rollstat',
                                          original_text='!rollstat', session_id=S, bot=FakeBot(session_id=S)))
     assert seen['rollstat_cursed']['ceiling'] == Rewards.AGONY_THROW_TOP
     assert seen['rollstat_curse_doubled'] == {'power': 2, 'step': Rewards.CURSE_STEP // 2,
@@ -1659,7 +1658,7 @@ async def test_a_cleanse_still_returns_the_roll_after_an_old_flask(db, monkeypat
 ])
 def test_a_throw_under_agony_is_out_of_its_cap(agony, ceiling, expected):
     """«выбил 12 из 25»: under АГОНИЯ the chat names its cap, not the roll's top or a higher ceiling."""
-    from src.twitch.local.roll.texts import out_of
+    from src.roll.texts import out_of
     outcome = game.Outcome(game.Status.OK, value=12, ceiling=ceiling, agony=agony)
     assert out_of(outcome) == (expected[0], min(expected[1], Roll.MAX))
 
@@ -1748,7 +1747,7 @@ def test_a_note_in_brackets_goes_before_the_closing_mark(parts, text):
 async def _rollstat(user: str, args: str = '', badges: dict | None = None) -> list[str]:
     text = f'!rollstat {args}'.strip()
     message = make_message(text, make_chatter(user, **(badges or {})))
-    await handle_rollstat(CommandContext(message=message, user=user, prompt=text, original_text=text,
+    await play(handle_rollstat, CommandContext(message=message, user=user, prompt=text, original_text=text,
                                          session_id=S, bot=FakeBot(session_id=S), args=args))
     return [call.args[0] for call in message.respond.await_args_list]
 

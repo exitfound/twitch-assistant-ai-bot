@@ -8,9 +8,11 @@ import pytest
 import twitchio
 
 from src.core.utils import safe_format
-from src.twitch.local.roll import game, rewards
-from src.twitch.local.roll.rewards import CANCELED, FULFILLED, RewardService
-from src.twitch.local.roll.storage import get_reward_ids, save_action
+from src.roll import game, specs
+from src.roll.storage import save_action
+from src.twitch.core.followers import FollowerCache
+from src.twitch.roll.client import LocalRoll, RollUnavailable
+from src.twitch.roll.rewards import CANCELED, FULFILLED, RewardService, get_reward_ids
 
 
 class FakeBroadcaster:
@@ -68,16 +70,17 @@ def twitch():
     bot = SimpleNamespace(
         create_partialuser=lambda channel_id: broadcaster,
         subscribe_websocket=AsyncMock(),
+        send_chat_message=AsyncMock(return_value=True),
         _http=SimpleNamespace(patch_custom_reward_redemption=AsyncMock()),
     )
-    return RewardService(bot), bot, broadcaster
+    return RewardService(bot, LocalRoll(bot, FollowerCache())), bot, broadcaster
 
 
 async def test_start_creates_the_rewards_and_opens_them_live(db, twitch):
     service, _, broadcaster = twitch
     await service.start('chan', open_=True)
     assert service.active
-    assert len(await get_reward_ids()) == len(rewards._specs()) == 6
+    assert len(await get_reward_ids()) == len(specs.specs()) == 6
     assert set(broadcaster.paused) == {False}
 
 
@@ -123,7 +126,7 @@ async def test_a_new_reward_without_a_nick_does_not_ask_for_text(db, twitch):
     service, _, broadcaster = twitch
     await service.start('chan', open_=True)
     asks = {action: broadcaster.rewards[reward_id].input_required for reward_id, action in service._actions.items()}
-    assert asks == {spec.action: spec.input_required for spec in rewards._specs()}
+    assert asks == {spec.action: spec.input_required for spec in specs.specs()}
     assert asks[game.Action.FLASK] is False
 
 
@@ -132,7 +135,7 @@ async def test_two_starts_at_once_create_each_reward_once(db, twitch):
     rewards missing and create them again."""
     service, _, broadcaster = twitch
     await asyncio.gather(service.start('chan', open_=True), service.start('chan', open_=True))
-    assert len(broadcaster.created) == len(rewards._specs())
+    assert len(broadcaster.created) == len(specs.specs())
 
 
 def _not_found() -> twitchio.HTTPException:
@@ -149,7 +152,7 @@ async def test_one_broken_reward_does_not_stop_the_pause_of_the_rest(db, twitch)
     broadcaster.paused.clear()
 
     assert not await service._set_paused(True)
-    assert broadcaster.paused == [True] * (len(rewards._specs()) - 2)
+    assert broadcaster.paused == [True] * (len(specs.specs()) - 2)
     # The deleted one is forgotten until the next start; the one that failed is kept
     assert first not in service._actions
     assert second in service._actions
@@ -175,10 +178,10 @@ async def test_a_redemption_gets_the_status_of_its_outcome(db, twitch, monkeypat
     await service.start('chan', open_=True)
     seen = {}
 
-    async def decide(bot_, action, redemption_id, user, user_input, *, follows):
+    async def decide(action, redemption_id, user, user_id, user_input):
         seen.update(action=action, user=user)
         return decision
-    monkeypatch.setattr(rewards, 'handle_redemption', decide)
+    monkeypatch.setattr(service._roll, 'redeem', decide)
     reward_id, action = next(iter(service._actions.items()))
     payload = SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
                               user=SimpleNamespace(name='GoP', id='id-gop'), user_input='')
@@ -192,14 +195,14 @@ async def test_the_follow_question_goes_to_the_shared_cache_by_user_id(db, twitc
     """The chat's cache: a follow event clears it there, and the buyer is asked by id."""
     _, bot, _ = twitch
     followers = SimpleNamespace(is_follower=AsyncMock(return_value=False))
-    service = RewardService(bot, followers)
+    service = RewardService(bot, LocalRoll(bot, followers))
     await service.start('chan', open_=True)
     answers = []
 
     async def decide(bot_, action, redemption_id, user, user_input, *, follows):
         answers.append(await follows())
         return False
-    monkeypatch.setattr(rewards, 'handle_redemption', decide)
+    monkeypatch.setattr('src.roll.redemption.handle_redemption', decide)
     reward_id = next(iter(service._actions))
     await service.on_redemption(SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
                                                 user=SimpleNamespace(name='gop', id='42'), user_input=''))
@@ -211,7 +214,7 @@ async def test_a_reward_of_another_app_is_not_touched(db, twitch, monkeypatch):
     service, bot, _ = twitch
     await service.start('chan', open_=True)
     decide = AsyncMock(return_value=True)
-    monkeypatch.setattr(rewards, 'handle_redemption', decide)
+    monkeypatch.setattr(service._roll, 'redeem', decide)
     await service.on_redemption(SimpleNamespace(id='r-1', reward=SimpleNamespace(id='someone-else'),
                                                 user=SimpleNamespace(name='gop'), user_input=''))
     decide.assert_not_awaited()
@@ -226,7 +229,7 @@ async def test_stale_redemptions_are_settled_by_the_journal(db, twitch):
     before, after = now - datetime.timedelta(minutes=5), now + datetime.timedelta(minutes=5)
     await save_action('applied', 's', game.Action.EXTRA, 'gop', '', 'gop', None, 50, game.Status.OK)
     await save_action('refused', 's', game.Action.CURSE, 'gop', 'x', None, None, None, game.Status.UNKNOWN_TARGET)
-    broadcaster.unfulfilled = {'id-' + rewards.reward_title(game.Action.EXTRA)[:rewards.TITLE_MAX]: [
+    broadcaster.unfulfilled = {'id-' + specs.reward_title(game.Action.EXTRA)[:specs.TITLE_MAX]: [
         SimpleNamespace(id='applied', redeemed_at=before),
         SimpleNamespace(id='refused', redeemed_at=before),
         SimpleNamespace(id='unseen', redeemed_at=before),
@@ -244,6 +247,28 @@ def test_every_placeholder_the_notes_promise_reaches_the_descriptions(monkeypatc
                 '{luck_from} {luck_step} {luck_top} {choke_step} {agony_from} {agony_top} {agony_curse} '
                 '{agony_throw_top} {bless_from} {throws} {pause} '
                 '{window} {follower} {vip} {mod} {sub} {max}')
-    monkeypatch.setattr(rewards.Content, 'text', lambda key, **values: safe_format(promised, **values))
-    for spec in rewards._specs():
+    monkeypatch.setattr(specs.Content, 'text', lambda key, **values: safe_format(promised, **values))
+    for spec in specs.specs():
         assert '{' not in spec.prompt, spec.action
+
+
+async def test_a_redemption_while_the_game_is_down_is_refunded_with_a_word(db, twitch, monkeypatch):
+    """Without the game nothing is applied: the points go back and the buyer hears why."""
+    service, bot, _ = twitch
+    await service.start('chan', open_=True)
+    monkeypatch.setattr(service._roll, 'redeem', AsyncMock(side_effect=RollUnavailable()))
+    reward_id = next(iter(service._actions))
+    await service.on_redemption(SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
+                                                user=SimpleNamespace(name='gop', id='42'), user_input=''))
+    assert _statuses(bot) == {'r-1': CANCELED}
+    assert bot.send_chat_message.await_args.args[0] == 'texts.reward_unavailable'
+
+
+async def test_without_the_game_the_rewards_do_not_start(db, twitch, monkeypatch):
+    """No specs – nothing to create: the start fails, and the bot's retry brings it back later."""
+    service, _, broadcaster = twitch
+    monkeypatch.setattr(service._roll, 'specs', AsyncMock(side_effect=RollUnavailable()))
+    with pytest.raises(RollUnavailable):
+        await service.start('chan', open_=True)
+    assert not service.active
+    assert broadcaster.created == []

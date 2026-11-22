@@ -1,7 +1,7 @@
 """Chat component: message intake, command dispatcher, follow events.
 
 The only place in core that knows about features: this is where commands from
-src/gemini, src/twitch/local and src/twitch/local/roll get into the registry.
+src/gemini, src/twitch/local and src/roll get into the registry.
 """
 import logging
 import math
@@ -12,7 +12,7 @@ import twitchio
 from twitchio.ext import commands
 
 from src.twitch.core.commands import (
-    PUBLIC_SCOPE, CommandContext, CommandEntry, CommandRegistry, Kind,
+    PUBLIC_SCOPE, CommandContext, CommandEntry, CommandRegistry, Handler, Kind,
 )
 from src.core.config import Clip, Cooldown, Film, Follow, Picture, Quota, Twitch
 from src.core.content import Content
@@ -39,10 +39,7 @@ from src.twitch.local import project
 from src.twitch.local.lastseen import TRIGGER as LASTSEEN_TRIGGER, handle_lastseen
 from src.twitch.local.schedule import TRIGGER as SCHEDULE_TRIGGER, handle_schedule
 from src.twitch.local.mascot import feed as mascot
-from src.twitch.local.roll.board import TRIGGER as ROLLBOARD_TRIGGER, handle_rollboard
-from src.twitch.local.roll.command import handle_roll, handle_rollstat
-from src.twitch.local.roll.perks import on_chat as roll_perks_on_chat
-from src.twitch.local.roll.tiers import on_chat as roll_tiers_on_chat
+from src.twitch.roll.client import RollLink, RollUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +53,7 @@ WHO_TRIGGER = '!who'
 VERSUS_TRIGGER = '!versus'
 ROLL_TRIGGER = '!roll'
 ROLLSTAT_TRIGGER = '!rollstat'
+ROLLBOARD_TRIGGER = '!rollboard'
 ASCII_TRIGGER = '!ascii'
 CLIP_TRIGGER = '!clip'
 
@@ -131,8 +129,10 @@ def route(text: str, registry: CommandRegistry, bot_name: str,
 
 class ChatComponent(commands.Component):
 
-    def __init__(self, bot: BotPort, followers: FollowerCache | None = None) -> None:
+    def __init__(self, bot: BotPort, followers: FollowerCache | None = None, roll: RollLink | None = None) -> None:
         self.bot = bot
+        # The game service; None – the game is off and its commands do not exist
+        self._roll = roll
         # Shared with the rewards, so a new follow opens both at once
         self._followers = followers if followers is not None else FollowerCache()
         self._registry = CommandRegistry()
@@ -149,13 +149,14 @@ class ChatComponent(commands.Component):
         add(HELP_CHANNEL_TRIGGER, self._channel.handle_help, public=True)
         # The chat's numbers are for the streamer: not in the help, silent for anyone else
         add(STATS_TRIGGER,     handle_stats,     prefix=True, roles=frozenset({'broadcaster'}))
-        # Longer triggers first, by the rule above. The game's commands take a prefix only
-        # to answer «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out of !roll
-        add(ROLLSTAT_TRIGGER,  handle_rollstat,  prefix=True)
-        # The month's board is the same for everyone and sits on the stream for a while:
-        # one shared pause, like help
-        add(ROLLBOARD_TRIGGER, handle_rollboard, prefix=True, public=True)
-        add(ROLL_TRIGGER,      handle_roll,      prefix=True)
+        if roll is not None:
+            # Longer triggers first, by the rule above. The game's commands take a prefix only
+            # to answer «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out of !roll
+            add(ROLLSTAT_TRIGGER,  self._game(ROLLSTAT_TRIGGER),  prefix=True)
+            # The month's board is the same for everyone and sits on the stream for a while:
+            # one shared pause, like help
+            add(ROLLBOARD_TRIGGER, self._game(ROLLBOARD_TRIGGER), prefix=True, public=True)
+            add(ROLL_TRIGGER,      self._game(ROLL_TRIGGER),      prefix=True)
         add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=Kind.GEMINI)
         add(WHO_TRIGGER,       handle_who,       prefix=True, kind=Kind.GEMINI)
         add(VERSUS_TRIGGER,    handle_versus,    prefix=True, kind=Kind.GEMINI)
@@ -235,10 +236,10 @@ class ChatComponent(commands.Component):
             await save_chat_message(
                 session_id, message.chatter.name, text, addressed=addressed,
             )
-        # A first appearance in the stream starts the countdown of the previous stream's game perks
-        await roll_perks_on_chat(self.bot, session_id, message.chatter.name)
-        # The rewards read the status from here: a redemption carries no badges
-        await roll_tiers_on_chat(self.bot, session_id, message.chatter)
+        if self._roll is not None:
+            # A first appearance in the stream starts the countdown of the previous stream's game
+            # perks; the rewards read the status from here, as a redemption carries no badges
+            await self._roll.chat(session_id, message.chatter.name, tier_of(message.chatter))
 
         if entry is None and prompt is None:
             return
@@ -414,6 +415,18 @@ class ChatComponent(commands.Component):
                             window=Quota.WINDOW_MINUTES)
         await deny(self.bot, message, user, text + sub_hint(message.chatter, limit, Quota.SUB_PER_HOUR))
         return False
+
+    def _game(self, trigger: str) -> Handler:
+        """A game command: the game service runs it, the bot only carries it."""
+        async def handle(ctx: CommandContext) -> None:
+            try:
+                await self._roll.command(trigger, ctx)
+            except RollUnavailable:
+                # Nothing was played: the pause goes back, and the refusal is said once per 30 s
+                logger.warning('Игра недоступна – %s от %s без ответа', trigger, ctx.user)
+                ctx.clear_cooldown()
+                await deny(self.bot, ctx.message, ctx.user, Content.text('roll_unavailable', user=ctx.user))
+        return handle
 
     def _route(self, message: twitchio.ChatMessage,
                text: str | None = None) -> tuple[CommandEntry | None, str | None, bool]:

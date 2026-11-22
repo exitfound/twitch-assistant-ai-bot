@@ -4,16 +4,15 @@ import json
 
 import pytest
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, make_chatter, make_message, play, chat_component
 from src.core.config import Roll, Twitch
 from src.core.database import get_state, save_stream
 from src.core.utils import local_time
 from src.core import sse
 from src.twitch.core.commands import PUBLIC_SCOPE, CommandContext
-from src.twitch.core.component import ChatComponent
-from src.twitch.local.roll import board, overlay
-from src.twitch.local.roll.command import handle_roll
-from src.twitch.local.roll.storage import save_roll
+from src.roll import board, overlay
+from src.roll.command import handle_roll
+from src.roll.storage import save_roll
 
 
 @pytest.fixture
@@ -41,7 +40,7 @@ def names(top: board.Top) -> list[tuple[str, int, int]]:
 async def call(bot: FakeBot, user: str = 'gop', args: str = ''):
     text = f'!rollboard {args}'.strip()
     message = make_message(text, make_chatter(user))
-    await board.handle_rollboard(CommandContext(message=message, user=user, prompt=text, original_text=text,
+    await play(board.handle_rollboard, CommandContext(message=message, user=user, prompt=text, original_text=text,
                                                 session_id=bot.session_id, bot=bot, args=args))
     return message
 
@@ -251,15 +250,15 @@ async def test_the_first_roll_of_the_stream_announces_the_last_month(db, page):
     bot = FakeBot(session_id='2026-10-01 20:00')
     for user in ('first', 'second'):
         message = make_message('!roll', make_chatter(user))
-        await handle_roll(CommandContext(message=message, user=user, prompt='!roll', original_text='!roll',
+        await play(handle_roll, CommandContext(message=message, user=user, prompt='!roll', original_text='!roll',
                                          session_id=bot.session_id, bot=bot))
     bot.send_chat_message.assert_awaited_once_with('texts.rollboard_final')
     assert [e['type'] for e in sent(page)] == ['roll', 'board', 'roll']
 
 
 def test_the_board_has_one_shared_pause_like_help():
-    entry = ChatComponent(FakeBot())._registry.resolve('!rollboard')
-    assert entry.handler is board.handle_rollboard and entry.public
+    entry = chat_component(FakeBot())._registry.resolve('!rollboard')
+    assert entry.trigger == board.TRIGGER and entry.public
 
 
 async def test_regalia_carry_the_last_months_first_places_and_this_months_leader(db, page):

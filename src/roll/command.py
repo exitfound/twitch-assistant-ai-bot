@@ -2,16 +2,14 @@
 import logging
 import math
 
-from src.twitch.core.commands import CommandContext
 from src.core.config import Roll
 from src.core.content import Content
+from src.core.tier import Tier, tier_sub_hint
 from src.core.utils import parse_nick
-from src.twitch.core.limits import deny
-from src.twitch.core.viewer import Tier, sub_hint, tier_of
-from src.twitch.core.replies import reply
-from src.twitch.local.roll import board, game, overlay, rules
-from src.twitch.local.roll.storage import get_tier
-from src.twitch.local.roll.texts import (
+from src.roll import board, game, overlay, rules
+from src.roll.request import Request
+from src.roll.storage import get_tier
+from src.roll.texts import (
     champion_note, compose, curse_note, input_preview, loser_note, luck_values, mass_values, out_of, reward_title,
     split_message,
 )
@@ -23,13 +21,7 @@ logger = logging.getLogger(__name__)
 PAUSE_SCOPE = 'roll_pause'
 
 
-def free_limit_for(chatter) -> int:
-    """How many free throws a viewer gets by their badges. The broadcaster rolls without
-    limit, a non-follower never reaches the game."""
-    return rules.free_limit(tier_of(chatter))
-
-
-async def handle_roll(ctx: CommandContext) -> None:
+async def handle_roll(ctx: Request) -> None:
     if await _roll(ctx):
         # The month's first stream: the previous month's results, once, to a chat that is playing
         await board.announce(ctx.bot, ctx.session_id)
@@ -38,25 +30,25 @@ async def handle_roll(ctx: CommandContext) -> None:
         overlay.publish(overlay.wake())
 
 
-async def _roll(ctx: CommandContext) -> bool:
+async def _roll(ctx: Request) -> bool:
     """The throw and its reply. True – the throw reached the stream as a card."""
     if ctx.args:
         # «!roll 5», «!roll @nick»: a throw takes nothing, and silence reads as a broken bot
-        await ctx.refuse()
-        await reply(ctx.message, Content.text(
+        ctx.refuse()
+        await ctx.reply(Content.text(
             'roll_bad_input', user=ctx.user, input=input_preview(ctx.original_args),
         ))
         return False
     if not ctx.bot.stream_live:
         # The game lives inside a stream: no throws are accepted without one
         ctx.clear_cooldown()
-        await reply(ctx.message, Content.text('roll_offline', user=ctx.user))
+        await ctx.reply(Content.text('roll_offline', user=ctx.user))
         return False
     # The broadcaster rolls without limit and without the free-throws-left note,
-    # everyone else gets a limit by their badges
-    limit = free_limit_for(ctx.message.chatter)
+    # everyone else gets a limit by their status
+    limit = rules.free_limit(ctx.tier)
     result = await game.free_throw(
-        ctx.session_id, ctx.user, limit=limit, unlimited=ctx.message.chatter.broadcaster,
+        ctx.session_id, ctx.user, limit=limit, unlimited=ctx.broadcaster,
     )
     if result.status == game.Status.NO_FREE_LEFT:
         if ctx.bot.rewards_active:
@@ -68,12 +60,12 @@ async def _roll(ctx: CommandContext) -> bool:
             text = Content.text('roll_no_free', user=ctx.user, limit=limit)
         # Once per 30 s, like every limit refusal: a subscriber or a moderator has no
         # cooldown and would otherwise get it for every further !roll
-        await deny(ctx.bot, ctx.message, ctx.user, text + sub_hint(ctx.message.chatter, limit, Roll.FREE_SUB))
+        await ctx.deny(text + tier_sub_hint(ctx.tier, limit, Roll.FREE_SUB))
         return False
     if result.status == game.Status.UNDER_FLASK:
         # Nothing was thrown, so nothing to wait off; said once per 30 s like a limit refusal
         ctx.clear_cooldown()
-        await deny(ctx.bot, ctx.message, ctx.user, Content.text(
+        await ctx.deny(Content.text(
             'roll_under_flask', user=ctx.user, minutes=result.wait_minutes,
         ))
         return False
@@ -84,13 +76,13 @@ async def _roll(ctx: CommandContext) -> bool:
         if ctx.bot.cooldown_remaining(ctx.user, PAUSE_SCOPE):
             return False
         ctx.bot.set_cooldown(ctx.user, math.ceil(result.pause_seconds), PAUSE_SCOPE)
-        await reply(ctx.message, Content.text(
+        await ctx.reply(Content.text(
             'roll_too_fast', user=ctx.user, minutes=result.wait_minutes,
         ))
         return False
     if result.champion is None:
         logger.error('Ролл сохранён, но титулы сессии %s не найдены', ctx.session_id)
-        await reply(ctx.message, Content.text('roll_error', user=ctx.user))
+        await ctx.reply(Content.text('roll_error', user=ctx.user))
         return False
     overlay.publish(overlay.thrown('roll', ctx.user, None, result))
     # For a cursed player the «из» (out of) is their ceiling, not the roll's upper bound
@@ -108,11 +100,11 @@ async def _roll(ctx: CommandContext) -> bool:
         else Content.text('roll_free_left', free_left=result.free_left)
     )
     note = curse_note(result)
-    await reply(ctx.message, compose(text, loser, champion_note(result), free_left, note))
+    await ctx.reply(compose(text, loser, champion_note(result), free_left, note))
     return True
 
 
-async def handle_rollstat(ctx: CommandContext) -> None:
+async def handle_rollstat(ctx: Request) -> None:
     """A player's roll, free throws left and effects, and the session's two titles: your own,
     or another player's with «!rollstat ник». No Gemini, no throw: reading changes nothing."""
     target = ctx.user
@@ -120,15 +112,15 @@ async def handle_rollstat(ctx: CommandContext) -> None:
         target = parse_nick(ctx.original_args)
         if target is None:
             # «!rollstat два слова»: only a nick may follow, and silence reads as a broken bot
-            await ctx.refuse()
-            await reply(ctx.message, Content.text(
+            ctx.refuse()
+            await ctx.reply(Content.text(
                 'rollstat_bad_input', user=ctx.user, input=input_preview(ctx.original_args),
             ))
             return
     if not ctx.bot.stream_live:
         # The game lives inside a stream, and outside one there is nothing to show
         ctx.clear_cooldown()
-        await reply(ctx.message, Content.text('roll_offline', user=ctx.user))
+        await ctx.reply(Content.text('roll_offline', user=ctx.user))
         return
     overlay.publish(overlay.wake())
     # Another player's texts speak of them, not to them: the keys with _other
@@ -139,7 +131,7 @@ async def handle_rollstat(ctx: CommandContext) -> None:
         tier = Tier(await get_tier(ctx.session_id, target) or Tier.REGULAR)
         limit, unlimited = rules.free_limit(tier), tier == Tier.BROADCASTER
     else:
-        limit, unlimited = free_limit_for(ctx.message.chatter), ctx.message.chatter.broadcaster
+        limit, unlimited = rules.free_limit(ctx.tier), ctx.broadcaster
     standing = await game.status(ctx.session_id, target, limit=limit, unlimited=unlimited)
     if standing.value is None:
         own = Content.text(f'rollstat_none{suffix}', user=ctx.user, target=target)
@@ -194,4 +186,4 @@ async def handle_rollstat(ctx: CommandContext) -> None:
         parts.append(champion_note(game.Outcome(game.Status.OK, champion=standing.champion)))
     # Many effects at once can pass Twitch's limit: the answer goes out in as many messages as it needs
     for piece in split_message(compose(*parts)):
-        await reply(ctx.message, piece)
+        await ctx.reply(piece)

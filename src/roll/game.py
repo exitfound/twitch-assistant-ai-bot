@@ -21,8 +21,8 @@ from src.core.config import Rewards, Roll, Twitch
 from src.core.database import get_previous_stream_session, get_session_start, has_chatted, transaction
 from src.core.utils import parse_nick
 from src.core.tier import Tier, by_tier
-from src.twitch.local.roll import rules
-from src.twitch.local.roll.storage import (
+from src.roll import rules
+from src.roll.storage import (
     RollRow, activate_perks, add_choke, add_perk, clear_chokes, clear_chokes_outside, clear_curses_outside,
     consume_perk, consume_perks, count_actions, count_throws_since, flask_drinks, flask_granted_at, flask_last_at,
     get_action_status, get_chokes, get_due_chokes, get_expired_curses, get_held, get_last_roll_session_before,

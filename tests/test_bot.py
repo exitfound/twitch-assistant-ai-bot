@@ -351,8 +351,8 @@ async def test_a_failed_reward_start_is_retried_until_it_works(live_bot, monkeyp
         started.set()
     monkeypatch.setattr(live_bot._rewards, 'start', start)
     granted = asyncio.Event()
-    perks = AsyncMock(side_effect=lambda *args: granted.set())
-    monkeypatch.setattr(bot_module.perks, 'on_stream_start', perks)
+    told = AsyncMock(side_effect=lambda *args, **kwargs: granted.set())
+    monkeypatch.setattr(live_bot._roll, 'stream', told)
 
     await live_bot._start_rewards()
     assert not live_bot._rewards.active
@@ -363,7 +363,7 @@ async def test_a_failed_reward_start_is_retried_until_it_works(live_bot, monkeyp
     assert not live_bot._tasks.running('rewards_retry')
     live_bot.send_chat_message.assert_not_awaited()
     # Mid-stream the champion's Благодать, held back while the rewards were down, comes now
-    perks.assert_awaited_once_with(live_bot, live_bot.session_id)
+    told.assert_awaited_once_with(live_bot.session_id, live=True, rewards_active=True)
 
 
 async def test_a_dead_token_at_start_is_not_retried(live_bot, monkeypatch):
@@ -447,7 +447,7 @@ async def test_an_unheard_rewards_notice_is_repeated(live_bot):
 
 @pytest.fixture
 def lifecycle(live_bot, monkeypatch):
-    """live_bot with the stream tracker, the rewards and the perks recording one journal."""
+    """live_bot with the stream tracker, the rewards and the game recording one journal."""
     calls: list = []
 
     def record(name):
@@ -458,8 +458,7 @@ def lifecycle(live_bot, monkeypatch):
                                       stream_id='s0')
     monkeypatch.setattr(live_bot._rewards, 'set_open', record('rewards.set_open'))
     monkeypatch.setattr(live_bot._rewards, 'stop', record('rewards.stop'))
-    monkeypatch.setattr(bot_module.perks, 'on_stream_start', record('perks'))
-    monkeypatch.setattr(bot_module.roll_announce, 'on_stream_start', record('curses.drop'))
+    monkeypatch.setattr(live_bot._roll, 'stream', record('roll.stream'))
     monkeypatch.setattr(live_bot, 'stop_background_tasks', record('tasks.stop'))
     monkeypatch.setattr(bot_module.commands.Bot, 'close', record('twitchio.close'))
     return live_bot, calls
@@ -500,8 +499,9 @@ async def test_a_repeated_close_does_not_ask_the_gate_again(lifecycle, monkeypat
 
 async def test_a_stream_end_pauses_the_rewards(lifecycle):
     bot, calls = lifecycle
+    ended = bot.session_id
     await bot.stream_went_offline()
-    assert calls == [('stream.offline',), ('rewards.set_open', False)]
+    assert calls == [('stream.offline',), ('rewards.set_open', False), ('roll.stream', ended)]
 
 
 async def test_a_stream_start_opens_the_rewards_and_hands_out_perks(lifecycle):
@@ -509,8 +509,8 @@ async def test_a_stream_start_opens_the_rewards_and_hands_out_perks(lifecycle):
     await bot.stream_went_online('s1', 1000.0)
     assert ('stream.online', 's1', 1000.0) in calls
     assert ('rewards.set_open', True) in calls
-    assert ('perks', bot, bot.session_id) in calls
-    assert ('curses.drop', bot.session_id) in calls
+    # The game drops the old curses and hands out the perks on this event
+    assert ('roll.stream', bot.session_id) in calls
 
 
 async def test_a_stream_end_schedules_the_cinema_close_and_a_start_cancels_it(lifecycle, monkeypatch):

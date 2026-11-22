@@ -10,7 +10,7 @@ from src.twitch.core import component
 from src.core.config import Cooldown, PerStream, Quota, Roll
 from src.twitch.core.limits import limit_for
 from src.twitch.core.viewer import Tier, sub_hint, tier_of
-from src.twitch.local.roll.command import free_limit_for
+from src.roll.rules import free_limit
 
 BADGES = {
     'broadcaster': {'broadcaster': True},
@@ -65,7 +65,7 @@ def test_cooldown_and_quota(who_, cooldown, quota):
     ('regular', Roll.FREE_PER_SESSION),
 ])
 def test_free_throws(who_, limit):
-    assert free_limit_for(make_chatter(**BADGES[who_])) == limit
+    assert free_limit(tier_of(make_chatter(**BADGES[who_]))) == limit
 
 
 @pytest.mark.parametrize(('who_', 'limit'), [

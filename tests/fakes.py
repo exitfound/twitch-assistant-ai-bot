@@ -72,7 +72,7 @@ def always(monkeypatch, flask) -> None:
     """The random flask always comes up as `flask`. A swap needs a free partner before the draw;
     for any other flask a lone test player gets one, so a test of that flask needs no extra player.
     The rule itself is tested on its own."""
-    from src.twitch.local.roll import game
+    from src.roll import game
     monkeypatch.setattr(game, 'FLASKS', {flask: 1})
     if flask == game.Flask.SWAP:
         monkeypatch.setattr(game, '_partners', _REAL_PARTNERS.setdefault('partners', game._partners))
@@ -85,3 +85,29 @@ def always(monkeypatch, flask) -> None:
 
 
 _REAL_PARTNERS: dict = {}
+
+
+async def play(handler, ctx) -> None:
+    """Run a game handler on a chat command the way the bot's link does: the replies go to
+    the message, what the game gives back is applied to the bot's gate."""
+    import dataclasses
+
+    from src.roll.request import Request
+    from src.twitch.core.replies import reply
+    from src.twitch.core.viewer import tier_of
+    from src.twitch.roll.client import apply_gate
+    request = Request(
+        user=ctx.user, tier=tier_of(ctx.message.chatter), session_id=ctx.session_id, bot=ctx.bot,
+        send=lambda text: reply(ctx.message, text), args=ctx.args, original_args=ctx.original_args,
+    )
+    await handler(request)
+    await apply_gate(ctx, ctx.prompt.split()[0], **dataclasses.asdict(request.gate))
+
+
+def chat_component(bot, followers=None, *, game: bool = True):
+    """The dispatcher as the bot builds it, with the game linked in this process."""
+    from src.twitch.core.component import ChatComponent
+    from src.twitch.core.followers import FollowerCache
+    from src.twitch.roll.client import LocalRoll
+    followers = followers if followers is not None else FollowerCache()
+    return ChatComponent(bot, followers, LocalRoll(bot, followers) if game else None)

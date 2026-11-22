@@ -9,8 +9,8 @@ import logging
 from src.core.config import Roll
 from src.core.content import Content
 from src.core.database import save_bot_interaction
-from src.twitch.core.port import BotPort
-from src.twitch.local.roll import game, overlay
+from src.roll.port import RollPort
+from src.roll import game, overlay
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 CURSE_LIFT_CHECK_SECONDS = 60
 
 
-async def curse_lift_loop(bot: BotPort) -> None:
+async def curse_lift_loop(bot: RollPort) -> None:
     """Tells chat when a player's curse has lifted.
 
     A curse lifts once the ceiling has sat on the floor for REWARD_CURSE_HOLD_MINUTES.
@@ -49,7 +49,7 @@ async def on_stream_start(session_id: str) -> None:
         logger.exception('Проклятия прошлых эфиров не сняты')
 
 
-async def _announce_curse_lifts(bot: BotPort) -> None:
+async def _announce_curse_lifts(bot: RollPort) -> None:
     session_id = bot.session_id
     for user in await game.lift_expired_curses(session_id):
         overlay.publish(overlay.lifted(user))

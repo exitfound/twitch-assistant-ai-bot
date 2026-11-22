@@ -7,7 +7,7 @@ import pytest
 from src.core import content
 from src.core.content import Content, parse, validate_content
 from src.gemini.memory import build
-from src.twitch.local.roll import game, redemption, rewards
+from src.roll import game, redemption, specs
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -109,10 +109,10 @@ def real_content(monkeypatch):
 def test_reward_titles_and_descriptions_fit_twitch(real_content, monkeypatch):
     """Twitch takes a title up to 45 characters and a description up to 200, and the bot
     cuts anything longer mid-word: the check runs on the uncut text."""
-    title_max, prompt_max = rewards.TITLE_MAX, rewards.PROMPT_MAX
-    monkeypatch.setattr(rewards, 'TITLE_MAX', 10_000)
-    monkeypatch.setattr(rewards, 'PROMPT_MAX', 10_000)
-    for spec in rewards._specs():
+    title_max, prompt_max = specs.TITLE_MAX, specs.PROMPT_MAX
+    monkeypatch.setattr(specs, 'TITLE_MAX', 10_000)
+    monkeypatch.setattr(specs, 'PROMPT_MAX', 10_000)
+    for spec in specs.specs():
         assert 0 < len(spec.title) <= title_max, spec.action
         assert len(spec.prompt) <= prompt_max, (spec.action, len(spec.prompt))
         assert '{' not in spec.prompt, spec.prompt
@@ -134,7 +134,7 @@ def test_every_reward_outcome_fills_its_template(real_content, action):
         text = redemption._render(action, 'gop', 'victim', outcome)
         assert text and '{' not in text, (outcome.status, text)
     for key in ('reward_refund_offline', 'reward_refund_follow', 'reward_error'):
-        assert '{' not in Content.text(key, user='gop', reward=rewards.reward_title(action))
+        assert '{' not in Content.text(key, user='gop', reward=specs.reward_title(action))
 
 
 def test_the_chill_text_fills_its_template(real_content):

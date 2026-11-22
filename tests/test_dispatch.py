@@ -5,15 +5,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.twitch.core.commands import CommandContext, CommandEntry, Kind
-from src.twitch.core.component import ChatComponent, route
+from src.twitch.core.component import route
 from src.core.config import Follow, Quota, Twitch
 from src.core.database import count_bot_uses, record_bot_use
 from src.twitch.gemini.commands import handle_who
 from src.twitch.local.commands import handle_help, handle_help_index, handle_stats
-from src.twitch.local.roll.board import handle_rollboard
-from src.twitch.local.roll.command import handle_roll, handle_rollstat
 
 
 async def _noop(ctx):
@@ -42,13 +40,13 @@ class TestCommandEntry:
 
 @pytest.fixture
 def component():
-    return ChatComponent(FakeBot())
+    return chat_component(FakeBot())
 
 
 @pytest.mark.parametrize('text', ['!ask вопрос', '!who nick', '!versus a b', '!summary'])
 async def test_per_stream_commands_are_open_to_a_follower(db, monkeypatch, text):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     handler = AsyncMock()
     monkeypatch.setattr(component._registry.resolve(text), 'handler', handler)
     message = make_message(text)
@@ -63,7 +61,7 @@ def gated(monkeypatch):
     """A component with the follow requirement on and !rollstat's handler replaced by a mock."""
     monkeypatch.setattr(Follow, 'REQUIRED', True)
     bot = FakeBot()
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     handler = AsyncMock()
     monkeypatch.setattr(component._registry.resolve('!rollstat'), 'handler', handler)
     return component, bot, handler
@@ -123,7 +121,7 @@ async def test_badges_and_help_skip_the_follow_check(db, gated, monkeypatch):
 
 
 async def test_stat_is_the_broadcasters_and_silent_for_anyone_else(db, monkeypatch):
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     handler = AsyncMock()
     monkeypatch.setattr(component._registry.resolve('!stat'), 'handler', handler)
     for chatter in (make_chatter('gop'), make_chatter('mod', moderator=True), make_chatter('sub', subscriber=True)):
@@ -140,19 +138,29 @@ async def test_stat_is_the_broadcasters_and_silent_for_anyone_else(db, monkeypat
     ('!bot', handle_help),
     ('!stat', handle_stats),
     ('!stat nick', handle_stats),
-    ('!rollstat', handle_rollstat),
-    ('!rollboard', handle_rollboard),
-    ('!rollboard 5', handle_rollboard),
-    ('!roll', handle_roll),
-    ('!roll 5', handle_roll),
-    ('!roll: @nick', handle_roll),
-    ('!rollstat 5', handle_rollstat),
+    ('!rollstat', '!rollstat'),
+    ('!rollboard', '!rollboard'),
+    ('!rollboard 5', '!rollboard'),
+    ('!roll', '!roll'),
+    ('!roll 5', '!roll'),
+    ('!roll: @nick', '!roll'),
+    ('!rollstat 5', '!rollstat'),
     ('!rollstats', None),
     ('!who nick', handle_who),
 ])
 def test_registry_resolves_the_real_commands(component, text, handler):
+    """A game command is carried to the game: its entry is found by the trigger."""
     entry = component._registry.resolve(text)
-    assert (entry.handler if entry else None) is handler
+    if isinstance(handler, str):
+        assert entry.trigger == handler
+    else:
+        assert (entry.handler if entry else None) is handler
+
+
+def test_without_the_game_its_commands_do_not_exist(db):
+    component = chat_component(FakeBot(), game=False)
+    assert component._registry.resolve('!roll') is None
+    assert component._registry.resolve('!rollboard') is None
 
 
 def test_help_channel_is_served_by_the_channel_commands(component):
@@ -239,7 +247,7 @@ async def test_two_quick_messages_start_one_generation(db, monkeypatch):
     """twitchio runs every event in its own task: the cooldown must be taken before the
     first await after its check, or both messages pass it."""
     monkeypatch.setattr(Follow, 'REQUIRED', False)
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     handler = AsyncMock()
     monkeypatch.setattr('src.twitch.core.component.handle_default', handler)
 
@@ -256,7 +264,7 @@ async def test_a_repeated_delivery_runs_the_command_once(db, monkeypatch):
     """Two chat subscriptions or an EventSub redelivery bring the same message twice:
     one !roll must not become two throws."""
     monkeypatch.setattr(Follow, 'REQUIRED', False)
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     entry = component._registry.resolve('!roll')
     handler = AsyncMock()
     monkeypatch.setattr(entry, 'handler', handler)
@@ -271,9 +279,9 @@ async def test_a_repeated_delivery_runs_the_command_once(db, monkeypatch):
 async def test_roll_with_anything_after_it_is_refused_without_a_throw(db, monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     bot = FakeBot()
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     throw = AsyncMock()
-    monkeypatch.setattr('src.twitch.local.roll.game.free_throw', throw)
+    monkeypatch.setattr('src.roll.game.free_throw', throw)
 
     message = make_message('!roll 100 ПЛИЗ')
     await component.event_message(message)
@@ -287,10 +295,10 @@ async def test_rollstat_with_anything_after_it_is_refused_without_a_status(db, m
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     bot = FakeBot()
     status = AsyncMock()
-    monkeypatch.setattr('src.twitch.local.roll.game.status', status)
+    monkeypatch.setattr('src.roll.game.status', status)
 
     message = make_message('!rollstat два слова')
-    await ChatComponent(bot).event_message(message)
+    await chat_component(bot).event_message(message)
 
     status.assert_not_awaited()
     message.respond.assert_awaited_once_with('texts.rollstat_bad_input')
@@ -301,7 +309,7 @@ async def test_a_failing_quota_check_gives_the_cooldown_back(db, monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     monkeypatch.setattr(Quota, 'CHANNEL_PER_HOUR', 10)
     bot = FakeBot()
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     monkeypatch.setattr('src.twitch.core.component.count_channel_bot_uses', AsyncMock(side_effect=RuntimeError('db')))
     with pytest.raises(RuntimeError):
         await component.event_message(make_message('сосурян раз'))
@@ -313,7 +321,7 @@ async def test_quota_refusal_gives_the_cooldown_back(db, monkeypatch):
     monkeypatch.setattr(Quota, 'FOLLOWER_PER_HOUR', 1)
     await record_bot_use('viewer', Kind.GEMINI)
     bot = FakeBot()
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     message = make_message('сосурян раз')
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.quota_exceeded texts.sub_hint')
@@ -324,7 +332,7 @@ async def test_the_cooldown_refusal_is_said_once_per_pause(db, monkeypatch):
     """The refusal names the seconds left: repeating it on every message would be spam."""
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     bot = FakeBot()
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     monkeypatch.setattr('src.twitch.core.component.handle_default', AsyncMock())
 
     messages = [make_message(f'сосурян {i}') for i in range(4)]
@@ -348,7 +356,7 @@ async def test_the_cooldown_refusal_is_said_once_per_pause(db, monkeypatch):
 async def test_moderators_repeat_a_public_command_within_its_pause(db, monkeypatch, badges, passes):
     """Staff repeat a link for a newcomer at any time; the rest of the chat waits the pause."""
     monkeypatch.setattr(Follow, 'REQUIRED', False)
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     entry = component._registry.resolve('!help')
     handler = AsyncMock()
     monkeypatch.setattr(entry, 'handler', handler)
@@ -365,7 +373,7 @@ async def test_the_broadcaster_does_not_use_up_the_channel_ceiling(db, monkeypat
         await record_bot_use(Twitch.CHANNEL.lower(), Kind.GEMINI)
     handler = AsyncMock()
     monkeypatch.setattr('src.twitch.core.component.handle_default', handler)
-    await ChatComponent(FakeBot()).event_message(make_message('сосурян раз'))
+    await chat_component(FakeBot()).event_message(make_message('сосурян раз'))
     handler.assert_awaited_once()
 
 
@@ -374,7 +382,7 @@ async def test_a_subscriber_is_held_by_their_own_quota(db, monkeypatch):
     monkeypatch.setattr(Quota, 'SUB_PER_HOUR', 1)
     await record_bot_use('viewer', Kind.GEMINI)
     message = make_message('сосурян раз', make_chatter(subscriber=True))
-    await ChatComponent(FakeBot()).event_message(message)
+    await chat_component(FakeBot()).event_message(message)
     message.respond.assert_awaited_once_with('texts.quota_exceeded')
 
 
@@ -389,5 +397,5 @@ async def test_the_quota_refusal_hints_only_where_a_subscription_raises_it(db, m
     monkeypatch.setattr(Quota, 'SUB_PER_HOUR', sub_quota)
     await record_bot_use('viewer', Kind.GEMINI)
     message = make_message('сосурян раз', make_chatter(**badges))
-    await ChatComponent(FakeBot()).event_message(message)
+    await chat_component(FakeBot()).event_message(message)
     message.respond.assert_awaited_once_with('texts.quota_exceeded' + (' texts.sub_hint' if hinted else ''))

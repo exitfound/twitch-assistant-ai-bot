@@ -5,11 +5,10 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core import config
 from src.core.config import Film, Follow
 from src.twitch.core.commands import CommandContext, Kind
-from src.twitch.core.component import ChatComponent
 from src.twitch.local import film
 
 
@@ -159,7 +158,7 @@ async def test_title_without_a_session_is_closed(hall):
 
 async def test_the_broadcaster_controls_through_chat(db, hall):
     hall.state = {'active': False}
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     streamer = make_chatter('exitfound', broadcaster=True)
     await component.event_message(make_message('!film start Чужие', streamer))
     await component.event_message(make_message('!Film Title Чужие 2', streamer))
@@ -170,7 +169,7 @@ async def test_the_broadcaster_controls_through_chat(db, hall):
 async def test_a_usage_slip_does_not_hold_up_the_right_command(db, hall, monkeypatch):
     """A VIP with control rights: «!film title» without a name, then with one, at once."""
     monkeypatch.setattr(Film, 'CONTROL_ACCESS', frozenset({'vip'}))
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     vip = make_chatter('vipper', vip=True)
     slip, fixed = make_message('!film title', vip), make_message('!film title Чужие', vip)
     await component.event_message(slip)
@@ -182,7 +181,7 @@ async def test_a_usage_slip_does_not_hold_up_the_right_command(db, hall, monkeyp
 @pytest.mark.parametrize('text', ['!film start', '!film start Чужие', '!film title Чужие', '!film stop'])
 async def test_anyone_else_is_told_it_is_not_their_level(db, hall, text):
     bot = FakeBot()
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     message = make_message(text, make_chatter('gop', moderator=True, subscriber=True, vip=True))
     await component.event_message(message)
     assert hall.calls == []
@@ -191,7 +190,7 @@ async def test_anyone_else_is_told_it_is_not_their_level(db, hall, text):
 
 
 async def test_the_refusal_is_not_repeated_within_its_pause(db, hall):
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     gop = make_chatter('gop')
     first, second = make_message('!film start', gop), make_message('!film stop', gop)
     await component.event_message(first)
@@ -203,7 +202,7 @@ async def test_the_refusal_is_not_repeated_within_its_pause(db, hall):
 
 async def test_control_can_be_given_to_moderators(db, hall, monkeypatch):
     monkeypatch.setattr(Film, 'CONTROL_ACCESS', frozenset({'mod'}))
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     await component.event_message(make_message('!film stop', make_chatter('modder', moderator=True)))
     assert hall.calls == [('DELETE', None)]
 
@@ -212,14 +211,14 @@ async def test_control_can_be_given_to_moderators(db, hall, monkeypatch):
 async def test_badged_viewers_get_the_code_without_a_follow(db, hall, badge):
     bot = FakeBot()
     bot.follows = False
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     message = make_message('!film', make_chatter('badged', **{badge: True}))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.film_info')
 
 
 async def test_a_follower_gets_the_code(db, hall):
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     message = make_message('!film', make_chatter('fan'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.film_info')
@@ -230,7 +229,7 @@ async def test_a_non_follower_gets_the_follow_hint(db, hall, monkeypatch, requir
     monkeypatch.setattr(Follow, 'REQUIRED', required)
     bot = FakeBot()
     bot.follows = False
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     message = make_message('!film', make_chatter('newcomer'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.follow_required')
@@ -242,7 +241,7 @@ async def test_all_lets_in_a_non_follower(db, hall, monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', True)
     bot = FakeBot()
     bot.follows = False
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     message = make_message('!film', make_chatter('newcomer'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.film_info')
@@ -250,7 +249,7 @@ async def test_all_lets_in_a_non_follower(db, hall, monkeypatch):
 
 async def test_a_follower_outside_the_roles_is_dropped(db, hall, monkeypatch):
     monkeypatch.setattr(Film, 'INFO_ACCESS', frozenset({'sub'}))
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     message = make_message('!film', make_chatter('fan'))
     await component.event_message(message)
     message.respond.assert_not_awaited()
@@ -261,7 +260,7 @@ async def test_without_the_site_there_is_no_command(db, monkeypatch):
     monkeypatch.setattr(Film, 'ENABLED', False)
     gate = AsyncMock()
     monkeypatch.setattr(film, 'gate', gate)
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     await component.event_message(make_message('!film', make_chatter('gop')))
     gate.assert_not_awaited()
 
@@ -581,11 +580,11 @@ async def test_shutdown_with_the_gate_down_is_only_logged(hall):
 
 
 def test_film_is_listed_by_help_channel_and_its_controls_are_not(hall):
-    listing = ChatComponent(FakeBot())._channel.listing()
+    listing = chat_component(FakeBot())._channel.listing()
     assert '!film' in listing
     assert not {'!film start', '!film title', '!film stop'} & set(listing)
 
 
 def test_without_the_hall_film_is_not_listed(monkeypatch):
     monkeypatch.setattr(Film, 'ENABLED', False)
-    assert '!film' not in ChatComponent(FakeBot())._channel.listing()
+    assert '!film' not in chat_component(FakeBot())._channel.listing()

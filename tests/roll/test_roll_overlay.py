@@ -8,14 +8,14 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
-from fakes import FakeBot, always, make_chatter, make_message
+from fakes import FakeBot, always, make_chatter, make_message, play
 from src.core.config import Rewards, Roll
-from src.twitch.core import sse
+from src.core import sse
 from src.twitch.core.commands import CommandContext
-from src.twitch.local.roll import game, overlay, rules
-from src.twitch.local.roll.command import handle_roll, handle_rollstat
-from src.twitch.local.roll.redemption import handle_redemption
-from src.twitch.local.roll.storage import save_roll, save_throw
+from src.roll import game, overlay, rules
+from src.roll.command import handle_roll, handle_rollstat
+from src.roll.redemption import handle_redemption
+from src.roll.storage import save_roll, save_throw
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def sent(queue: asyncio.Queue) -> list[dict]:
 
 async def roll(bot: FakeBot, user: str) -> None:
     message = make_message('!roll', make_chatter(user))
-    await handle_roll(CommandContext(message=message, user=user, prompt='!roll', original_text='!roll',
+    await play(handle_roll, CommandContext(message=message, user=user, prompt='!roll', original_text='!roll',
                                      session_id=bot.session_id, bot=bot))
 
 
@@ -87,14 +87,14 @@ async def test_a_command_without_a_card_wakes_the_titles(db, page, monkeypatch):
     plate comes back for its hold. Offline nothing is sent: the plate is hidden anyway."""
     bot = FakeBot()
     message = make_message('!rollstat', make_chatter('gop'))
-    await handle_rollstat(CommandContext(message=message, user='gop', prompt='!rollstat', original_text='!rollstat',
-                                         session_id=bot.session_id, bot=bot))
+    await play(handle_rollstat, CommandContext(message=message, user='gop', prompt='!rollstat',
+                                               original_text='!rollstat', session_id=bot.session_id, bot=bot))
     assert sent(page) == [{'type': 'wake'}]
     monkeypatch.setattr(game, 'free_throw', AsyncMock(return_value=game.Outcome(game.Status.NO_FREE_LEFT)))
     await roll(bot, 'gop')
     assert sent(page) == [{'type': 'wake'}]
     message = make_message('!roll 5', make_chatter('gop'))
-    await handle_roll(CommandContext(message=message, user='gop', prompt='!roll 5', original_text='!roll 5',
+    await play(handle_roll, CommandContext(message=message, user='gop', prompt='!roll 5', original_text='!roll 5',
                                      session_id=bot.session_id, bot=bot, args='5'))
     assert sent(page) == [{'type': 'wake'}]
     bot.stream_live = False
@@ -195,7 +195,7 @@ async def test_a_broken_page_feed_never_reaches_the_game(db, page, monkeypatch, 
         raise RuntimeError('boom')
     monkeypatch.setattr(overlay.feed, 'publish', broken)
     message = make_message('!roll', make_chatter('gop'))
-    await handle_roll(CommandContext(message=message, user='gop', prompt='!roll', original_text='!roll',
+    await play(handle_roll, CommandContext(message=message, user='gop', prompt='!roll', original_text='!roll',
                                      session_id=FakeBot().session_id, bot=FakeBot()))
     message.respond.assert_awaited_once()
     assert 'не отправлено' in caplog.text

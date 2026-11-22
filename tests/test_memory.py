@@ -9,7 +9,7 @@ from src.core.database import get_db
 from src.gemini.client import BLOCK_INPUT, ERROR
 from src.gemini.memory import build, storage
 from src.gemini.memory.storage import Block
-from src.twitch.local.roll.storage import save_roll
+from src.roll.storage import save_roll
 
 
 async def _say(username: str, message: str, hours_ago: float) -> int:
@@ -369,3 +369,19 @@ def _session(session_id):
     async def block_session(block):
         return session_id
     return block_session
+
+
+async def test_ever_active_counts_each_conversation_on_its_own(db):
+    """A chatter qualifies by one conversation where they wrote enough, not by a sum of
+    scraps; the most active comes first, mapped to the last conversation they wrote in."""
+    async def conversation(nicks: list[str], hours_ago: float, key: str) -> Block:
+        ids = [await _say(nick, 'привет', hours_ago) for nick in nicks]
+        return Block(key, ids[0], ids[-1], len(ids))
+    first = await conversation(['gop', 'gop', 'gop', 'quiet', 'talker'], 5, '2026-09-20 20:00')
+    second = await conversation(['quiet', 'quiet', 'talker', 'talker', 'talker', 'talker', 'gop'], 1,
+                                '2026-09-21 20:00')
+    chatters = await storage.ever_active_chatters([first, second], 3)
+    # quiet wrote three times, but never three in one conversation
+    assert list(chatters) == ['talker', 'gop']
+    assert chatters == {'talker': second, 'gop': second}
+    assert await storage.ever_active_chatters([], 3) == {}

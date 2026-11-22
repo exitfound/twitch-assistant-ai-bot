@@ -4,12 +4,11 @@ from datetime import datetime
 
 import pytest
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core import content
 from src.core.config import Clock, Follow
 from src.core.database import get_last_message_time, save_chat_message
 from src.twitch.core.commands import Kind
-from src.twitch.core.component import ChatComponent
 from src.twitch.local.lastseen import when
 
 
@@ -24,7 +23,7 @@ def _texts(**templates: str) -> None:
 @pytest.fixture
 def component(monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', True)
-    return ChatComponent(FakeBot())
+    return chat_component(FakeBot())
 
 
 async def _say(component, text: str, chatter=None):

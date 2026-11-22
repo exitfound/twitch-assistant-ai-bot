@@ -5,16 +5,11 @@ checked for any moment. game.py applies them under its lock.
 """
 import math
 import random
-import re
 from typing import NamedTuple
 
 from src.core.config import Rewards, Roll
-from src.core.utils import NICK_TRAILING, clean_nick
-from src.twitch.core.viewer import Tier, by_tier
-from src.twitch.local.roll.storage import RollRow
-
-# Twitch login: Latin letters, digits and underscore, up to 25 characters
-_NICK_RE = re.compile(r'[a-z0-9_]{1,25}')
+from src.core.tier import Tier, by_tier
+from src.roll.storage import RollRow
 
 
 def throw(ceiling: int | None = None) -> int:
@@ -93,22 +88,6 @@ def free_limit(tier: Tier) -> int:
     compared with by the extra roll, so it gets the base one."""
     return by_tier(tier, sub=Roll.FREE_SUB, mod=Roll.FREE_MOD, vip=Roll.FREE_VIP,
                    regular=Roll.FREE_PER_SESSION, broadcaster=Roll.FREE_PER_SESSION)
-
-
-def parse_nick(raw: str) -> str | None:
-    """Nick from the reward input: one word without @ and trailing punctuation.
-
-    Viewers write «@Nick» or «nick,». More than one word, or anything that does not
-    look like a login – None.
-    """
-    words = raw.strip().split()
-    if len(words) != 1:
-        return None
-    nick = clean_nick(words[0])
-    # clean_nick() cuts to the login length: a longer word is not a login, not a cut one
-    if len(nick) < len(words[0].lstrip('@').rstrip(NICK_TRAILING)):
-        return None
-    return nick if _NICK_RE.fullmatch(nick) else None
 
 
 def burst_pause_left(times: list[float], now: float, throws: int, window: int, pause: int) -> float | None:

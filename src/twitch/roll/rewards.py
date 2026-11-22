@@ -1,7 +1,8 @@
 """Channel-points rewards: creation on Twitch, subscription, fulfilling and refunding points.
 
-Only Twitch is here. What a reward does to the game – src/twitch/local/roll/redemption.py and
-src/twitch/local/roll/game.py.
+Only Twitch is here. Which rewards there are and what one does to the game is the game
+service's: the specs come from it (src/roll/specs.py), and so does the decision on each
+redemption (src/roll/redemption.py).
 
 Why the bot creates the rewards itself. Twitch lets only the app that created a reward
 fulfill a redemption or refund its points. A reward made by hand in the streamer's
@@ -12,7 +13,6 @@ it or cancels it with a refund. Neither the streamer nor the viewer has to click
 anything. While the bot is off, the rewards are paused.
 """
 import asyncio
-import dataclasses
 import datetime
 import logging
 
@@ -20,13 +20,9 @@ import twitchio
 from twitchio import eventsub
 from twitchio.ext import commands
 
-from src.core.config import Rewards, Roll
 from src.core.content import Content
-from src.twitch.core.followers import FollowerCache
-from src.twitch.local.roll import game
-from src.twitch.local.roll.redemption import handle_redemption
-from src.twitch.local.roll.storage import get_action_status, get_reward_ids, save_reward_id
-from src.twitch.local.roll.texts import curse_values, luck_values, mass_values, reward_title
+from src.core.database import get_db, transaction
+from src.twitch.roll.client import RollLink, RollSlow, RollUnavailable, Spec
 
 logger = logging.getLogger(__name__)
 
@@ -34,52 +30,33 @@ logger = logging.getLogger(__name__)
 # Only the broadcaster can grant it – a moderator bot cannot have it
 REWARDS_SCOPE = 'channel:manage:redemptions'
 
-# Twitch limits on reward fields
-TITLE_MAX = 45
-PROMPT_MAX = 200
-
 FULFILLED = 'FULFILLED'
 CANCELED = 'CANCELED'
 
-
-@dataclasses.dataclass(frozen=True)
-class RewardSpec:
-    action: str
-    cost: int
-    input_required: bool
-    max_per_user: int           # per stream, 0 – no limit
-
-    @property
-    def title(self) -> str:
-        return reward_title(self.action)[:TITLE_MAX]
-
-    @property
-    def prompt(self) -> str:
-        # The reward's description on Twitch; on a reward that takes a nick it is also
-        # the caption of the input field
-        return Content.text(
-            f'reward_{self.action}_prompt', ceiling=Rewards.CURSE_CEILING,
-            protect=Rewards.REROLL_PROTECT_MINUTES, cleanse_protect=Rewards.CLEANSE_PROTECT_MINUTES,
-            shield=Rewards.SHIELD_MINUTES, flask=Rewards.FLASK_MINUTES, choke_step=Rewards.CHOKE_STEP,
-            throws=Roll.BURST_THROWS, pause=Roll.BURST_PAUSE_MINUTES,
-            window=Rewards.REROLL_WINDOW_MINUTES, follower=Rewards.LIMIT_FOLLOWER,
-            vip=Rewards.LIMIT_VIP, mod=Rewards.LIMIT_MOD, sub=Rewards.LIMIT_SUB,
-            max=Roll.MAX, **curse_values(), **luck_values(), **mass_values(),
-        )[:PROMPT_MAX]
+# A redemption the game did not answer in time is looked up in its journal this much later,
+# and again while the game cannot say; after that it waits for the next start
+RECHECK_SECONDS = 60
+RECHECK_TRIES = 10
 
 
-def _specs() -> list[RewardSpec]:
-    return [
-        RewardSpec(game.Action.EXTRA, Rewards.COST_EXTRA, False, Rewards.EXTRA_MAX_PER_USER),
-        RewardSpec(game.Action.REROLL, Rewards.COST_REROLL, True, Rewards.REROLL_MAX_PER_USER),
-        RewardSpec(game.Action.CURSE, Rewards.COST_CURSE, True, Rewards.CURSE_MAX_PER_USER),
-        RewardSpec(game.Action.SHIELD, Rewards.COST_SHIELD, False, Rewards.SHIELD_MAX_PER_USER),
-        RewardSpec(game.Action.CLEANSE, Rewards.COST_CLEANSE, True, Rewards.CLEANSE_MAX_PER_USER),
-        RewardSpec(game.Action.FLASK, Rewards.COST_FLASK, False, Rewards.FLASK_MAX_PER_USER),
-    ]
+async def get_reward_ids() -> dict[str, str]:
+    """{action: Twitch reward id} – which rewards the bot has already created."""
+    db = await get_db()
+    async with db.execute('SELECT action, reward_id FROM rewards') as cursor:
+        rows = await cursor.fetchall()
+    return dict(rows)
 
 
-def _changes(reward: twitchio.CustomReward, spec: RewardSpec) -> dict:
+async def save_reward_id(action: str, reward_id: str) -> None:
+    async with transaction() as db:
+        await db.execute(
+            'INSERT INTO rewards (action, reward_id) VALUES (?, ?)'
+            ' ON CONFLICT(action) DO UPDATE SET reward_id = excluded.reward_id',
+            (action, reward_id),
+        )
+
+
+def _changes(reward: twitchio.CustomReward, spec: Spec) -> dict:
     """Fields that differ from CONTENT.md and .env. Empty dict – no request needed."""
     changes: dict = {}
     if reward.title != spec.title:
@@ -100,12 +77,16 @@ def _changes(reward: twitchio.CustomReward, spec: RewardSpec) -> dict:
 
 class RewardService:
 
-    def __init__(self, bot, followers: FollowerCache | None = None) -> None:
+    def __init__(self, bot, roll: RollLink) -> None:
         self._bot = bot
-        # The chat's cache: a follow event clears it there, and a new follower may redeem at once
-        self._followers = followers if followers is not None else FollowerCache()
+        self._roll = roll
         self._channel_id: str | None = None
         self._actions: dict[str, str] = {}      # Twitch reward id → action
+        self._titles: dict[str, str] = {}       # action → its title, for the line when the game is down
+        self._rechecks: set[asyncio.Task] = set()
+        # Redemptions the game is applying or that wait for a recheck: not stale, whatever
+        # Twitch says, or settling them would refund one the game is about to apply
+        self._busy: set[str] = set()
         # Whether the rewards should be open, i.e. the stream is live. Written by set_open()
         # even before start() finishes, so a stream starting mid-start is not lost
         self._open = False
@@ -126,7 +107,9 @@ class RewardService:
             self._open = open_
             # Anything redeemed before the subscription will never arrive as an event
             started = datetime.datetime.now(datetime.UTC)
-            await self._sync()
+            # Without the game's specs there is nothing to create: the start fails and is retried
+            specs = await self._roll.specs()
+            await self._sync(specs)
             await self._subscribe()
             self.active = True
         # The subscription is live from here: a failure below is logged, not raised, or
@@ -135,7 +118,7 @@ class RewardService:
             logger.info(
                 'Награды за баллы канала подключены (%s): %s',
                 'эфир идёт' if self._open else 'на паузе до начала эфира',
-                ', '.join(s.title for s in _specs()),
+                ', '.join(spec.title for spec in specs),
             )
         else:
             logger.warning('Награды подключены, но паузу выставить удалось не всем')
@@ -165,6 +148,8 @@ class RewardService:
 
     async def stop(self) -> None:
         """Pause the rewards: while the bot is away, there is nothing to spend points on."""
+        for task in list(self._rechecks):
+            task.cancel()
         if not self.active:
             return
         self.active = False
@@ -193,18 +178,53 @@ class RewardService:
         action = self._actions.get(payload.reward.id)
         if action is None:
             return                  # a reward of another app, not the bot's
-        decision = await handle_redemption(
-            self._bot, action, payload.id, (payload.user.name or '').lower(), payload.user_input,
-            follows=lambda: self._followers.is_follower(self._bot, payload.user.id),
-        )
+        user = (payload.user.name or '').lower()
+        self._busy.add(payload.id)
+        try:
+            decision = await self._roll.redeem(action, payload.id, user, payload.user.id, payload.user_input)
+        except RollSlow:
+            # Maybe applied, maybe not: the game's journal tells, a minute later. Still busy
+            logger.warning('Игра не ответила на выкуп %s, но могла применить – сверю по журналу', payload.id)
+            task = asyncio.create_task(self._recheck(payload.reward.id, payload.id))
+            self._rechecks.add(task)
+            task.add_done_callback(self._rechecks.discard)
+            return
+        except RollUnavailable:
+            self._busy.discard(payload.id)
+            # The game is down: the points go back, and the buyer hears why
+            logger.warning('Игра недоступна – выкуп %s от %s отменён', action, user)
+            decision = False
+            await self._bot.send_chat_message(Content.text(
+                'reward_unavailable', user=user, reward=self._titles.get(action, action),
+            ))
+        else:
+            self._busy.discard(payload.id)
         if decision is None:
             return
         await self._set_status(payload.reward.id, payload.id, FULFILLED if decision else CANCELED)
 
+    async def _recheck(self, reward_id: str, redemption_id: str) -> None:
+        """Settle a redemption the game was too slow to answer by its journal: applied –
+        fulfilled, anything else – refunded, as a stale one is after a start."""
+        try:
+            for _ in range(RECHECK_TRIES):
+                await asyncio.sleep(RECHECK_SECONDS)
+                try:
+                    applied = redemption_id in await self._roll.applied([redemption_id])
+                except RollUnavailable:
+                    continue
+                await self._set_status(reward_id, redemption_id, FULFILLED if applied else CANCELED)
+                logger.info('Выкуп %s сверен по журналу игры: %s', redemption_id,
+                            'применён' if applied else 'возврат')
+                return
+            logger.warning('Выкуп %s так и не сверен – его разберёт следующий старт наград', redemption_id)
+        finally:
+            self._busy.discard(redemption_id)
+
     def _broadcaster(self) -> twitchio.PartialUser:
         return self._bot.create_partialuser(self._channel_id)
 
-    async def _sync(self) -> None:
+    async def _sync(self, specs: list[Spec]) -> None:
         """Bring the rewards on Twitch in line with CONTENT.md and .env.
 
         A reward is looked up by its stored id, and failing that by title among this
@@ -216,7 +236,7 @@ class RewardService:
         by_title = {r.title: r for r in existing.values()}
         stored = await get_reward_ids()
         actions: dict[str, str] = {}
-        for spec in _specs():
+        for spec in specs:
             reward = existing.get(stored.get(spec.action, '')) or by_title.get(spec.title)
             if reward is None:
                 reward = await broadcaster.create_custom_reward(
@@ -233,6 +253,7 @@ class RewardService:
             await save_reward_id(spec.action, reward.id)
             actions[reward.id] = spec.action
         self._actions = actions
+        self._titles = {spec.action: spec.title for spec in specs}
 
     async def _set_paused(self, paused: bool) -> bool:
         """Pause or unpause every reward; True – all of them. Never raises.
@@ -280,17 +301,22 @@ class RewardService:
         """
         broadcaster = self._broadcaster()
         rewards = await broadcaster.fetch_custom_rewards(ids=list(self._actions), manageable=True)
-        settled = 0
+        stale = []
         for reward in rewards:
             # Collect first: changing the status drops the redemption from the result
             # and throws off the pagination
             pending = [r async for r in reward.fetch_redemptions(status='UNFULFILLED')]
-            for redemption in pending:
-                if redemption.redeemed_at >= started:
-                    continue        # redeemed after the subscription, will arrive as an event
-                applied = await get_action_status(redemption.id) == game.Status.OK
-                await self._set_status(reward.id, redemption.id, FULFILLED if applied else CANCELED)
-                settled += 1
+            # Redeemed after the subscription: it will arrive as an event. In the game's hands
+            # right now: not stale at all
+            stale += [(reward.id, r.id) for r in pending if r.redeemed_at < started and r.id not in self._busy]
+        if not stale:
+            return
+        # The game's journal tells an applied redemption from one it never saw
+        applied = await self._roll.applied([redemption_id for _, redemption_id in stale])
+        settled = 0
+        for reward_id, redemption_id in stale:
+            await self._set_status(reward_id, redemption_id, FULFILLED if redemption_id in applied else CANCELED)
+            settled += 1
         if settled:
             logger.warning('Разобрано зависших выкупов: %d', settled)
 

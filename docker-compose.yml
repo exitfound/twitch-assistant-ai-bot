@@ -12,13 +12,59 @@ services:
     environment:
       BOT_DB_PATH: /data/chat_history.db
       MASCOT_HOST: 0.0.0.0
+      # The bot's API for the services: on the compose network only, never published
+      BOT_API_HOST: 0.0.0.0
+      ROLL_URL: http://roll:${ROLL_API_PORT:-8789}
+      VOICE_URL: http://voice:${VOICE_API_PORT:-8791}
     ports:
       - "${MASCOT_PUBLISH:-127.0.0.1}:${MASCOT_PORT:-8787}:${MASCOT_PORT:-8787}"
     volumes:
       - ./:/app:ro
       - ./data:/data
-    logging:
+    logging: &logging
       driver: json-file
       options:
         max-size: 10m
         max-file: "5"
+
+  # The «залупа стрима» game (src/roll/): the same image, its own process. It reaches Twitch
+  # only through the bot's API and shares the database file with it
+  roll:
+    image: twitch-assistant-ai-bot:latest
+    container_name: twitch-roll
+    restart: unless-stopped
+    stop_grace_period: 15s
+    working_dir: /data
+    command: ["/app/roll.py"]
+    user: "1000:1000"
+    env_file: .env
+    environment:
+      BOT_DB_PATH: /data/chat_history.db
+      ROLL_API_HOST: 0.0.0.0
+      ROLL_OVERLAY_HOST: 0.0.0.0
+      BOT_API_URL: http://bot:${BOT_API_PORT:-8790}
+    ports:
+      - "${ROLL_PUBLISH:-127.0.0.1}:${ROLL_OVERLAY_PORT:-8788}:${ROLL_OVERLAY_PORT:-8788}"
+    volumes:
+      - ./:/app:ro
+      - ./data:/data
+    logging: *logging
+
+  # The bot's voice (src/discord/): the Discord client and the answers spoken through the TTS
+  # server. The bot sends it every answer that reached chat; it needs no Twitch token
+  voice:
+    image: twitch-assistant-ai-bot:latest
+    container_name: twitch-voice
+    restart: unless-stopped
+    stop_grace_period: 15s
+    working_dir: /data
+    command: ["/app/voice.py"]
+    user: "1000:1000"
+    env_file: .env
+    environment:
+      BOT_DB_PATH: /data/chat_history.db
+      VOICE_API_HOST: 0.0.0.0
+    volumes:
+      - ./:/app:ro
+      - ./data:/data
+    logging: *logging

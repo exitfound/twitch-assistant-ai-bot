@@ -13,6 +13,7 @@ import twitchio
 from fakes import FakeBot
 from src.core import cooldowns, database, logging_setup
 from src.twitch import bot as bot_module
+from src.twitch.roll import adapter as adapter_module
 from src.twitch.core import chat_socket, stream, tokens
 from src.core.tasks import BackgroundTasks
 from src.twitch.core.port import BotPort, StreamBot
@@ -295,12 +296,13 @@ async def test_a_dead_token_goes_to_the_failure_hook(caplog):
 
 @pytest.fixture
 def live_bot(monkeypatch):
-    """A Bot with rewards on, the channel known, the stream live and the chat recorded."""
-    monkeypatch.setattr(bot_module.Rewards, 'ENABLED', True)
+    """A Bot with the game and rewards on, the channel known, the stream live and the chat recorded."""
+    monkeypatch.setattr(adapter_module.Rewards, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Service, 'ROLL_URL', 'http://roll.test')
     monkeypatch.setattr(bot_module.Bot, 'stream_live', True)
     monkeypatch.setattr(bot_module.Bot, 'session_id', '2026-09-30 20:05')
     # the bot has created its rewards before: a dead token leaves them open on Twitch
-    monkeypatch.setattr(bot_module, 'get_reward_ids', AsyncMock(return_value={'extra': 'reward-1'}))
+    monkeypatch.setattr(adapter_module, 'get_reward_ids', AsyncMock(return_value={'extra': 'reward-1'}))
     bot = bot_module.Bot()
     bot._channel_id = '458646238'
     bot.send_chat_message = AsyncMock(return_value=True)
@@ -309,53 +311,53 @@ def live_bot(monkeypatch):
 
 async def test_a_channel_that_never_had_rewards_hears_nothing(live_bot, monkeypatch):
     """No channel token ever: the bot created no rewards, there is nothing to warn about."""
-    monkeypatch.setattr(bot_module, 'get_reward_ids', AsyncMock(return_value={}))
-    await live_bot.tell_rewards_down()
+    monkeypatch.setattr(adapter_module, 'get_reward_ids', AsyncMock(return_value={}))
+    await live_bot._game.tell_rewards_down()
     live_bot.send_chat_message.assert_not_awaited()
 
 
 async def test_an_unreadable_rewards_table_still_warns(live_bot, monkeypatch, caplog):
     """Unsure whether the rewards exist: a needless warning beats points spent for nothing."""
-    monkeypatch.setattr(bot_module, 'get_reward_ids', AsyncMock(side_effect=RuntimeError('db')))
-    await live_bot.tell_rewards_down()
+    monkeypatch.setattr(adapter_module, 'get_reward_ids', AsyncMock(side_effect=RuntimeError('db')))
+    await live_bot._game.tell_rewards_down()
     live_bot.send_chat_message.assert_awaited_once_with('texts.rewards_down')
 
 
 async def test_a_revoked_channel_token_stops_the_rewards_and_tells_the_chat_once(live_bot):
     """Without the channel's token the rewards stay open on Twitch but do nothing: the watch
     stops retrying and the chat learns why."""
-    live_bot._broadcaster_token = True
-    live_bot._rewards.active = True
+    live_bot._game.broadcaster_token = True
+    live_bot._game.rewards.active = True
 
-    assert await live_bot._rewards_failed(_refresh_refused())
+    assert await live_bot._game._rewards_failed(_refresh_refused())
 
-    assert not live_bot._rewards.active
-    assert not live_bot._broadcaster_token
-    assert not live_bot._rewards_watch._active()
+    assert not live_bot._game.rewards.active
+    assert not live_bot._game.broadcaster_token
+    assert not live_bot._game.rewards_watch._active()
     live_bot.send_chat_message.assert_awaited_once_with('texts.rewards_down')
-    await live_bot.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
     live_bot.send_chat_message.assert_awaited_once()
 
 
 async def test_a_failed_reward_start_is_retried_until_it_works(live_bot, monkeypatch):
     """A Twitch blip at start left the rewards dead, and maybe open, until a restart."""
-    monkeypatch.setattr(bot_module, 'REWARDS_RETRY_SECONDS', 0)
-    live_bot._broadcaster_token = True
+    monkeypatch.setattr(adapter_module, 'REWARDS_RETRY_SECONDS', 0)
+    live_bot._game.broadcaster_token = True
     blips = [aiohttp.ClientConnectionError('down'), aiohttp.ClientConnectionError('down')]
     started = asyncio.Event()
 
     async def start(channel_id, *, open_):
         if blips:
             raise blips.pop()
-        live_bot._rewards.active = True
+        live_bot._game.rewards.active = True
         started.set()
-    monkeypatch.setattr(live_bot._rewards, 'start', start)
+    monkeypatch.setattr(live_bot._game.rewards, 'start', start)
     granted = asyncio.Event()
-    perks = AsyncMock(side_effect=lambda *args: granted.set())
-    monkeypatch.setattr(bot_module.perks, 'on_stream_start', perks)
+    told = AsyncMock(side_effect=lambda *args, **kwargs: granted.set())
+    monkeypatch.setattr(live_bot._game.client, 'stream', told)
 
-    await live_bot._start_rewards()
-    assert not live_bot._rewards.active
+    await live_bot._game.start_rewards()
+    assert not live_bot._game.rewards.active
     async with asyncio.timeout(2):
         await started.wait()
         await granted.wait()
@@ -363,41 +365,41 @@ async def test_a_failed_reward_start_is_retried_until_it_works(live_bot, monkeyp
     assert not live_bot._tasks.running('rewards_retry')
     live_bot.send_chat_message.assert_not_awaited()
     # Mid-stream the champion's Благодать, held back while the rewards were down, comes now
-    perks.assert_awaited_once_with(live_bot, live_bot.session_id)
+    told.assert_awaited_once_with(live_bot.session_id)
 
 
 async def test_a_dead_token_at_start_is_not_retried(live_bot, monkeypatch):
-    live_bot._broadcaster_token = True
-    monkeypatch.setattr(live_bot._rewards, 'start', AsyncMock(side_effect=_refresh_refused()))
-    await live_bot._start_rewards()
+    live_bot._game.broadcaster_token = True
+    monkeypatch.setattr(live_bot._game.rewards, 'start', AsyncMock(side_effect=_refresh_refused()))
+    await live_bot._game.start_rewards()
     assert not live_bot._tasks.running('rewards_retry')
-    assert not live_bot._broadcaster_token
+    assert not live_bot._game.broadcaster_token
     live_bot.send_chat_message.assert_awaited_once_with('texts.rewards_down')
 
 
 async def test_a_network_error_leaves_the_rewards_alone(live_bot):
-    live_bot._broadcaster_token = True
-    live_bot._rewards.active = True
-    assert not await live_bot._rewards_failed(aiohttp.ClientConnectionError('down'))
-    assert live_bot._rewards.active
+    live_bot._game.broadcaster_token = True
+    live_bot._game.rewards.active = True
+    assert not await live_bot._game._rewards_failed(aiohttp.ClientConnectionError('down'))
+    assert live_bot._game.rewards.active
     live_bot.send_chat_message.assert_not_awaited()
 
 
 async def test_the_chat_hears_of_dead_rewards_once_per_stream(live_bot, monkeypatch):
-    await live_bot.tell_rewards_down()
-    await live_bot.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
     assert live_bot.send_chat_message.await_count == 1
     monkeypatch.setattr(bot_module.Bot, 'session_id', '2026-10-01 20:00')
-    await live_bot.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
     assert live_bot.send_chat_message.await_count == 2
 
 
 async def test_working_rewards_or_an_offline_stream_say_nothing(live_bot, monkeypatch):
-    live_bot._broadcaster_token = True
-    await live_bot.tell_rewards_down()
-    live_bot._broadcaster_token = False
+    live_bot._game.broadcaster_token = True
+    await live_bot._game.tell_rewards_down()
+    live_bot._game.broadcaster_token = False
     monkeypatch.setattr(bot_module.Bot, 'stream_live', False)
-    await live_bot.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
     live_bot.send_chat_message.assert_not_awaited()
 
 
@@ -436,10 +438,10 @@ async def test_every_line_is_defused_before_it_leaves():
 
 async def test_an_unheard_rewards_notice_is_repeated(live_bot):
     live_bot.send_chat_message.return_value = False
-    await live_bot.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
     live_bot.send_chat_message.return_value = True
-    await live_bot.tell_rewards_down()
-    await live_bot.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
+    await live_bot._game.tell_rewards_down()
     assert live_bot.send_chat_message.await_count == 2
 
 
@@ -447,7 +449,7 @@ async def test_an_unheard_rewards_notice_is_repeated(live_bot):
 
 @pytest.fixture
 def lifecycle(live_bot, monkeypatch):
-    """live_bot with the stream tracker, the rewards and the perks recording one journal."""
+    """live_bot with the stream tracker, the rewards and the game recording one journal."""
     calls: list = []
 
     def record(name):
@@ -456,10 +458,9 @@ def lifecycle(live_bot, monkeypatch):
         return call
     live_bot.stream = SimpleNamespace(online=record('stream.online'), offline=record('stream.offline'),
                                       stream_id='s0')
-    monkeypatch.setattr(live_bot._rewards, 'set_open', record('rewards.set_open'))
-    monkeypatch.setattr(live_bot._rewards, 'stop', record('rewards.stop'))
-    monkeypatch.setattr(bot_module.perks, 'on_stream_start', record('perks'))
-    monkeypatch.setattr(bot_module.roll_announce, 'on_stream_start', record('curses.drop'))
+    monkeypatch.setattr(live_bot._game.rewards, 'set_open', record('rewards.set_open'))
+    monkeypatch.setattr(live_bot._game.rewards, 'stop', record('rewards.stop'))
+    monkeypatch.setattr(live_bot._game.client, 'stream', record('roll.stream'))
     monkeypatch.setattr(live_bot, 'stop_background_tasks', record('tasks.stop'))
     monkeypatch.setattr(bot_module.commands.Bot, 'close', record('twitchio.close'))
     return live_bot, calls
@@ -500,8 +501,9 @@ async def test_a_repeated_close_does_not_ask_the_gate_again(lifecycle, monkeypat
 
 async def test_a_stream_end_pauses_the_rewards(lifecycle):
     bot, calls = lifecycle
+    ended = bot.session_id
     await bot.stream_went_offline()
-    assert calls == [('stream.offline',), ('rewards.set_open', False)]
+    assert calls == [('stream.offline',), ('rewards.set_open', False), ('roll.stream', ended)]
 
 
 async def test_a_stream_start_opens_the_rewards_and_hands_out_perks(lifecycle):
@@ -509,8 +511,8 @@ async def test_a_stream_start_opens_the_rewards_and_hands_out_perks(lifecycle):
     await bot.stream_went_online('s1', 1000.0)
     assert ('stream.online', 's1', 1000.0) in calls
     assert ('rewards.set_open', True) in calls
-    assert ('perks', bot, bot.session_id) in calls
-    assert ('curses.drop', bot.session_id) in calls
+    # The game drops the old curses and hands out the perks on this event
+    assert ('roll.stream', bot.session_id) in calls
 
 
 async def test_a_stream_end_schedules_the_cinema_close_and_a_start_cancels_it(lifecycle, monkeypatch):
@@ -551,7 +553,7 @@ async def test_a_failing_stream_end_step_still_schedules_the_cinema_close(lifecy
 
     bot, _ = lifecycle
     monkeypatch.setattr(bot_module.Film, 'ENABLED', True)
-    monkeypatch.setattr(bot._rewards, 'set_open', AsyncMock(side_effect=RuntimeError('helix')))
+    monkeypatch.setattr(bot._game.rewards, 'set_open', AsyncMock(side_effect=RuntimeError('helix')))
     monkeypatch.setattr(bot_module.film, 'close_after_stream', lambda _bot: asyncio.sleep(3600))
     with pytest.raises(RuntimeError):
         await bot.stream_went_offline()
@@ -651,3 +653,52 @@ async def test_the_short_login_links_reach_twitch_with_the_full_scopes():
             assert scope in full.headers['Location'] and 'force_verify=true' in full.headers['Location']
     finally:
         await client.close()
+
+
+def test_without_the_game_the_rewards_stay_off(monkeypatch):
+    """The rewards belong to the game: without its service the bot neither creates nor watches them."""
+    monkeypatch.setattr(adapter_module.Rewards, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Service, 'ROLL_URL', None)
+    bot = bot_module.Bot()
+    assert bot._game is None
+    assert not bot.rewards_active
+
+
+def _idle(*_args):
+    import asyncio
+    return asyncio.sleep(3600)
+
+
+@pytest.mark.parametrize(('emotes', 'spam'), [(['Kappa'], True), ([], False)])
+async def test_the_background_tasks_follow_their_flags(live_bot, monkeypatch, caplog, emotes, spam):
+    """With the channel known every switched-on loop starts; emote spam needs emotes to spam."""
+    import logging
+    caplog.set_level(logging.INFO)
+    for flag in (bot_module.Proactive, bot_module.Pulse):
+        monkeypatch.setattr(flag, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Help, 'ANNOUNCE_ENABLED', True)
+    monkeypatch.setattr(bot_module.Emote, 'SPAM_ENABLED', True)
+    monkeypatch.setattr(bot_module.Content, 'items', lambda key: emotes)
+    for loop in ('proactive_loop', 'pulse_loop', 'help_loop', 'emote_spam_loop', 'watch_stream'):
+        monkeypatch.setattr(bot_module, loop, _idle)
+    monkeypatch.setattr(live_bot._chat, 'loop', _idle)
+    monkeypatch.setattr(live_bot._game.rewards_watch, 'loop', _idle)
+    live_bot._start_background_tasks()
+    try:
+        expected = {'chat_watch', 'rewards_watch', 'stream_watch', 'proactive', 'pulse', 'help'}
+        assert all(live_bot._tasks.running(name) for name in expected)
+        assert live_bot._tasks.running('emote_spam') is spam
+        assert ('список эмотов в CONTENT.md пуст' in caplog.text) is not spam
+        assert 'Проактивные сообщения включены' in caplog.text
+    finally:
+        await live_bot._tasks.stop()
+
+
+async def test_without_the_channel_id_only_the_cinema_runs_and_the_rest_is_explained(live_bot, monkeypatch, caplog):
+    monkeypatch.setattr(bot_module.Proactive, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', False)
+    monkeypatch.setattr(bot_module.Film, 'BRIDGE', False)
+    live_bot._channel_id = None
+    live_bot._start_background_tasks()
+    assert not live_bot._tasks.running('chat_watch') and not live_bot._tasks.running('proactive')
+    assert 'фоновые задачи не запущены' in caplog.text

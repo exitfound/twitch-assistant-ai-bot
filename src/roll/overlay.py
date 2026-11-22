@@ -17,8 +17,8 @@ from pathlib import Path
 from aiohttp import web
 
 from src.core.config import Rewards, Roll
-from src.twitch.core.sse import CORS, Feed
-from src.twitch.local.roll import game, rules
+from src.core.sse import CORS, Feed
+from src.roll import game, rules
 
 logger = logging.getLogger(__name__)
 

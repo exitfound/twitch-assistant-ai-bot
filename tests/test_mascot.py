@@ -10,10 +10,10 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from src.twitch import bot as bot_module
-from fakes import FakeBot, make_chatter, make_message
-from src.twitch.core.component import ChatComponent
+from src.twitch.roll import adapter as adapter_module
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core.config import Mascot
-from src.twitch.core import sse
+from src.core import sse
 from src.twitch.local.mascot import feed, mood
 from src.twitch.local.mascot.mood import MoodTracker, target
 
@@ -299,14 +299,14 @@ async def test_the_bots_own_message_is_counted(monkeypatch):
     bot = FakeBot()
     itself = make_chatter('securityexpert')
     itself.id = bot.bot_id
-    await ChatComponent(bot).event_message(make_message('hi', itself))
+    await chat_component(bot).event_message(make_message('hi', itself))
     mood.tracker.update()
     assert mood.tracker.chatters == 1
 
 
 async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
     monkeypatch.setattr(Mascot, 'ENABLED', True)
-    component = ChatComponent(FakeBot())
+    component = chat_component(FakeBot())
     message = make_message('привет', make_chatter('gop'))
     await component.event_message(message)
     await component.event_message(message)
@@ -314,21 +314,28 @@ async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
     assert mood.tracker.chatters == 1
 
 
-@pytest.mark.parametrize('mascot, roll', [(True, False), (False, True), (False, False)])
+@pytest.mark.parametrize('mascot, roll', [(True, False), (False, True), (False, False), (True, True)])
 async def test_the_overlays_start_only_when_enabled(monkeypatch, mascot, roll):
-    """The server runs for either overlay; the mood recount only for the mascot."""
+    """The bot serves the mascot's page and recount; the game serves its own overlay, and the
+    bot runs only the API and the event queue the game needs."""
     monkeypatch.setattr(Mascot, 'ENABLED', mascot)
-    monkeypatch.setattr(bot_module.Roll, 'OVERLAY_ENABLED', roll)
+    monkeypatch.setattr(bot_module.Service, 'ROLL_URL', 'http://roll.test' if roll else None)
 
-    async def loop(*_args):
+    async def loop(*_args, **_kwargs):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(bot_module, 'mascot_loop', loop)
     monkeypatch.setattr(bot_module.sse, 'serve', loop)
+    monkeypatch.setattr(adapter_module, 'serve', loop)
     bot = bot_module.Bot()
+    if roll:
+        monkeypatch.setattr(bot._game.client, 'events_loop', loop)
+        monkeypatch.setattr(bot._game, '_load_commands', loop)
     bot._start_overlays()
     assert bot._tasks.running('mascot') is mascot
-    assert bot._tasks.running('overlays') is (mascot or roll)
+    assert bot._tasks.running('overlays') is mascot
+    assert bot._tasks.running('bot_api') is roll
+    assert bot._tasks.running('roll_events') is roll
     await bot.stop_background_tasks()
 
 

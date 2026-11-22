@@ -6,10 +6,9 @@ from unittest.mock import AsyncMock
 import pytest
 import twitchio
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core import content
 from src.core.config import Follow
-from src.twitch.core.component import ChatComponent
 from src.twitch.local import schedule
 from src.twitch.local.schedule import Plan, Slot, parse, render
 
@@ -38,7 +37,7 @@ def _texts(**templates: str) -> None:
 @pytest.fixture
 def component(monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', True)
-    return ChatComponent(FakeBot())
+    return chat_component(FakeBot())
 
 
 def test_past_and_cancelled_slots_are_skipped_and_the_nearest_taken():

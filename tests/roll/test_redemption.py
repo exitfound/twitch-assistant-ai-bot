@@ -7,9 +7,11 @@ from fakes import FakeBot, always, make_chatter
 import time
 
 from src.core.database import save_chat_message, save_stream, transaction
-from src.twitch.local.roll import game, redemption, rules, tiers
-from src.twitch.local.roll.redemption import handle_redemption
-from src.twitch.local.roll.storage import add_perk, count_actions, get_tier, save_roll, save_tier
+from src.core.tier import Tier
+from src.roll import game, redemption, rules, tiers
+from src.roll.redemption import handle_redemption
+from src.roll.storage import add_perk, count_actions, get_tier, save_roll, save_tier
+from src.twitch.core.viewer import tier_of
 
 
 def redeem(bot, action, redemption_id, user, user_input, *, follows=True, asked=None):
@@ -249,21 +251,21 @@ async def test_chat_stores_the_status_once_and_again_on_a_new_badge(db, monkeypa
     monkeypatch.setattr(tiers, 'save_tier', counted)
     bot = FakeBot()
     for chatter in (make_chatter('gop', vip=True), make_chatter('gop', vip=True), make_chatter('gop', subscriber=True)):
-        await tiers.on_chat(bot, bot.session_id, chatter)
+        await tiers.on_chat(bot, bot.session_id, chatter.name, tier_of(chatter))
     assert [w[2] for w in writes] == ['vip', 'subscriber']
     assert await get_tier(bot.session_id, 'gop') == 'subscriber'
 
 
 async def test_offline_chat_stores_no_status(db):
     bot = FakeBot(stream_live=False)
-    await tiers.on_chat(bot, bot.session_id, make_chatter('gop', vip=True))
+    await tiers.on_chat(bot, bot.session_id, 'gop', Tier.VIP)
     assert await get_tier(bot.session_id, 'gop') is None
 
 
 async def test_a_subscriber_seen_in_chat_buys_by_their_status_before_any_roll(db):
     """The status comes with the first message, not with the first !roll."""
     bot = FakeBot()
-    await tiers.on_chat(bot, bot.session_id, make_chatter('gop', subscriber=True))
+    await tiers.on_chat(bot, bot.session_id, 'gop', Tier.SUB)
     for i in range(game.Rewards.LIMIT_FOLLOWER + 1):
         assert await redeem(bot, game.Action.SHIELD, f'r{i}', 'gop', '', follows=False) is True
         async with transaction() as db_:
@@ -452,7 +454,7 @@ async def test_a_purchase_is_the_buyers_appearance_and_says_the_perk(db):
 
 
 def test_a_long_message_is_cut_at_sentence_ends():
-    from src.twitch.local.roll.texts import MESSAGE_MAX, split_message
+    from src.roll.texts import MESSAGE_MAX, split_message
     sentence = 'Слово ' * 50 + 'конец.'
     pieces = split_message(' '.join([sentence] * 3))
     assert len(pieces) == 3 and all(len(piece) <= MESSAGE_MAX for piece in pieces)

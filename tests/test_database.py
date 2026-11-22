@@ -13,7 +13,7 @@ from src.core.database import (
 )
 from src.core.db import connection, schema
 from src.core.db.knowledge import _sanitize_fts_query
-from src.twitch.local.roll.storage import get_session_loser, save_roll
+from src.roll.storage import get_session_loser, save_roll
 
 
 async def _tables(db) -> set[str]:
@@ -270,3 +270,83 @@ async def test_total_stats(db):
     await _chat('2026-09-19', 1)
     await database.save_chat_message('2026-09-19', 'gop', 'сосурян привет', addressed=True)
     assert await database.get_total_stats() == (4, 1, 1, 1)
+
+
+def test_two_processes_bring_up_one_fresh_database_together(tmp_path):
+    """The bot and the game start at once and both walk the migrations: neither may fail."""
+    import os
+    import subprocess
+    import sys
+    db = tmp_path / 'fresh.db'
+    env = {**os.environ, 'BOT_DB_PATH': str(db), 'PYTHON_DOTENV_DISABLED': '1'}
+    code = ('import asyncio\n'
+            'from src.core.database import close_db, init_db\n'
+            'async def main():\n'
+            '    await init_db()\n'
+            '    await close_db()\n'
+            'asyncio.run(main())\n')
+    procs = [subprocess.Popen([sys.executable, '-c', code], env=env, stderr=subprocess.PIPE, text=True)
+             for _ in range(3)]
+    errors = [p.communicate(timeout=60)[1] for p in procs]
+    assert [p.returncode for p in procs] == [0, 0, 0], errors
+
+
+async def test_the_old_session_keyed_memory_is_renamed_in_one_walk(tmp_path, monkeypatch):
+    """A database from before conversations: stream_chronicles keyed by session. The rename
+    runs inside the walk's one transaction, so two processes never migrate it at once."""
+    path = tmp_path / 'old.db'
+    with sqlite3.connect(path) as old:
+        old.executescript('''
+            CREATE TABLE chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+                username TEXT NOT NULL, message TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+            INSERT INTO chat_messages (session_id, username, message) VALUES ('s1', 'gop', 'a'), ('s1', 'gop', 'b');
+            CREATE TABLE stream_chronicles (session_id TEXT PRIMARY KEY, text TEXT NOT NULL, status TEXT NOT NULL,
+                message_count INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+            INSERT INTO stream_chronicles (session_id, text, status, message_count) VALUES ('s1', 'было', 'ok', 2);
+            CREATE TABLE chatter_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+                username TEXT NOT NULL, event TEXT NOT NULL);
+            CREATE TABLE chatter_profiles (username TEXT PRIMARY KEY, portrait TEXT NOT NULL, relations TEXT NOT NULL,
+                updated_session TEXT NOT NULL, sessions_seen INTEGER NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+        ''')
+    monkeypatch.setattr(connection, 'DB_PATH', path)
+    await schema.init_db()
+    db = await connection.get_db()
+    async with db.execute('SELECT conversation, first_id, last_id FROM chronicles') as cursor:
+        assert await cursor.fetchall() == [('s1', 1, 2)]
+    assert not db.in_transaction
+    await connection.close_db()
+
+
+class _LockedFile:
+    """A connection whose WAL switch fails with `errors`, one per try, then succeeds."""
+
+    def __init__(self, *errors: str) -> None:
+        self.errors = list(errors)
+        self.tries = 0
+
+    async def execute(self, sql):
+        self.tries += 1
+        if self.errors:
+            raise sqlite3.OperationalError(self.errors.pop(0))
+
+
+async def test_the_wal_switch_waits_out_another_process():
+    db = _LockedFile('database is locked', 'database is locked')
+    await connection._wal(db)
+    assert db.tries == 3
+
+
+async def test_the_wal_switch_gives_up_at_the_busy_timeout(monkeypatch):
+    monkeypatch.setattr(connection, 'BUSY_TIMEOUT', 0)
+    db = _LockedFile(*['database is locked'] * 1000)
+    with pytest.raises(sqlite3.OperationalError, match='locked'):
+        await connection._wal(db)
+    assert db.tries < 1000
+
+
+async def test_another_failure_of_the_wal_switch_is_not_retried():
+    db = _LockedFile('disk I/O error')
+    with pytest.raises(sqlite3.OperationalError, match='disk'):
+        await connection._wal(db)
+    assert db.tries == 1

@@ -7,13 +7,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core import content
-from src.twitch.core.component import ChatComponent
 from src.core.config import Cooldown, Follow
 from src.core.content import Content, validate_content
 from src.twitch.local.channel import MESSAGE_MAX, ChannelCommands
-from src.twitch.local.roll.command import handle_roll
 
 
 def _channel(*lines: str) -> None:
@@ -38,7 +36,7 @@ def component(monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', True)
     # The bare reply, so the tests of pauses and lengths see the command's own text
     _reply_template('{reply}')
-    return ChatComponent(FakeBot())
+    return chat_component(FakeBot())
 
 
 def test_commands_come_in_file_order_lowercased_and_without_empty_ones():
@@ -72,8 +70,8 @@ def test_a_command_added_while_the_bot_runs_works_at_once(component):
 def test_a_bot_command_of_the_same_name_wins_and_is_logged(monkeypatch, caplog):
     _channel('### !roll', 'чужой ролл')
     with caplog.at_level(logging.ERROR):
-        component = ChatComponent(FakeBot())
-    assert component._registry.resolve('!roll').handler is handle_roll
+        component = chat_component(FakeBot())
+    assert component._registry.resolve('!roll').trigger == '!roll'
     assert '!roll' in caplog.text
 
 

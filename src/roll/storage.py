@@ -238,23 +238,6 @@ async def get_expired_curses(session_id: str, hold: float, now: float) -> list[s
         return [username for (username,) in await cursor.fetchall()]
 
 
-async def get_reward_ids() -> dict[str, str]:
-    """{action: Twitch reward id} – which rewards the bot has already created."""
-    db = await get_db()
-    async with db.execute('SELECT action, reward_id FROM rewards') as cursor:
-        rows = await cursor.fetchall()
-    return dict(rows)
-
-
-async def save_reward_id(action: str, reward_id: str) -> None:
-    async with transaction() as db:
-        await db.execute(
-            'INSERT INTO rewards (action, reward_id) VALUES (?, ?)'
-            ' ON CONFLICT(action) DO UPDATE SET reward_id = excluded.reward_id',
-            (action, reward_id),
-        )
-
-
 async def get_action_status(redemption_id: str) -> str | None:
     """Outcome of an already handled redemption, or None if it has not been seen yet."""
     db = await get_db()
@@ -263,6 +246,19 @@ async def get_action_status(redemption_id: str) -> str | None:
     ) as cursor:
         row = await cursor.fetchone()
     return row[0] if row else None
+
+
+async def get_applied(redemption_ids: list[str]) -> set[str]:
+    """Those of the redemptions the game has applied (journaled with status ok)."""
+    if not redemption_ids:
+        return set()
+    db = await get_db()
+    marks = ','.join('?' * len(redemption_ids))
+    async with db.execute(
+        f"SELECT redemption_id FROM roll_actions WHERE status = 'ok' AND redemption_id IN ({marks})",
+        redemption_ids,
+    ) as cursor:
+        return {row[0] for row in await cursor.fetchall()}
 
 
 async def save_throw(session_id: str, username: str, thrown_at: float) -> None:

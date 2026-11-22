@@ -9,17 +9,18 @@ from twitchio.ext import commands
 
 from src.twitch.core import stream as twitch_stream
 from src.twitch.core.chat_socket import SocketWatch, check_private_api, keep_migrated_sockets
-from src.twitch.core import sse
+from src.core import sse
 from src.twitch.core.component import ChatComponent
 from src.twitch.core.followers import FollowerCache
-from src.core.config import Emote, Film, Help, Mascot, Memory, Proactive, Pulse, Rewards, Roll, Twitch
+from src.core.config import Emote, Film, Help, Mascot, Memory, Proactive, Pulse, Service, Twitch
+from src.core import speech
 from src.core.content import Content
 from src.core.cooldowns import Cooldowns
 from src.twitch.core.stream import StreamTracker, watch_stream
 from src.core.tasks import BackgroundTasks
 from src.twitch.core.tokens import (
-    BOT_LOGIN, CHANNEL_LOGIN, add_bot_token, add_broadcaster_token, add_login_routes, oauth_link, store_tokens,
-    token_dead, token_problem,
+    BOT_LOGIN, add_bot_token, add_login_routes, oauth_link, store_tokens,
+    token_problem,
 )
 from src.core.utils import defuse
 from src.gemini.memory import build as memory
@@ -31,20 +32,10 @@ from src.twitch.local import schedule
 from src.twitch.local.help_announce import help_loop
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot.feed import mascot_loop
-from src.twitch.local.roll import overlay as roll_overlay
-from src.twitch.local.roll import announce as roll_announce
-from src.twitch.local.roll import board as roll_board
-from src.twitch.local.roll import perks
-from src.twitch.local.roll.announce import curse_lift_loop
-from src.twitch.local.roll.choke import choke_loop
-from src.twitch.local.roll.rewards import REWARDS_SCOPE, RewardComponent, RewardService
-from src.twitch.local.roll.storage import get_reward_ids
+from src.twitch.roll.adapter import RollAdapter
+from src.twitch.roll.rewards import REWARDS_SCOPE
 
 logger = logging.getLogger(__name__)
-
-# Pause before the next attempt to start the rewards after a failure: doubles up to the cap
-REWARDS_RETRY_SECONDS = 60
-REWARDS_RETRY_MAX_SECONDS = 600
 
 # How long a mass flask waits for Twitch's chat list before it takes who has written instead
 CHATTERS_TIMEOUT = 5
@@ -69,8 +60,10 @@ class Bot(commands.Bot):
         self._channel_id: str | None = None
         self._tasks = BackgroundTasks()
         self._followers = FollowerCache()
-        self._rewards = RewardService(self, self._followers)
-        self._broadcaster_token = False
+        # The game service (src/roll/) with everything the bot does on Twitch for it;
+        # without ROLL_URL the game is off: no game commands, no rewards
+        self._game = (RollAdapter(self, self._followers, self._tasks, lambda: self._shutting_down)
+                      if Service.ROLL_URL else None)
         self._chat = SocketWatch(
             self, 'чат', lambda: str(self.bot_id), eventsub.ChatMessageSubscription.type,
             frozenset(sub.type for sub in (
@@ -79,14 +72,6 @@ class Bot(commands.Bot):
             )),
             self._subscribe_to_chat, active=lambda: not self._shutting_down and bool(self._channel_id),
         )
-        self._rewards_watch = SocketWatch(
-            self, 'награды', lambda: self._channel_id, eventsub.ChannelPointsRedeemAddSubscription.type,
-            frozenset(), self._rewards.resubscribe,
-            active=lambda: not self._shutting_down and self._rewards.active,
-            on_failure=self._rewards_failed,
-        )
-        # The session whose chat has been told that the rewards are down
-        self._rewards_down_told: str | None = None
         # Set by run_bot(): re-installed after the web adapter has taken the signals
         self.on_shutdown_signal = None
         self._shutting_down = False
@@ -111,7 +96,7 @@ class Bot(commands.Bot):
 
     @property
     def rewards_active(self) -> bool:
-        return self._rewards.active
+        return self._game is not None and self._game.rewards.active
 
     # --- cooldowns (src/core/cooldowns.py) -----------------------------------
 
@@ -141,17 +126,15 @@ class Bot(commands.Bot):
         users = await self.fetch_users(logins=[Twitch.CHANNEL])
         if users:
             self._channel_id = str(users[0].id)
-            await self._add_broadcaster_token()
+            if self._game is not None:
+                await self._game.add_broadcaster_token()
             await self._sync_stream()
         else:
             logger.error('Канал %s не найден – проактив и отправка в чат работать не будут', Twitch.CHANNEL)
-        await self.add_component(ChatComponent(self, self._followers))
-        await self.add_component(RewardComponent(self._rewards))
-
-    async def _add_broadcaster_token(self) -> None:
-        """The channel's token for rewards (src/twitch/core/tokens.py)."""
-        if Rewards.ENABLED:
-            self._broadcaster_token = await add_broadcaster_token(self, self._channel_id, REWARDS_SCOPE)
+        chat = ChatComponent(self, self._followers, self._game.client if self._game else None)
+        await self.add_component(chat)
+        if self._game is not None:
+            await self._game.attach(chat)
 
     # --- stream -----------------------------------------------------------
 
@@ -183,12 +166,8 @@ class Bot(commands.Bot):
         await self.stream.online(stream_id, started_at)
         # Back within the resume window: the same stream, the cinema hall stays open
         self._tasks.cancel(FILM_CLOSE_TASK)
-        await self._rewards.set_open(True)
-        await self.tell_rewards_down()
-        await roll_overlay.refresh(self.session_id, live=True)
-        await roll_board.regalia(self.session_id, live=True)
-        await roll_announce.on_stream_start(self.session_id)
-        await perks.on_stream_start(self, self.session_id)
+        if self._game is not None:
+            await self._game.on_online()
 
     async def stream_went_offline(self) -> None:
         """Stream ended: session by date, game closed, rewards paused."""
@@ -200,9 +179,8 @@ class Bot(commands.Bot):
         if Film.ENABLED and was_live:
             self._tasks.start(FILM_CLOSE_TASK, lambda: film.close_after_stream(self), once=True)
         await self.stream.offline()
-        await self._rewards.set_open(False)
-        await roll_overlay.refresh(ended, live=False)
-        await roll_board.regalia(ended, live=False)
+        if self._game is not None:
+            await self._game.on_offline(ended)
 
     def _start_memory(self) -> None:
         """The memory check (src/gemini/memory/): runs for as long as the bot does.
@@ -268,158 +246,74 @@ class Bot(commands.Bot):
                 )
         self._start_background_tasks()
         self._start_overlays()
-        await roll_overlay.refresh(self.session_id, live=self.stream_live)
-        await roll_board.regalia(self.session_id, live=self.stream_live)
         # Memory of chat conversations, including those that ended while the bot was down
         self._start_memory()
-        if self.stream_live:
-            # The curses of finished streams go first: the perks granted below lay new ones
-            await roll_announce.on_stream_start(self.session_id)
-        await self._start_rewards()
-        await self.tell_rewards_down()
-        if self.stream_live and not self._rewards.active:
-            # Perks from the previous stream. Rewards that came up granted them already
-            # (_rewards_started()); without them only the Сглаз goes out, and what was
-            # granted is not granted twice, so a restart mid-stream duplicates nothing
-            await perks.on_stream_start(self, self.session_id)
+        if self._game is not None:
+            # Rewards, the warning about a dead channel token, and the stream state to the game
+            await self._game.on_ready()
 
     def _start_overlays(self) -> None:
-        """The OBS pages' server and the mascot's recount. Neither needs the channel id."""
-        app, feeds = web.Application(), []
+        """The mascot's OBS page and recount, the API of the services and the game's event queue.
+        None of them needs the channel id; the game serves its own overlay."""
         if Mascot.ENABLED:
+            app = web.Application()
             mascot_feed.add_routes(app)
-            feeds.append(mascot_feed.feed)
             self._tasks.start('mascot', mascot_loop)
-        if Roll.OVERLAY_ENABLED:
-            roll_overlay.add_routes(app)
-            feeds.append(roll_overlay.feed)
-        if feeds:
-            self._tasks.start('overlays', lambda: sse.serve(app, feeds, Mascot.HOST, Mascot.PORT))
+            self._tasks.start('overlays', lambda: sse.serve(app, [mascot_feed.feed], Mascot.HOST, Mascot.PORT))
+        if self._game is not None:
+            self._game.start_services()
+        if Service.VOICE_URL and self._tasks.start('voice', speech.Forwarder(Service.VOICE_URL, Service.TOKEN).loop):
+            logger.info('Реплики бота уходят на озвучку: %s', Service.VOICE_URL)
 
     def _start_background_tasks(self) -> None:
+        self._start_cinema()
+        if not self._channel_id:
+            if self._needs_channel():
+                logger.warning('ID канала не получен – фоновые задачи не запущены')
+            return
+        tasks = self._tasks
+        tasks.start('chat_watch', self._chat.loop)
+        if self._game is not None:
+            self._game.start_watch()
+        # The Twitch check catches a missed stream start or end
+        tasks.start('stream_watch', lambda: watch_stream(self))
+        loops = (
+            (Proactive.ENABLED, 'proactive', lambda: proactive_loop(self),
+             ('Проактивные сообщения включены (раз в %d–%d мин)',
+              Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)),
+            (Pulse.ENABLED, 'pulse', lambda: pulse_loop(self),
+             ('Пульс чата включён (раз в %d мин во время эфира, пока пишут)', Pulse.INTERVAL_MINUTES)),
+            (Help.ANNOUNCE_ENABLED, 'help', lambda: help_loop(self),
+             ('Напоминания о командах включены (раз в %d мин)', Help.ANNOUNCE_INTERVAL_MINUTES)),
+        )
+        for enabled, name, loop, announce in loops:
+            if enabled and tasks.start(name, loop):
+                logger.info(*announce)
+        if Emote.SPAM_ENABLED:
+            self._start_emote_spam()
+
+    def _start_cinema(self) -> None:
         # The !film commands work without the channel id, so the session they open needs
         # its heartbeat too, or the gate ends it after GATE_LEASE_SECONDS
         if Film.ENABLED:
             self._tasks.start('film_heartbeat', lambda: film.heartbeat_loop(self))
         if Film.BRIDGE and self._tasks.start('film_bridge', film_bridge.bridge_loop):
             logger.info('Мост чата Twitch в кинозал включён (пока открыт сеанс)')
-        if not self._channel_id:
-            if Proactive.ENABLED or Emote.SPAM_ENABLED or Rewards.ENABLED:
-                logger.warning('ID канала не получен – фоновые задачи не запущены')
-            return
-        tasks = self._tasks
-        tasks.start('chat_watch', self._chat.loop)
-        if Rewards.ENABLED:
-            tasks.start('rewards_watch', self._rewards_watch.loop)
-        # The Twitch check catches a missed stream start or end
-        tasks.start('stream_watch', lambda: watch_stream(self))
-        if Proactive.ENABLED and tasks.start('proactive', lambda: proactive_loop(self)):
-            logger.info('Проактивные сообщения включены (раз в %d–%d мин)',
-                        Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
-        if Pulse.ENABLED and tasks.start('pulse', lambda: pulse_loop(self)):
-            logger.info('Пульс чата включён (раз в %d мин во время эфира, пока пишут)', Pulse.INTERVAL_MINUTES)
-        # Curses come from rewards and from the previous stream's results
-        if (Rewards.ENABLED or Roll.PERKS_ENABLED) and tasks.start('curse_lift', lambda: curse_lift_loop(self)):
-            logger.info('Оповещения о снятии проклятий включены')
-        # The choking flask comes only from a reward
-        if Rewards.ENABLED and tasks.start('choke', lambda: choke_loop(self)):
-            logger.info('Шаги ФЛАСКИ УДУШЕНИЯ включены')
-        if Help.ANNOUNCE_ENABLED and tasks.start('help', lambda: help_loop(self)):
-            logger.info('Напоминания о командах включены (раз в %d мин)', Help.ANNOUNCE_INTERVAL_MINUTES)
-        if Emote.SPAM_ENABLED and not tasks.running('emote_spam'):
-            if Content.items('emotes'):
-                tasks.start('emote_spam', lambda: emote_spam_loop(self))
-                logger.info('Спам эмотами включён (раз в %d–%d мин)',
-                            Emote.SPAM_INTERVAL_MIN_MINUTES, Emote.SPAM_INTERVAL_MAX_MINUTES)
-            else:
-                logger.warning(
-                    'EMOTE_SPAM_ENABLED=true, но список эмотов в CONTENT.md пуст – '
-                    'задача не запущена'
-                )
 
-    async def _start_rewards(self) -> None:
-        # Also called once the channel's token arrives by OAuth – start() survives a second call
-        if not Rewards.ENABLED or self._rewards.active or not self._channel_id:
-            return
-        if not self._broadcaster_token:
-            logger.warning(
-                'Награды за баллы канала выключены: нет токена канала. Открой в браузере '
-                'и войди под аккаунтом канала %s:\n%s',
-                Twitch.CHANNEL, oauth_link(CHANNEL_LOGIN),
-            )
-            return
-        try:
-            await self._rewards.start(self._channel_id, open_=self.stream_live)
-        except Exception as e:
-            logger.exception('Награды за баллы канала не запущены')
-            # A Twitch or network failure: without a retry the rewards stay dead until a
-            # restart, and open on Twitch if the last run crashed before pausing them
-            if not await self._rewards_failed(e):
-                self._tasks.start('rewards_retry', self._retry_rewards, once=True)
-            return
-        await self._rewards_started()
+    def _needs_channel(self) -> bool:
+        """Whether a switched-on loop waits for the channel id: worth a warning when it is missing."""
+        rewards = self._game is not None and self._game.rewards_enabled
+        return Proactive.ENABLED or Emote.SPAM_ENABLED or rewards
 
-    async def _rewards_started(self) -> None:
-        """The rewards came up. Mid-stream the champion's Благодать, held back while
-        they were down, is granted now; perks.on_stream_start() grants nothing twice."""
-        if self.stream_live:
-            await perks.on_stream_start(self, self.session_id)
-
-    async def _retry_rewards(self) -> None:
-        """Start the rewards again until it works, the channel's token dies or the bot stops."""
-        delay = REWARDS_RETRY_SECONDS
-        while True:
-            logger.info('Награды за баллы канала: новая попытка через %d с', delay)
-            await asyncio.sleep(delay)
-            if self._shutting_down or self._rewards.active or not self._broadcaster_token:
-                return
-            try:
-                await self._rewards.start(self._channel_id, open_=self.stream_live)
-            except Exception as e:
-                if await self._rewards_failed(e):
-                    return
-                logger.warning('Награды за баллы канала снова не запустились: %r', e)
-            else:
-                await self._rewards_started()
-                return
-            delay = min(delay * 2, REWARDS_RETRY_MAX_SECONDS)
-
-    async def _rewards_failed(self, error: Exception) -> bool:
-        """The rewards watch could not resubscribe. True – the channel's token is dead and
-        retrying stops until a new login."""
-        if not token_dead(error):
-            return False
-        self._broadcaster_token = False
-        self._rewards.drop()
-        logger.error(
-            'Twitch отозвал токен канала – награды за баллы выключены: %s\nОткрой в браузере '
-            'и войди под аккаунтом канала %s:\n%s', error, Twitch.CHANNEL, oauth_link(CHANNEL_LOGIN),
-        )
-        await self.tell_rewards_down()
-        return True
-
-    async def tell_rewards_down(self) -> None:
-        """Tell the chat, once per stream, that the rewards are off for want of the channel's token.
-
-        The rewards stay open on Twitch: without the token the bot can neither pause them
-        nor see a redemption, and the points spent wait for the refund after a new login.
-        A channel that never gave the token has no rewards of the bot to warn about.
-        """
-        if not Rewards.ENABLED or self._broadcaster_token or not self._channel_id or not self.stream_live:
+    def _start_emote_spam(self) -> None:
+        if self._tasks.running('emote_spam'):
             return
-        session = self.session_id
-        if self._rewards_down_told == session:
+        if not Content.items('emotes'):
+            logger.warning('EMOTE_SPAM_ENABLED=true, но список эмотов в CONTENT.md пуст – задача не запущена')
             return
-        self._rewards_down_told = session
-        try:
-            created = bool(await get_reward_ids())
-        except Exception:
-            logger.exception('Не удалось проверить, созданы ли награды')
-            created = True          # unsure: warning for nothing beats points spent for nothing
-        if not created:
-            return
-        if not await self.send_chat_message(Content.text('rewards_down', channel=Twitch.CHANNEL)):
-            self._rewards_down_told = None     # not heard: the next check says it again
+        self._tasks.start('emote_spam', lambda: emote_spam_loop(self))
+        logger.info('Спам эмотами включён (раз в %d–%d мин)',
+                    Emote.SPAM_INTERVAL_MIN_MINUTES, Emote.SPAM_INTERVAL_MAX_MINUTES)
 
     async def event_subscription_revoked(self, payload) -> None:
         # Twitch says why: authorization_revoked, user_removed, … The watch handles the rest
@@ -433,8 +327,8 @@ class Bot(commands.Bot):
                 await self._subscribe_to_chat()
         elif self._channel_id and str(payload.user_id) == self._channel_id:
             await store_tokens(self, 'канала', 'TWITCH_BROADCASTER_TOKEN', payload)
-            self._broadcaster_token = True
-            await self._start_rewards()
+            if self._game is not None:
+                await self._game.on_channel_login()
 
     async def close(self, **options) -> None:
         # close() runs more than once on shutdown; the hall is closed by the first one
@@ -447,7 +341,8 @@ class Bot(commands.Bot):
         # Pause rewards before the HTTP session closes: without the bot a redemption
         # would take the points, and nobody would be there to apply it. Before the hall:
         # a gate that does not answer takes up to 4 s of the container's 10
-        await self._rewards.stop()
+        if self._game is not None:
+            await self._game.close()
         # The cinema hall lives while the bot does; the chat line needs the HTTP session too
         if Film.ENABLED and first:
             await film.close_on_shutdown(self)
@@ -523,7 +418,7 @@ class Bot(commands.Bot):
         await self._tasks.stop()
 
     async def event_websocket_closed(self, payload) -> None:
-        await asyncio.gather(self._chat.closed(), self._rewards_watch.closed())
+        await asyncio.gather(self._chat.closed(), *([self._game.socket_closed()] if self._game else []))
 
     async def _subscribe_to_chat(self) -> None:
         if not self._channel_id:

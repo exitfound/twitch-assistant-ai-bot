@@ -19,9 +19,10 @@ from typing import NamedTuple
 
 from src.core.config import Rewards, Roll, Twitch
 from src.core.database import get_previous_stream_session, get_session_start, has_chatted, transaction
-from src.twitch.core.viewer import Tier, by_tier
-from src.twitch.local.roll import rules
-from src.twitch.local.roll.storage import (
+from src.core.utils import parse_nick
+from src.core.tier import Tier, by_tier
+from src.roll import rules
+from src.roll.storage import (
     RollRow, activate_perks, add_choke, add_perk, clear_chokes, clear_chokes_outside, clear_curses_outside,
     consume_perk, consume_perks, count_actions, count_throws_since, flask_drinks, flask_granted_at, flask_last_at,
     get_action_status, get_chokes, get_due_chokes, get_expired_curses, get_held, get_last_roll_session_before,
@@ -542,16 +543,18 @@ async def _shield(session_id: str, actor: str) -> Outcome:
     return Outcome(Status.OK, target=actor)
 
 
-async def _shield_left(session_id: str, user: str) -> int | None:
-    """Minutes the bought shield still holds. None – no shield.
-
-    The shield is a successful journal row with no state of its own: it holds
-    SHIELD_MINUTES from the latest purchase.
-    """
-    elapsed = await seconds_since_action(session_id, Action.SHIELD, user, Status.OK, time.time())
+async def _minutes_left(session_id: str, action: Action, user: str, minutes: int) -> int | None:
+    """Minutes an effect of a successful journal row still holds: `minutes` from the latest one.
+    None – no such row."""
+    elapsed = await seconds_since_action(session_id, action, user, Status.OK, time.time())
     if elapsed is None:
         return None
-    return rules.whole_minutes(Rewards.SHIELD_MINUTES * 60 - elapsed)
+    return rules.whole_minutes(minutes * 60 - elapsed)
+
+
+async def _shield_left(session_id: str, user: str) -> int | None:
+    """Minutes the bought shield still holds: it has no state of its own, only its purchase."""
+    return await _minutes_left(session_id, Action.SHIELD, user, Rewards.SHIELD_MINUTES)
 
 
 async def _target(
@@ -568,7 +571,7 @@ async def _target(
     if len(user_input.split()) > 1:
         # «nick1 nick2», «@nick спасибо»: which nick was meant is a guess, so none is taken
         return Outcome(Status.EXTRA_WORDS)
-    target = rules.parse_nick(user_input)
+    target = parse_nick(user_input)
     if target is None:
         return Outcome(Status.BAD_TARGET)
     if target == actor and not allow_self:
@@ -730,10 +733,7 @@ async def _pending_perk_curse(session_id: str, user: str) -> bool:
 
 async def _cleanse_protection_left(session_id: str, target: str) -> int | None:
     """Minutes a cleansed player stays safe from a new curse. None – no protection."""
-    elapsed = await seconds_since_action(session_id, Action.CLEANSE, target, Status.OK, time.time())
-    if elapsed is None:
-        return None
-    return rules.whole_minutes(Rewards.CLEANSE_PROTECT_MINUTES * 60 - elapsed)
+    return await _minutes_left(session_id, Action.CLEANSE, target, Rewards.CLEANSE_PROTECT_MINUTES)
 
 
 # --- flasks ------------------------------------------------------------------

@@ -6,8 +6,8 @@ import re
 
 from src.core.config import Rewards, Roll
 from src.core.content import Content
-from src.twitch.local.roll import rules
-from src.twitch.local.roll.game import Outcome
+from src.roll import rules
+from src.roll.game import Outcome
 
 
 # How many characters of a viewer's input to quote in a refusal: people write anything there

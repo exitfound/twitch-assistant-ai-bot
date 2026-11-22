@@ -22,13 +22,11 @@ from datetime import datetime
 from src.core.config import Clock, Twitch
 from src.core.content import Content
 from src.core.database import get_last_stream, get_state, save_bot_interaction, set_state
-from src.twitch.core.commands import PUBLIC_SCOPE, CommandContext
-from src.twitch.core.limits import deny
-from src.twitch.core.port import BotPort
-from src.twitch.core.replies import reply
-from src.twitch.local.roll import overlay
-from src.twitch.local.roll.storage import get_month_sessions, get_session_titles
-from src.twitch.local.roll.texts import MESSAGE_MAX, input_preview
+from src.roll import overlay
+from src.roll.port import RollPort
+from src.roll.request import Request
+from src.roll.storage import get_month_sessions, get_session_titles
+from src.roll.texts import MESSAGE_MAX, input_preview
 
 logger = logging.getLogger(__name__)
 
@@ -258,25 +256,25 @@ def text(board: Board, *, final: bool) -> str:
     return line
 
 
-async def handle_rollboard(ctx: CommandContext) -> None:
+async def handle_rollboard(ctx: Request) -> None:
     if ctx.args:
         # «!rollboard 5»: the board takes nothing. The shared pause goes back, so a stray word does
         # not hold the board from the chat; the refusal is said once per 30 s, as there is no own cooldown
-        ctx.bot.clear_cooldown(TRIGGER, PUBLIC_SCOPE)
-        await deny(ctx.bot, ctx.message, ctx.user, Content.text(
+        ctx.clear_public()
+        await ctx.deny(Content.text(
             'rollboard_bad_input', user=ctx.user, input=input_preview(ctx.original_args),
         ))
         return
     board, final = await current(ctx.session_id, ctx.bot.stream_live)
     if not board.sessions:
-        await reply(ctx.message, Content.text('rollboard_empty'))
+        await ctx.reply(Content.text('rollboard_empty'))
         return
     if ctx.bot.stream_live:
         overlay.publish(_event(board, final))
-    await reply(ctx.message, text(board, final=final))
+    await ctx.reply(text(board, final=final))
 
 
-async def announce(bot: BotPort, session_id: str) -> None:
+async def announce(bot: RollPort, session_id: str) -> None:
     """After a !roll: on the month's first stream with the game, the previous month's results, once.
     Never raises.
 

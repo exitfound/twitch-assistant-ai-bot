@@ -5,9 +5,8 @@ from unittest.mock import AsyncMock
 import pytest
 import twitchio
 
-from fakes import FakeBot, make_chatter, make_message
+from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.twitch.core.commands import CommandContext, Kind
-from src.twitch.core.component import ChatComponent
 from src.core.config import Clip, Follow, PerStream
 from src.core.database import count_bot_uses, record_bot_use
 from src.twitch.local import clip
@@ -165,7 +164,7 @@ async def test_an_unexpected_error_still_answers(db):
 async def test_a_follower_gets_one_clip_then_the_subscription_offer(db, monkeypatch):
     monkeypatch.setattr(Follow, 'REQUIRED', False)
     bot = FakeBot()
-    component = ChatComponent(bot)
+    component = chat_component(bot)
     await component.event_message(make_message('!clip 30'))
     bot.clear_cooldown('viewer', Kind.LOCAL)
     message = make_message('!clip 30')

@@ -23,19 +23,27 @@ async def init_db() -> None:
     # The one explicit way to open the database again after close_db()
     reopen()
     db = await get_db()
-    async with db.execute('PRAGMA user_version') as cursor:
-        (version,) = await cursor.fetchone()
-    for name, step in STEPS:
-        try:
-            await step(db)
-        except Exception:
-            logger.error('Схема: шаг «%s» не выполнен', name)
-            raise
-    if version != SCHEMA_VERSION:
-        # Written last: only a start that went through every step records the version
-        await db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
-        logger.info('Схема: версия %d → %d', version, SCHEMA_VERSION)
-    await db.commit()
+    # One write transaction for the whole walk: the bot and the game start together, and
+    # two processes checking and altering the same table at once would fail one of them.
+    # The second waits for the first (BUSY_TIMEOUT) and then finds every step done
+    await db.execute('BEGIN IMMEDIATE')
+    try:
+        async with db.execute('PRAGMA user_version') as cursor:
+            (version,) = await cursor.fetchone()
+        for name, step in STEPS:
+            try:
+                await step(db)
+            except Exception:
+                logger.error('Схема: шаг «%s» не выполнен', name)
+                raise
+        if version != SCHEMA_VERSION:
+            # Written last: only a start that went through every step records the version
+            await db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+            logger.info('Схема: версия %d → %d', version, SCHEMA_VERSION)
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
 
 
 async def _chat_messages(db: aiosqlite.Connection) -> None:
@@ -120,7 +128,7 @@ async def _rolls(db: aiosqlite.Connection) -> None:
     """Rolls and its added columns."""
     # Tables of the !roll game: rolls, rewards, roll_actions, roll_throws, roll_perks, roll_tiers,
     # roll_chokes. Schema and migrations live here with all the others, their queries – in
-    # src/twitch/local/roll/storage.py
+    # src/roll/storage.py
     await db.execute('''
         CREATE TABLE IF NOT EXISTS rolls (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -487,8 +495,8 @@ async def _migrate_memory(db: aiosqlite.Connection) -> None:
     session so the memory does not take it again. Runs before the CREATE TABLEs,
     which would otherwise make the new tables empty.
     """
-    # Every step checks its own result, so a process killed halfway (ALTER TABLE
-    # commits on its own) resumes on the next start instead of failing
+    # Every step checks its own result, so a walk that failed halfway (and was rolled back)
+    # starts over on the next start instead of failing
     old = await _columns(db, 'stream_chronicles')
     if old:
         for name in ('first_id', 'last_id'):
@@ -503,7 +511,6 @@ async def _migrate_memory(db: aiosqlite.Connection) -> None:
                                      WHERE m.session_id = stream_chronicles.{key}), 0)
             WHERE last_id = 0
         ''')
-        await db.commit()
         if key == 'session_id':
             await db.execute('ALTER TABLE stream_chronicles RENAME COLUMN session_id TO conversation')
         await db.execute('ALTER TABLE stream_chronicles RENAME TO chronicles')

@@ -32,7 +32,7 @@ from src.gemini.client import (
 from src.gemini.memory import storage
 from src.gemini.memory.storage import FACT_KINDS, HEADLINE_MAX_CHARS, Block, Fact, Profile
 from src.gemini.output import fix_dashes, trim_to_sentence
-from src.twitch.local.roll.storage import get_session_titles
+from src.roll.storage import get_session_titles
 
 logger = logging.getLogger(__name__)
 

@@ -6,6 +6,8 @@ connection: asyncio.gather over queries gives ordering, not parallelism.
 import asyncio
 import contextlib
 import logging
+import sqlite3
+import time
 from collections.abc import AsyncIterator
 from contextvars import ContextVar
 from pathlib import Path
@@ -39,10 +41,33 @@ async def get_db() -> aiosqlite.Connection:
         if _db is None:
             # A CLI command writing to the same file (--vacuum, a big --upload-lore) holds
             # the lock longer than SQLite's default 5 s wait, and a chat insert would fail
-            _db = await aiosqlite.connect(DB_PATH, timeout=BUSY_TIMEOUT)
-            await _db.execute('PRAGMA journal_mode=WAL')
-            await _db.execute('PRAGMA synchronous=NORMAL')
+            db = await aiosqlite.connect(DB_PATH, timeout=BUSY_TIMEOUT)
+            try:
+                await _wal(db)
+                await db.execute('PRAGMA synchronous=NORMAL')
+            except BaseException:
+                # A half-opened connection's thread would keep the process from exiting
+                await db.close()
+                raise
+            _db = db
     return _db
+
+
+async def _wal(db: aiosqlite.Connection) -> None:
+    """Switch a file to WAL, waiting out another process doing the same.
+
+    On a fresh file the switch takes an exclusive lock and fails at once while another
+    process holds it, without the busy timeout; a file already in WAL changes nothing.
+    """
+    deadline = time.monotonic() + BUSY_TIMEOUT
+    while True:
+        try:
+            await db.execute('PRAGMA journal_mode=WAL')
+            return
+        except sqlite3.OperationalError as e:
+            if 'locked' not in str(e) or time.monotonic() > deadline:
+                raise
+            await asyncio.sleep(0.05)
 
 
 async def close_db() -> None:

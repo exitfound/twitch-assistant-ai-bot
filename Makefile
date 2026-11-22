@@ -42,11 +42,14 @@ lock:
 up:
 	docker compose up -d --build
 
+# The services to restart or follow: all by default, one with S=bot, S=roll or S=voice
+S ?= bot roll voice
+
 restart:
-	docker compose restart bot
+	docker compose restart $(S)
 
 logs:
-	docker compose logs -f --tail=200 bot
+	docker compose logs -f --tail=200 $(S)
 
 backup:
 	docker compose run --rm bot /app/bot.py --backup /data/chat_history.backup-$$(date +%F-%H%M).db

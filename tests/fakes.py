@@ -72,7 +72,7 @@ def always(monkeypatch, flask) -> None:
     """The random flask always comes up as `flask`. A swap needs a free partner before the draw;
     for any other flask a lone test player gets one, so a test of that flask needs no extra player.
     The rule itself is tested on its own."""
-    from src.twitch.local.roll import game
+    from src.roll import game
     monkeypatch.setattr(game, 'FLASKS', {flask: 1})
     if flask == game.Flask.SWAP:
         monkeypatch.setattr(game, '_partners', _REAL_PARTNERS.setdefault('partners', game._partners))
@@ -85,3 +85,81 @@ def always(monkeypatch, flask) -> None:
 
 
 _REAL_PARTNERS: dict = {}
+
+
+async def play(handler, ctx) -> None:
+    """Run a game handler on a chat command the way the bot's link does: the replies go to
+    the message, what the game gives back is applied to the bot's gate."""
+    import dataclasses
+
+    from src.roll.request import Request
+    from src.twitch.core.limits import deny as deny_once
+    from src.twitch.core.replies import reply
+    from src.twitch.core.viewer import tier_of
+    from src.twitch.roll.client import apply_gate
+
+    async def send(text: str, deny: bool) -> bool:
+        if deny:
+            await deny_once(ctx.bot, ctx.message, ctx.user, text)
+            return True
+        return await reply(ctx.message, text)
+    request = Request(
+        user=ctx.user, tier=tier_of(ctx.message.chatter), session_id=ctx.session_id, bot=ctx.bot,
+        send=send, args=ctx.args, original_args=ctx.original_args,
+    )
+    await handler(request)
+    await apply_gate(ctx, ctx.prompt.split()[0], **dataclasses.asdict(request.gate))
+
+
+class InProcessRoll:
+    """RollLink with the game in the test's own process: the bot and the game share FakeBot."""
+
+    def __init__(self, bot, followers) -> None:
+        self._bot = bot
+        self._followers = followers
+
+    async def commands(self):
+        from src.roll.service import COMMANDS
+        from src.twitch.roll.client import GameCommand
+        return [GameCommand(c.trigger, c.public) for c in COMMANDS]
+
+    async def command(self, trigger: str, ctx) -> None:
+        from src.roll.service import HANDLERS
+        await play(HANDLERS[trigger], ctx)
+
+    async def chat(self, session_id: str, user: str, tier) -> None:
+        from src.roll import perks, tiers
+        await perks.on_chat(self._bot, session_id, user)
+        await tiers.on_chat(self._bot, session_id, user, tier)
+
+    async def stream(self, session_id: str) -> None:
+        from src.roll.service import on_stream
+        await on_stream(self._bot, session_id, live=self._bot.stream_live)
+
+    async def specs(self):
+        from src.roll.specs import specs
+        from src.twitch.roll.client import Spec
+        return [Spec(**spec.as_dict()) for spec in specs()]
+
+    async def redeem(self, action, redemption_id, user, user_id, user_input):
+        from src.roll.redemption import handle_redemption
+        return await handle_redemption(
+            self._bot, action, redemption_id, user, user_input,
+            follows=lambda: self._followers.is_follower(self._bot, user_id),
+        )
+
+    async def applied(self, redemption_ids):
+        from src.roll.storage import get_applied
+        return await get_applied(redemption_ids)
+
+
+def chat_component(bot, followers=None, *, game: bool = True):
+    """The dispatcher as the bot builds it, with the game linked in this process."""
+    from src.twitch.core.component import ChatComponent
+    from src.twitch.core.followers import FollowerCache
+    from src.roll.service import COMMANDS
+    from src.twitch.roll.client import GameCommand
+    followers = followers if followers is not None else FollowerCache()
+    component = ChatComponent(bot, followers, InProcessRoll(bot, followers) if game else None)
+    component.set_game_commands([GameCommand(c.trigger, c.public) for c in COMMANDS])
+    return component

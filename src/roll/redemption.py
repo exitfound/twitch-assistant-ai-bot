@@ -1,8 +1,8 @@
 """Reply to a channel-points reward redemption.
 
-The Twitch side – creating rewards, fulfilling, refunding points – lives in
-src/twitch/local/roll/rewards.py. Only the game is here: apply the reward through game and
-say in chat what came of it.
+The Twitch side – creating rewards, fulfilling, refunding points – is the bot's
+(src/twitch/roll/rewards.py). Only the game is here: apply the reward through game,
+say in chat what came of it and tell the bot whether to fulfill or refund.
 """
 import logging
 from collections.abc import Awaitable, Callable
@@ -10,11 +10,11 @@ from collections.abc import Awaitable, Callable
 from src.core.config import Follow, Rewards, Roll, Twitch
 from src.core.content import Content
 from src.core.database import save_bot_interaction
-from src.twitch.core.port import BotPort
-from src.twitch.core.viewer import Tier, tier_sub_hint
-from src.twitch.local.roll import game, overlay, perks, rules
-from src.twitch.local.roll.storage import get_action_status, get_tier
-from src.twitch.local.roll.texts import (
+from src.roll.port import RollPort
+from src.core.tier import Tier, tier_sub_hint
+from src.roll import game, overlay, perks, rules
+from src.roll.storage import get_action_status, get_tier
+from src.roll.texts import (
     champion_note, compose, curse_note, curse_values, input_preview, loser_note, luck_values,
     mass_values, out_of, reward_title, sglaz_note, split_message,
 )
@@ -70,7 +70,7 @@ _WITH_CURSE_NOTE = (game.Action.EXTRA, game.Action.REROLL)
 
 
 async def handle_redemption(
-    bot: BotPort, action: str, redemption_id: str, user: str, user_input: str,
+    bot: RollPort, action: str, redemption_id: str, user: str, user_input: str,
     *, follows: Callable[[], Awaitable[bool]],
 ) -> bool | None:
     """Apply the reward and report it in chat.
@@ -129,7 +129,7 @@ async def handle_redemption(
     return outcome.ok
 
 
-async def _refuse(bot: BotPort, session_id: str, action: str, user: str, user_input: str,
+async def _refuse(bot: RollPort, session_id: str, action: str, user: str, user_input: str,
                   redemption_id: str, status: game.Status, key: str) -> bool | None:
     """A refusal the game never saw, journaled so a redelivery is skipped: False – refund,
     None – already refused."""
@@ -222,7 +222,7 @@ def _render(action: str, user: str, user_input: str, outcome: game.Outcome) -> s
     return text
 
 
-async def _say(bot: BotPort, session_id: str, action: str, text: str) -> None:
+async def _say(bot: RollPort, session_id: str, action: str, text: str) -> None:
     # The reward outcome is already applied: a message that did not go out or was not
     # recorded does not change anything about the points, and must not keep the caller
     # from setting the redemption's status

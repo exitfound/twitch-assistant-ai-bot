@@ -337,11 +337,11 @@ class DiscordService:
             except asyncio.CancelledError:
                 raise
             except discord.LoginFailure:
-                logger.error('Discord: токен отклонён – проверь DISCORD_TOKEN; Discord не запущен, Twitch работает')
+                logger.error('Discord: токен отклонён – проверь DISCORD_TOKEN; голос не запущен')
                 return
             except discord.PrivilegedIntentsRequired:
                 logger.error('Discord: не включён Message Content Intent в Developer Portal; '
-                             'Discord не запущен, Twitch работает')
+                             'голос не запущен')
                 return
             except Exception as e:
                 failure = f'не поднялся ({type(e).__name__}: {e})'

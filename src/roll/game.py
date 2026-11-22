@@ -543,16 +543,18 @@ async def _shield(session_id: str, actor: str) -> Outcome:
     return Outcome(Status.OK, target=actor)
 
 
-async def _shield_left(session_id: str, user: str) -> int | None:
-    """Minutes the bought shield still holds. None – no shield.
-
-    The shield is a successful journal row with no state of its own: it holds
-    SHIELD_MINUTES from the latest purchase.
-    """
-    elapsed = await seconds_since_action(session_id, Action.SHIELD, user, Status.OK, time.time())
+async def _minutes_left(session_id: str, action: Action, user: str, minutes: int) -> int | None:
+    """Minutes an effect of a successful journal row still holds: `minutes` from the latest one.
+    None – no such row."""
+    elapsed = await seconds_since_action(session_id, action, user, Status.OK, time.time())
     if elapsed is None:
         return None
-    return rules.whole_minutes(Rewards.SHIELD_MINUTES * 60 - elapsed)
+    return rules.whole_minutes(minutes * 60 - elapsed)
+
+
+async def _shield_left(session_id: str, user: str) -> int | None:
+    """Minutes the bought shield still holds: it has no state of its own, only its purchase."""
+    return await _minutes_left(session_id, Action.SHIELD, user, Rewards.SHIELD_MINUTES)
 
 
 async def _target(
@@ -731,10 +733,7 @@ async def _pending_perk_curse(session_id: str, user: str) -> bool:
 
 async def _cleanse_protection_left(session_id: str, target: str) -> int | None:
     """Minutes a cleansed player stays safe from a new curse. None – no protection."""
-    elapsed = await seconds_since_action(session_id, Action.CLEANSE, target, Status.OK, time.time())
-    if elapsed is None:
-        return None
-    return rules.whole_minutes(Rewards.CLEANSE_PROTECT_MINUTES * 60 - elapsed)
+    return await _minutes_left(session_id, Action.CLEANSE, target, Rewards.CLEANSE_PROTECT_MINUTES)
 
 
 # --- flasks ------------------------------------------------------------------

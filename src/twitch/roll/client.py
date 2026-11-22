@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Protocol
 from src.core.config import Service
 from src.core.service import ServiceClient, ServiceUnavailable
 from src.core.tier import Tier
+from src.core.utils import put_latest
 from src.twitch.core.commands import PUBLIC_SCOPE, CommandContext
 from src.twitch.core.viewer import tier_of
 
@@ -138,16 +139,11 @@ class RollClient:
                          clear_public=bool(gate.get('clear_public')))
 
     async def chat(self, session_id: str, user: str, tier: Tier) -> None:
-        self._put('/events/chat', {'state': self._state(session_id), 'user': user, 'tier': str(tier)})
+        body = {'state': self._state(session_id), 'user': user, 'tier': str(tier)}
+        put_latest(self._events, ('/events/chat', body))
 
     async def stream(self, session_id: str) -> None:
-        self._put('/events/stream', {'state': self._state(), 'session_id': session_id})
-
-    def _put(self, path: str, body: dict) -> None:
-        if self._events.full():
-            self._events.get_nowait()
-            self._events.task_done()
-        self._events.put_nowait((path, body))
+        put_latest(self._events, ('/events/stream', {'state': self._state(), 'session_id': session_id}))
 
     async def events_loop(self) -> None:
         """Send the queued events in order, for as long as the bot runs."""

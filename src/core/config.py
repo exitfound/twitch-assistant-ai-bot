@@ -87,6 +87,15 @@ def _env_percent(name: str, default_percent: float) -> float:
     return default_percent / 100.0
 
 
+def _env_ordered(low: tuple[str, int, int, int], high: tuple[str, int, int, int]) -> tuple[int, int]:
+    """Two bounds of one range, each as _env_int(name, default, lo, hi); swapped ones are put right."""
+    low_value, high_value = _env_int(*low), _env_int(*high)
+    if low_value > high_value:
+        logger.warning('%s=%s больше %s=%s, значения переставлены', low[0], low_value, high[0], high_value)
+        return high_value, low_value
+    return low_value, high_value
+
+
 def _interval_range(prefix: str, default_min: int, default_max: int) -> tuple[int, int]:
     """Interval range of a background loop: PREFIX_MIN_MINUTES and PREFIX_MAX_MINUTES.
 
@@ -100,12 +109,8 @@ def _interval_range(prefix: str, default_min: int, default_max: int) -> tuple[in
             prefix, prefix, prefix,
         )
         default_min = default_max = legacy
-    low = _env_int(f'{prefix}_MIN_MINUTES', default_min, 1, 1440)
-    high = _env_int(f'{prefix}_MAX_MINUTES', default_max, 1, 1440)
-    if low > high:
-        logger.warning('%s_MIN_MINUTES=%s больше %s_MAX_MINUTES=%s, значения переставлены', prefix, low, prefix, high)
-        low, high = high, low
-    return low, high
+    return _env_ordered((f'{prefix}_MIN_MINUTES', default_min, 1, 1440),
+                        (f'{prefix}_MAX_MINUTES', default_max, 1, 1440))
 
 
 def _env_ids(name: str) -> frozenset[int]:
@@ -342,17 +347,8 @@ class Stream:
     RESUME_MINUTES: int = _env_int('STREAM_RESUME_MINUTES', 15, 0, 240)
 
 
-def _roll_range() -> tuple[int, int]:
-    low = _env_int('ROLL_MIN', 1, 1, 1000)
-    high = _env_int('ROLL_MAX', 100, 2, 1000)
-    if low > high:
-        logger.warning('ROLL_MIN=%s больше ROLL_MAX=%s, значения переставлены', low, high)
-        low, high = high, low
-    return low, high
-
-
 class Roll:
-    MIN, MAX = _roll_range()
+    MIN, MAX = _env_ordered(('ROLL_MIN', 1, 1, 1000), ('ROLL_MAX', 100, 2, 1000))
     # Free !roll throws per session – by viewer status, a moderator between VIP and
     # subscriber. Beyond that only the channel-points reward. The broadcaster rolls
     # without limit, a non-follower not at all
@@ -377,15 +373,6 @@ class Roll:
     # compose sets 0.0.0.0 inside the container and publishes it itself
     OVERLAY_HOST: str = _env_raw('ROLL_OVERLAY_HOST') or '127.0.0.1'
     OVERLAY_PORT: int = _env_int('ROLL_OVERLAY_PORT', 8788, 1, 65535)
-
-
-def _curse_range() -> tuple[int, int]:
-    ceiling = _env_int('REWARD_CURSE_CEILING', 75, 1, 1000)
-    floor = _env_int('REWARD_CURSE_FLOOR', 25, 1, 1000)
-    if floor > ceiling:
-        logger.warning('REWARD_CURSE_FLOOR=%s больше REWARD_CURSE_CEILING=%s, значения переставлены', floor, ceiling)
-        ceiling, floor = floor, ceiling
-    return ceiling, floor
 
 
 def _curse_step() -> int:
@@ -417,7 +404,8 @@ class Rewards:
     # Curse: the victim's throw is at most CURSE_CEILING, every further throw
     # on them – their own or someone's reroll – lowers the ceiling by CURSE_STEP, not below CURSE_FLOOR.
     # On the floor the ceiling holds for CURSE_HOLD_MINUTES, then the curse lifts
-    CURSE_CEILING, CURSE_FLOOR = _curse_range()
+    CURSE_FLOOR, CURSE_CEILING = _env_ordered(
+        ('REWARD_CURSE_FLOOR', 25, 1, 1000), ('REWARD_CURSE_CEILING', 75, 1, 1000))
     CURSE_STEP: int = _curse_step()
     CURSE_HOLD_MINUTES: int = _env_int('REWARD_CURSE_HOLD_MINUTES', 30, 1, 1440)
     # After a successful reroll the target is immune to new rerolls for this many minutes:
@@ -556,20 +544,11 @@ class Proactive:
     TARGET_PROBABILITY: float = _env_percent('PROACTIVE_TARGET_PROBABILITY', 50)
 
 
-def _emote_spam_range() -> tuple[int, int]:
-    low = _env_int('EMOTE_SPAM_MIN', 1, 1, 20)
-    high = _env_int('EMOTE_SPAM_MAX', 5, 1, 20)
-    if low > high:
-        logger.warning('EMOTE_SPAM_MIN=%s больше EMOTE_SPAM_MAX=%s, значения переставлены', low, high)
-        low, high = high, low
-    return low, high
-
-
 class Emote:
     PROBABILITY: float = _env_percent('EMOTE_PROBABILITY', 10)
     SPAM_ENABLED: bool = _env_bool('EMOTE_SPAM_ENABLED', False)
     SPAM_INTERVAL_MIN_MINUTES, SPAM_INTERVAL_MAX_MINUTES = _interval_range('EMOTE_SPAM_INTERVAL', 5, 20)
-    SPAM_MIN, SPAM_MAX = _emote_spam_range()
+    SPAM_MIN, SPAM_MAX = _env_ordered(('EMOTE_SPAM_MIN', 1, 1, 20), ('EMOTE_SPAM_MAX', 5, 1, 20))
 
 
 def _mascot_thresholds() -> tuple[int, int, int]:

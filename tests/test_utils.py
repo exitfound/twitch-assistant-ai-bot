@@ -190,3 +190,15 @@ def test_log_times_are_in_the_bot_zone(monkeypatch):
     record = logging.LogRecord('x', logging.INFO, __file__, 1, 'msg', None, None)
     record.created = 0.0    # 1970-01-01 00:00 UTC = 03:00 in Moscow
     assert logging_setup.make_formatter().formatTime(record).startswith('1970-01-01 03:00:00')
+
+
+async def test_a_full_queue_drops_its_oldest_item_for_the_new_one():
+    from src.core.utils import put_latest
+    queue: asyncio.Queue[int] = asyncio.Queue(2)
+    for item in (1, 2, 3):
+        put_latest(queue, item)
+    assert [queue.get_nowait(), queue.get_nowait()] == [2, 3]
+    queue.task_done()
+    queue.task_done()
+    # The dropped item counts as done: join() does not wait for it forever
+    await asyncio.wait_for(queue.join(), 1)

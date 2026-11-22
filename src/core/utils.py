@@ -96,6 +96,14 @@ def safe_format(template: str, **values) -> str:
         return template
 
 
+def put_latest(queue: asyncio.Queue, item) -> None:
+    """Put without waiting: a full queue drops its oldest item, which counts as done for join()."""
+    if queue.full():
+        queue.get_nowait()
+        queue.task_done()
+    queue.put_nowait(item)
+
+
 async def gather_cancelling(*aws: Awaitable) -> list:
     """Like asyncio.gather(), but the first error cancels the rest and is raised as is.
 

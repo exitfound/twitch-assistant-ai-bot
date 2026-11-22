@@ -13,6 +13,7 @@ from collections.abc import Callable, Iterable
 from aiohttp import web
 
 from src.core import service
+from src.core.utils import put_latest
 
 logger = logging.getLogger(__name__)
 
@@ -38,9 +39,7 @@ class Feed:
 
     def broadcast(self, item: str | None) -> None:
         for queue in self.clients:
-            if queue.full():
-                queue.get_nowait()
-            queue.put_nowait(item)
+            put_latest(queue, item)
 
     def stop(self) -> None:
         self.broadcast(STOP)

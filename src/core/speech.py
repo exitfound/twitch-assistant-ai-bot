@@ -11,6 +11,7 @@ import logging
 from collections.abc import Callable
 
 from src.core.service import ServiceClient, ServiceUnavailable
+from src.core.utils import put_latest
 
 logger = logging.getLogger(__name__)
 
@@ -58,10 +59,7 @@ class Forwarder:
         self._remove: Callable[[], None] | None = None
 
     def submit(self, text: str, source: str) -> None:
-        if self._queue.full():
-            self._queue.get_nowait()
-            self._queue.task_done()
-        self._queue.put_nowait((text, source))
+        put_latest(self._queue, (text, source))
 
     async def loop(self) -> None:
         """Listen for as long as the bot runs; the listener goes with the loop."""

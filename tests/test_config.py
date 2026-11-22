@@ -9,13 +9,13 @@ def test_swapped_roll_bounds_are_put_right(monkeypatch):
     """ROLL_MIN above ROLL_MAX made every throw crash in randint()."""
     monkeypatch.setenv('ROLL_MIN', '50')
     monkeypatch.setenv('ROLL_MAX', '10')
-    assert config._roll_range() == (10, 50)
+    assert config._env_ordered(('ROLL_MIN', 1, 1, 1000), ('ROLL_MAX', 100, 2, 1000)) == (10, 50)
 
 
-def test_curse_bounds_are_put_right(monkeypatch):
-    monkeypatch.setenv('REWARD_CURSE_CEILING', '20')
-    monkeypatch.setenv('REWARD_CURSE_FLOOR', '60')
-    assert config._curse_range() == (60, 20)
+def test_bounds_in_order_are_kept_and_out_of_range_ones_fall_back(monkeypatch):
+    monkeypatch.setenv('EMOTE_SPAM_MIN', '2')
+    monkeypatch.setenv('EMOTE_SPAM_MAX', '99')
+    assert config._env_ordered(('EMOTE_SPAM_MIN', 1, 1, 20), ('EMOTE_SPAM_MAX', 5, 1, 20)) == (2, 5)
 
 
 def test_zero_curse_step_is_refused(monkeypatch):

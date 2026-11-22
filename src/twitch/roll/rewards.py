@@ -84,6 +84,9 @@ class RewardService:
         self._actions: dict[str, str] = {}      # Twitch reward id → action
         self._titles: dict[str, str] = {}       # action → its title, for the line when the game is down
         self._rechecks: set[asyncio.Task] = set()
+        # Redemptions the game is applying or that wait for a recheck: not stale, whatever
+        # Twitch says, or settling them would refund one the game is about to apply
+        self._busy: set[str] = set()
         # Whether the rewards should be open, i.e. the stream is live. Written by set_open()
         # even before start() finishes, so a stream starting mid-start is not lost
         self._open = False
@@ -176,22 +179,26 @@ class RewardService:
         if action is None:
             return                  # a reward of another app, not the bot's
         user = (payload.user.name or '').lower()
+        self._busy.add(payload.id)
         try:
             decision = await self._roll.redeem(action, payload.id, user, payload.user.id, payload.user_input)
         except RollSlow:
-            # Maybe applied, maybe not: the game's journal tells, a minute later
-            logger.warning('Игра не ответила вовремя на выкуп %s – сверю по журналу', payload.id)
+            # Maybe applied, maybe not: the game's journal tells, a minute later. Still busy
+            logger.warning('Игра не ответила на выкуп %s, но могла применить – сверю по журналу', payload.id)
             task = asyncio.create_task(self._recheck(payload.reward.id, payload.id))
             self._rechecks.add(task)
             task.add_done_callback(self._rechecks.discard)
             return
         except RollUnavailable:
+            self._busy.discard(payload.id)
             # The game is down: the points go back, and the buyer hears why
             logger.warning('Игра недоступна – выкуп %s от %s отменён', action, user)
             decision = False
             await self._bot.send_chat_message(Content.text(
                 'reward_unavailable', user=user, reward=self._titles.get(action, action),
             ))
+        else:
+            self._busy.discard(payload.id)
         if decision is None:
             return
         await self._set_status(payload.reward.id, payload.id, FULFILLED if decision else CANCELED)
@@ -199,16 +206,20 @@ class RewardService:
     async def _recheck(self, reward_id: str, redemption_id: str) -> None:
         """Settle a redemption the game was too slow to answer by its journal: applied –
         fulfilled, anything else – refunded, as a stale one is after a start."""
-        for _ in range(RECHECK_TRIES):
-            await asyncio.sleep(RECHECK_SECONDS)
-            try:
-                applied = redemption_id in await self._roll.applied([redemption_id])
-            except RollUnavailable:
-                continue
-            await self._set_status(reward_id, redemption_id, FULFILLED if applied else CANCELED)
-            logger.info('Выкуп %s сверен по журналу игры: %s', redemption_id, 'применён' if applied else 'возврат')
-            return
-        logger.warning('Выкуп %s так и не сверен – его разберёт следующий старт наград', redemption_id)
+        try:
+            for _ in range(RECHECK_TRIES):
+                await asyncio.sleep(RECHECK_SECONDS)
+                try:
+                    applied = redemption_id in await self._roll.applied([redemption_id])
+                except RollUnavailable:
+                    continue
+                await self._set_status(reward_id, redemption_id, FULFILLED if applied else CANCELED)
+                logger.info('Выкуп %s сверен по журналу игры: %s', redemption_id,
+                            'применён' if applied else 'возврат')
+                return
+            logger.warning('Выкуп %s так и не сверен – его разберёт следующий старт наград', redemption_id)
+        finally:
+            self._busy.discard(redemption_id)
 
     def _broadcaster(self) -> twitchio.PartialUser:
         return self._bot.create_partialuser(self._channel_id)
@@ -295,8 +306,9 @@ class RewardService:
             # Collect first: changing the status drops the redemption from the result
             # and throws off the pagination
             pending = [r async for r in reward.fetch_redemptions(status='UNFULFILLED')]
-            # Redeemed after the subscription: it will arrive as an event
-            stale += [(reward.id, r.id) for r in pending if r.redeemed_at < started]
+            # Redeemed after the subscription: it will arrive as an event. In the game's hands
+            # right now: not stale at all
+            stale += [(reward.id, r.id) for r in pending if r.redeemed_at < started and r.id not in self._busy]
         if not stale:
             return
         # The game's journal tells an applied redemption from one it never saw

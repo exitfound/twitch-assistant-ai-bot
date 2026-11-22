@@ -93,12 +93,19 @@ async def play(handler, ctx) -> None:
     import dataclasses
 
     from src.roll.request import Request
+    from src.twitch.core.limits import deny as deny_once
     from src.twitch.core.replies import reply
     from src.twitch.core.viewer import tier_of
     from src.twitch.roll.client import apply_gate
+
+    async def send(text: str, deny: bool) -> bool:
+        if deny:
+            await deny_once(ctx.bot, ctx.message, ctx.user, text)
+            return True
+        return await reply(ctx.message, text)
     request = Request(
         user=ctx.user, tier=tier_of(ctx.message.chatter), session_id=ctx.session_id, bot=ctx.bot,
-        send=lambda text: reply(ctx.message, text), args=ctx.args, original_args=ctx.original_args,
+        send=send, args=ctx.args, original_args=ctx.original_args,
     )
     await handler(request)
     await apply_gate(ctx, ctx.prompt.split()[0], **dataclasses.asdict(request.gate))

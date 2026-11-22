@@ -1,8 +1,8 @@
 """Reply to a channel-points reward redemption.
 
-The Twitch side – creating rewards, fulfilling, refunding points – lives in
-src/roll/rewards.py. Only the game is here: apply the reward through game and
-say in chat what came of it.
+The Twitch side – creating rewards, fulfilling, refunding points – is the bot's
+(src/twitch/roll/rewards.py). Only the game is here: apply the reward through game,
+say in chat what came of it and tell the bot whether to fulfill or refund.
 """
 import logging
 from collections.abc import Awaitable, Callable

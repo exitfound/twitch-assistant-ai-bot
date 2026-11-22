@@ -5,6 +5,7 @@ chat-list requests here. Served on BOT_API_HOST:BOT_API_PORT, on the compose net
 """
 import contextlib
 import logging
+import time
 from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
@@ -13,6 +14,7 @@ from aiohttp import web
 from src.core.config import Service
 from src.core.service import require_token
 from src.twitch.core.followers import FollowerCache
+from src.twitch.core.limits import deny
 from src.twitch.core.replies import reply
 
 if TYPE_CHECKING:
@@ -52,7 +54,7 @@ class BotApi:
     async def _state(self, _request: web.Request) -> web.Response:
         bot = self._bot
         return web.json_response({'session_id': bot.session_id, 'live': bot.stream_live,
-                                  'rewards_active': bot.rewards_active})
+                                  'rewards_active': bot.rewards_active, 'at': time.time()})
 
     async def _chat(self, request: web.Request) -> web.Response:
         body = await request.json()
@@ -65,6 +67,10 @@ class BotApi:
             # The command's call has ended: there is nothing to reply to any more
             logger.warning('Ответ на сообщение %s опоздал и не ушёл', body['message_id'])
             return web.json_response({'sent': False})
+        if body.get('deny'):
+            # A refusal by a limit: the same once-per-30-s brake as the bot's own refusals
+            await deny(self._bot, message, message.chatter.name, str(body['text']))
+            return web.json_response({'sent': True})
         return web.json_response({'sent': await reply(message, str(body['text']))})
 
     async def _follows(self, request: web.Request) -> web.Response:

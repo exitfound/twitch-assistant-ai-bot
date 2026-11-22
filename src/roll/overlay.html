@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Roll – оверлей</title>
 <!--
-  Оверлей игры Roll для OBS (Browser Source, 1920×1080). Бот отдаёт страницу на /roll/
+  Оверлей игры Roll для OBS (Browser Source, 1920×1080). Служба игры отдаёт страницу на /roll/
   и события на /roll/events. Параметры адреса:
     layout=feed|left|card|hud  вид: лента справа (по умолчанию), левый верхний угол (титулы и под
                            ними одна карточка, новая сменяет старую), карточка по центру, плашка снизу
@@ -15,7 +15,7 @@
     board=10               сколько секунд плашка !rollboard («Китежанин месяца») стоит напротив титулов
     nicks=0                ники заменяются на «Игрок 1, 2…»
     regalia=0              без полосы над титулами: победители прошлого месяца, шкала и лидер этого
-    demo=1                 страница сама играет – проверить вид без эфира и без бота; встроенную в другую
+    demo=1                 страница сама играет – проверить вид без эфира и без службы игры; встроенную в другую
                            страницу ведут сообщения postMessage: {make: 'curse'}, {auto: false}, {live: false}
     demo=mass              то же, но по кругу АГОНИЯ ЧЕРНОМИРЬЯ и БЛАГОСЛОВЕНИЕ СВЕТЛОЯРА с бросками между ними
     demo=board             то же, но по кругу плашка «Китежанин месяца» – то за этот месяц, то итоги прошлого
@@ -1220,7 +1220,7 @@ html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
       });
       source.addEventListener('ping', function () { lastSeen = Date.now(); });
       source.onopen = function () { lastSeen = Date.now(); document.title = 'Roll – на связи'; };
-      source.onerror = function () { document.title = 'Roll – нет связи с ботом'; };
+      source.onerror = function () { document.title = 'Roll – нет связи с игрой'; };
     }
     open();
     setInterval(function () { if (Date.now() - lastSeen > 50000) { lastSeen = Date.now(); open(); } }, 5000);

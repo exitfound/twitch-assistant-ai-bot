@@ -371,7 +371,7 @@ class Roll:
     BURST_THROWS: int = _env_int('ROLL_BURST_THROWS', 5, 2, 1000)
     BURST_SECONDS: int = _env_int('ROLL_BURST_SECONDS', 60, 1, 3600)
     BURST_PAUSE_MINUTES: int = _env_int('ROLL_BURST_PAUSE_MINUTES', 1, 1, 1440)
-    # The game on the stream: the OBS page and its SSE feed on the overlays' port (MASCOT_PORT)
+    # The game on the stream: the OBS page and its SSE feed, served by the game service
     OVERLAY_ENABLED: bool = _env_bool('ROLL_OVERLAY_ENABLED', False)
     # The game's OBS page, served by the game service. Local only by default, like the mascot;
     # compose sets 0.0.0.0 inside the container and publishes it itself

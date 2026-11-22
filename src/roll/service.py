@@ -88,9 +88,15 @@ class GameService:
         if handler is None:
             return web.json_response({'error': 'unknown command'}, status=404)
         message_id = str(body['message_id'])
+        session_id, user, tier = body['state']['session_id'], body['user'], Tier(body['tier'])
+        # The message's chat event waits in the bot's queue, and the command may overtake it:
+        # a first «!roll» would start a perk silently. Run it here first; the late one finds
+        # nothing new
+        await perks.on_chat(self._bot, session_id, user)
+        await tiers.on_chat(self._bot, session_id, user, tier)
         ctx = Request(
-            user=body['user'], tier=Tier(body['tier']), session_id=body['state']['session_id'], bot=self._bot,
-            send=lambda text: self._bot.reply(message_id, text),
+            user=user, tier=tier, session_id=session_id, bot=self._bot,
+            send=lambda text, deny: self._bot.reply(message_id, text, deny=deny),
             args=body.get('args', ''), original_args=body.get('original_args', ''),
         )
         try:

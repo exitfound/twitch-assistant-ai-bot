@@ -2,8 +2,8 @@
 
 A service is reached by URL on the compose network; its API is never published to the
 host. Every call is JSON both ways. The caller decides what a failure means, so a client
-raises one error type and says whether the other side was unreachable or only slow:
-a slow call may still have been carried out.
+raises one error type and says whether the request surely never reached the other side
+or may have been carried out there: a slow answer, a dropped connection, a server error.
 """
 import asyncio
 import hmac
@@ -20,11 +20,12 @@ SHUTDOWN_SECONDS = 2
 
 
 class ServiceUnavailable(Exception):
-    """The service did not answer. timeout – it may have done the work all the same."""
+    """The service did not answer. maybe_done – the request went out, and the work may
+    have been done all the same; False – it never reached the service."""
 
-    def __init__(self, message: str, *, timeout: bool = False) -> None:
+    def __init__(self, message: str, *, maybe_done: bool = False) -> None:
         super().__init__(message)
-        self.timeout = timeout
+        self.maybe_done = maybe_done
 
 
 class ServiceClient:
@@ -45,17 +46,28 @@ class ServiceClient:
                 method, self._url + path, json=body, timeout=aiohttp.ClientTimeout(total=seconds, connect=2),
             ) as resp:
                 if resp.status != 200:
-                    raise ServiceUnavailable(f'{self.name} {method} {path}: HTTP {resp.status}')
+                    # A server error may come after the handler did its work; a refusal never does
+                    raise ServiceUnavailable(f'{self.name} {method} {path}: HTTP {resp.status}',
+                                             maybe_done=resp.status >= 500)
                 return await resp.json()
+        # Not connected, so nothing was sent. The connect timeout is a TimeoutError too: first
+        except (aiohttp.ConnectionTimeoutError, aiohttp.ClientConnectorError) as e:
+            raise ServiceUnavailable(f'{self.name} {method} {path}: {_reason(e)}') from e
         except TimeoutError as e:
-            raise ServiceUnavailable(f'{self.name} {method} {path}: нет ответа за {seconds} с', timeout=True) from e
+            raise ServiceUnavailable(f'{self.name} {method} {path}: нет ответа за {seconds} с',
+                                     maybe_done=True) from e
+        # Sent, then the connection dropped or the answer broke: the work may be done
         except (aiohttp.ClientError, ValueError) as e:
-            raise ServiceUnavailable(f'{self.name} {method} {path}: {e or type(e).__name__}') from e
+            raise ServiceUnavailable(f'{self.name} {method} {path}: {_reason(e)}', maybe_done=True) from e
 
     async def close(self) -> None:
         if self._session is not None:
             await self._session.close()
             self._session = None
+
+
+def _reason(error: Exception) -> str:
+    return str(error) or type(error).__name__
 
 
 def require_token(token: str | None) -> Callable:

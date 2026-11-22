@@ -25,9 +25,10 @@ class RemoteBot:
 
     def __init__(self, client: ServiceClient) -> None:
         self._client = client
-        # The game's own pauses: the spam pause of !roll and the once-per-30-s refusals
+        # The game's own pause: the spam pause of !roll
         self._cooldowns = Cooldowns()
         self._session: str | None = None
+        self._state_at = 0.0
         self.stream_live = False
         self.rewards_active = False
         # Whether the last state request went through: a lost bot is logged once, not every minute
@@ -38,7 +39,12 @@ class RemoteBot:
         return self._session or local_time().strftime('%Y-%m-%d')
 
     def update(self, state: dict) -> None:
-        """The stream state as the bot sent it."""
+        """The stream state as the bot sent it, unless a fresher one came already: a queued
+        event reaches the game after direct calls made later."""
+        at = float(state.get('at') or 0)
+        if at < self._state_at:
+            return
+        self._state_at = at
         self._session = str(state['session_id'])
         self.stream_live = bool(state['live'])
         self.rewards_active = bool(state['rewards_active'])
@@ -76,9 +82,11 @@ class RemoteBot:
             logger.warning('Реплика игры не ушла в чат: %s', e)
             return False
 
-    async def reply(self, message_id: str, text: str) -> bool:
+    async def reply(self, message_id: str, text: str, *, deny: bool = False) -> bool:
+        """A reply to the command's message; deny – a refusal by a limit, under the bot's brake."""
+        body = {'message_id': message_id, 'text': text, 'deny': deny}
         try:
-            return bool((await self._client.call('POST', '/reply', {'message_id': message_id, 'text': text}))['sent'])
+            return bool((await self._client.call('POST', '/reply', body))['sent'])
         except (ServiceUnavailable, KeyError) as e:
             logger.warning('Ответ игры не ушёл в чат: %s', e)
             return False

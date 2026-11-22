@@ -289,3 +289,30 @@ def test_two_processes_bring_up_one_fresh_database_together(tmp_path):
              for _ in range(3)]
     errors = [p.communicate(timeout=60)[1] for p in procs]
     assert [p.returncode for p in procs] == [0, 0, 0], errors
+
+
+async def test_the_old_session_keyed_memory_is_renamed_in_one_walk(tmp_path, monkeypatch):
+    """A database from before conversations: stream_chronicles keyed by session. The rename
+    runs inside the walk's one transaction, so two processes never migrate it at once."""
+    path = tmp_path / 'old.db'
+    with sqlite3.connect(path) as old:
+        old.executescript('''
+            CREATE TABLE chat_messages (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+                username TEXT NOT NULL, message TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+            INSERT INTO chat_messages (session_id, username, message) VALUES ('s1', 'gop', 'a'), ('s1', 'gop', 'b');
+            CREATE TABLE stream_chronicles (session_id TEXT PRIMARY KEY, text TEXT NOT NULL, status TEXT NOT NULL,
+                message_count INTEGER NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+            INSERT INTO stream_chronicles (session_id, text, status, message_count) VALUES ('s1', 'было', 'ok', 2);
+            CREATE TABLE chatter_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+                username TEXT NOT NULL, event TEXT NOT NULL);
+            CREATE TABLE chatter_profiles (username TEXT PRIMARY KEY, portrait TEXT NOT NULL, relations TEXT NOT NULL,
+                updated_session TEXT NOT NULL, sessions_seen INTEGER NOT NULL,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);
+        ''')
+    monkeypatch.setattr(connection, 'DB_PATH', path)
+    await schema.init_db()
+    db = await connection.get_db()
+    async with db.execute('SELECT conversation, first_id, last_id FROM chronicles') as cursor:
+        assert await cursor.fetchall() == [('s1', 1, 2)]
+    assert not db.in_transaction
+    await connection.close_db()

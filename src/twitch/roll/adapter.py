@@ -36,6 +36,7 @@ REWARDS_RETRY_MAX_SECONDS = 600
 # still knows them and answers «unavailable» instead of nothing
 COMMANDS_STATE = 'roll_commands'
 COMMANDS_RETRY_SECONDS = 30
+COMMANDS_REFRESH_SECONDS = 60
 
 
 class RollAdapter:
@@ -50,6 +51,8 @@ class RollAdapter:
         self.rewards = RewardService(bot, self.client)
         self.broadcaster_token = False
         self._chat: ChatComponent | None = None
+        # The commands the game declared this run; None – it has not answered yet
+        self._commands: list[GameCommand] | None = None
         # The session whose chat has been told that the rewards are down
         self._down_told: str | None = None
         self.rewards_watch = SocketWatch(
@@ -86,7 +89,7 @@ class RollAdapter:
         self._tasks.start('bot_api', lambda: serve(self.api.app(), Service.BOT_API_HOST, Service.BOT_API_PORT,
                                                    'API бота для служб'))
         self._tasks.start('roll_events', self.client.events_loop)
-        self._tasks.start('roll_commands', self._load_commands, once=True)
+        self._tasks.start('roll_commands', self._load_commands)
 
     def start_watch(self) -> None:
         """The rewards watch: needs the channel id."""
@@ -94,22 +97,31 @@ class RollAdapter:
             self._tasks.start('rewards_watch', self.rewards_watch.loop)
 
     async def _load_commands(self) -> None:
-        """Ask the game for its commands until it answers; keep them for the next start."""
+        """Keep the game's commands as it declares them, for as long as the bot runs: a game
+        restarted with a changed set is picked up within a minute."""
         while True:
-            try:
-                commands = await self.client.commands()
-            except RollUnavailable as e:
+            answered = await self._refresh_commands()
+            await asyncio.sleep(COMMANDS_REFRESH_SECONDS if answered else COMMANDS_RETRY_SECONDS)
+
+    async def _refresh_commands(self) -> bool:
+        """Ask the game for its commands; register and keep them if they changed. False – no answer."""
+        try:
+            commands = await self.client.commands()
+        except RollUnavailable as e:
+            if self._commands is None:
                 logger.info('Команды игры пока не получены (%s) – новая попытка через %d с', e, COMMANDS_RETRY_SECONDS)
-                await asyncio.sleep(COMMANDS_RETRY_SECONDS)
-                continue
-            if self._chat is not None:
-                self._chat.set_game_commands(commands)
-            logger.info('Команды игры: %s', ', '.join(c.trigger for c in commands))
-            try:
-                await set_state(COMMANDS_STATE, json.dumps([c.as_dict() for c in commands]))
-            except Exception:
-                logger.exception('Команды игры не сохранены')
-            return
+            return False
+        if commands == self._commands:
+            return True
+        self._commands = commands
+        if self._chat is not None:
+            self._chat.set_game_commands(commands)
+        logger.info('Команды игры: %s', ', '.join(c.trigger for c in commands))
+        try:
+            await set_state(COMMANDS_STATE, json.dumps([c.as_dict() for c in commands]))
+        except Exception:
+            logger.exception('Команды игры не сохранены')
+        return True
 
     async def on_ready(self) -> None:
         bot = self._bot

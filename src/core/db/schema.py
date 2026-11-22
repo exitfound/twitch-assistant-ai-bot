@@ -495,8 +495,8 @@ async def _migrate_memory(db: aiosqlite.Connection) -> None:
     session so the memory does not take it again. Runs before the CREATE TABLEs,
     which would otherwise make the new tables empty.
     """
-    # Every step checks its own result, so a process killed halfway (ALTER TABLE
-    # commits on its own) resumes on the next start instead of failing
+    # Every step checks its own result, so a walk that failed halfway (and was rolled back)
+    # starts over on the next start instead of failing
     old = await _columns(db, 'stream_chronicles')
     if old:
         for name in ('first_id', 'last_id'):
@@ -511,7 +511,6 @@ async def _migrate_memory(db: aiosqlite.Connection) -> None:
                                      WHERE m.session_id = stream_chronicles.{key}), 0)
             WHERE last_id = 0
         ''')
-        await db.commit()
         if key == 'session_id':
             await db.execute('ALTER TABLE stream_chronicles RENAME COLUMN session_id TO conversation')
         await db.execute('ALTER TABLE stream_chronicles RENAME TO chronicles')

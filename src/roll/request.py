@@ -3,6 +3,8 @@
 The bot's dispatcher has already passed the command through its gate (follow, cooldown,
 quota). Replies go out through send() as they are made, so their order in chat is the
 order the handler wrote them; what the gate must give back is reported with the result.
+A refusal by a limit goes out through the bot's own once-per-30-s brake, shared with the
+bot's commands.
 """
 import dataclasses
 from collections.abc import Awaitable, Callable
@@ -10,9 +12,8 @@ from collections.abc import Awaitable, Callable
 from src.core.tier import Tier
 from src.roll.port import RollPort
 
-# Cooldown scope of refusals by a limit: one per 30 s per viewer, not one per message
-DENY_SCOPE = 'deny'
-DENY_REPEAT_SECONDS = 30
+# send(text, deny): deny – a refusal by a limit, said at most once per 30 s to a viewer
+Send = Callable[[str, bool], Awaitable[bool]]
 
 
 @dataclasses.dataclass
@@ -29,7 +30,7 @@ class Request:
     tier: Tier
     session_id: str
     bot: RollPort
-    send: Callable[[str], Awaitable[bool]]
+    send: Send
     args: str = ''
     original_args: str = ''
     gate: Gate = dataclasses.field(default_factory=Gate)
@@ -39,7 +40,7 @@ class Request:
         return self.tier == Tier.BROADCASTER
 
     async def reply(self, text: str) -> bool:
-        return await self.send(text)
+        return await self.send(text, False)
 
     def refuse(self) -> None:
         """Malformed input: the viewer got no game, so the cooldown and the quota row go back."""
@@ -54,8 +55,5 @@ class Request:
         self.gate.clear_public = True
 
     async def deny(self, text: str) -> None:
-        """A refusal by a limit, said at most once per DENY_REPEAT_SECONDS to a viewer."""
-        if self.bot.cooldown_remaining(self.user, DENY_SCOPE):
-            return
-        self.bot.set_cooldown(self.user, DENY_REPEAT_SECONDS, DENY_SCOPE)
-        await self.reply(text)
+        """A refusal by a limit: the bot says it at most once per 30 s to a viewer."""
+        await self.send(text, True)

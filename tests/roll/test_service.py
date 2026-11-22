@@ -203,7 +203,7 @@ async def test_the_bot_registers_what_the_game_declared_and_keeps_it_for_a_start
     chat._roll = client
     await adapter.attach(chat)
     assert chat._registry.resolve('!roll') is None
-    await adapter._load_commands()
+    assert await adapter._refresh_commands()
     assert chat._registry.resolve('!roll 5').trigger == '!roll'
     assert chat._registry.resolve('!rollboard').public
 
@@ -220,3 +220,43 @@ def test_a_new_declaration_replaces_the_old_one(db):
     chat.set_game_commands([GameCommand('!dice')])
     assert chat._registry.resolve('!roll') is None
     assert chat._registry.resolve('!dice').trigger == '!dice'
+
+
+def test_a_queued_event_never_undoes_a_fresher_state():
+    """Chat events wait in the bot's queue with the state of their moment: one that arrives
+    after a later direct call must not take the game back off the air."""
+    remote = RemoteBot(ServiceClient('бот', 'http://bot.test'))
+    remote.update({'session_id': '2026-11-22 19:46', 'live': True, 'rewards_active': True, 'at': 200.0})
+    remote.update({'session_id': '2026-11-22', 'live': False, 'rewards_active': False, 'at': 100.0})
+    assert remote.stream_live and remote.session_id == '2026-11-22 19:46'
+
+
+async def test_a_game_command_runs_the_chat_hook_first(link, monkeypatch):
+    """The command may overtake its own chat event: a first «!roll» must still start the
+    perk out loud, so the game runs the hook before the handler."""
+    from src.roll import service as service_module
+    bot, client, _ = link
+    order = []
+
+    async def hook(*args):
+        order.append('chat')
+
+    async def handler(ctx):
+        order.append('command')
+    monkeypatch.setattr(service_module.perks, 'on_chat', hook)
+    monkeypatch.setattr(service_module.tiers, 'on_chat', hook)
+    monkeypatch.setitem(service_module.HANDLERS, '!roll', handler)
+    await client.command('!roll', _ctx(bot, '!roll'))
+    assert order == ['chat', 'chat', 'command']
+
+
+async def test_a_limit_refusal_from_the_game_shares_the_bots_brake(link):
+    """The game's refusal goes through the bot's own once-per-30-s brake: a viewer refused by
+    a bot command a moment ago does not hear the game refuse them too."""
+    bot, client, remote = link
+    ctx = _ctx(bot, '!roll')
+    with client._api.hold(ctx.message):
+        await remote.reply(ctx.message.id, 'отказ 1', deny=True)
+        await remote.reply(ctx.message.id, 'отказ 2', deny=True)
+    ctx.message.respond.assert_awaited_once_with('отказ 1')
+    assert bot.cooldown_remaining('gop', 'deny')

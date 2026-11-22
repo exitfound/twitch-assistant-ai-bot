@@ -11,8 +11,6 @@ from src.core.config import Rewards, Roll
 from src.core.tier import Tier, by_tier
 from src.roll.storage import RollRow
 
-# Twitch login: Latin letters, digits and underscore, up to 25 characters
-
 
 def throw(ceiling: int | None = None) -> int:
     """A roll from ROLL_MIN up to ROLL_MAX, or up to a curse's ceiling."""

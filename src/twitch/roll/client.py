@@ -7,6 +7,7 @@ game's internal API.
 import asyncio
 import dataclasses
 import logging
+import time
 from typing import TYPE_CHECKING, Protocol
 
 from src.core.config import Service
@@ -37,7 +38,7 @@ class RollUnavailable(Exception):
 
 
 class RollSlow(Exception):
-    """The game did not answer in time: it may have done the work all the same."""
+    """The game did not answer, but the request reached it: it may have done the work."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -111,8 +112,10 @@ class RollClient:
 
     def _state(self, session_id: str | None = None) -> dict:
         bot = self._bot
+        # «at» orders states: a queued event carries the state of its moment, and the game
+        # must not let it undo a fresher one from a direct call
         return {'session_id': session_id or bot.session_id, 'live': bot.stream_live,
-                'rewards_active': bot.rewards_active}
+                'rewards_active': bot.rewards_active, 'at': time.time()}
 
     async def command(self, trigger: str, ctx: CommandContext) -> None:
         body = {
@@ -125,9 +128,9 @@ class RollClient:
             try:
                 gate = await self._client.call('POST', '/command', body, seconds=COMMAND_SECONDS)
             except ServiceUnavailable as e:
-                if e.timeout:
+                if e.maybe_done:
                     # The game may have answered already: no «unavailable» on top of its reply
-                    logger.warning('Игра не ответила вовремя на %s от %s', trigger, ctx.user)
+                    logger.warning('Игра не ответила на %s от %s, но могла выполнить: %s', trigger, ctx.user, e)
                     return
                 raise RollUnavailable(str(e)) from e
         await apply_gate(ctx, trigger, refuse=bool(gate.get('refuse')),
@@ -195,7 +198,8 @@ class RollClient:
         try:
             answer = await self._client.call('POST', '/redemption', body, seconds=REDEEM_SECONDS)
         except ServiceUnavailable as e:
-            if e.timeout:
+            # Sent, but no answer: refunding now could give an applied reward for free
+            if e.maybe_done:
                 raise RollSlow(str(e)) from e
             raise RollUnavailable(str(e)) from e
         return answer.get('decision')

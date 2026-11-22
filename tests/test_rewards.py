@@ -294,3 +294,32 @@ async def test_a_redemption_the_game_was_slow_on_is_settled_by_its_journal(db, t
     await asyncio.gather(*service._rechecks)
     assert _statuses(bot) == {'r-1': status}
     bot.send_chat_message.assert_not_awaited()
+
+
+async def test_a_redemption_still_in_the_games_hands_is_not_settled_as_stale(db, twitch, monkeypatch):
+    """A resubscribe while the game applies a redemption (or a recheck waits for it) must
+    not refund it: the game may be about to apply it."""
+    service, bot, broadcaster = twitch
+    await service.start('chan', open_=True)
+    reward_id = next(iter(service._actions))
+    before = datetime.datetime.now(datetime.UTC) - datetime.timedelta(minutes=1)
+    broadcaster.unfulfilled = {reward_id: [SimpleNamespace(id='busy', redeemed_at=before),
+                                           SimpleNamespace(id='lost', redeemed_at=before)]}
+    service._busy.add('busy')
+    await service.resubscribe()
+    assert _statuses(bot) == {'lost': CANCELED}
+
+
+async def test_a_redemption_whose_connection_dropped_is_checked_not_refunded(db, twitch, monkeypatch):
+    """Sent, then the connection dropped: the game may have applied it, so no refund at once."""
+    service, bot, _ = twitch
+    await service.start('chan', open_=True)
+    monkeypatch.setattr(service._roll, 'redeem', AsyncMock(side_effect=RollSlow('dropped')))
+    reward_id = next(iter(service._actions))
+    await service.on_redemption(SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
+                                                user=SimpleNamespace(name='gop', id='42'), user_input=''))
+    assert _statuses(bot) == {}
+    assert 'r-1' in service._busy
+    bot.send_chat_message.assert_not_awaited()
+    for task in list(service._rechecks):
+        task.cancel()

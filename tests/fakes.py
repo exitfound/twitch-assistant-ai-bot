@@ -111,6 +111,11 @@ class InProcessRoll:
         self._bot = bot
         self._followers = followers
 
+    async def commands(self):
+        from src.roll.service import COMMANDS
+        from src.twitch.roll.client import GameCommand
+        return [GameCommand(c.trigger, c.public) for c in COMMANDS]
+
     async def command(self, trigger: str, ctx) -> None:
         from src.roll.service import HANDLERS
         await play(HANDLERS[trigger], ctx)
@@ -145,5 +150,9 @@ def chat_component(bot, followers=None, *, game: bool = True):
     """The dispatcher as the bot builds it, with the game linked in this process."""
     from src.twitch.core.component import ChatComponent
     from src.twitch.core.followers import FollowerCache
+    from src.roll.service import COMMANDS
+    from src.twitch.roll.client import GameCommand
     followers = followers if followers is not None else FollowerCache()
-    return ChatComponent(bot, followers, InProcessRoll(bot, followers) if game else None)
+    component = ChatComponent(bot, followers, InProcessRoll(bot, followers) if game else None)
+    component.set_game_commands([GameCommand(c.trigger, c.public) for c in COMMANDS])
+    return component

@@ -130,6 +130,10 @@ class CommandRegistry:
             channel=channel,
         ))
 
+    def remove(self, triggers: set[str]) -> None:
+        """Forget these commands: a service declared a new set of its own."""
+        self._entries = [entry for entry in self._entries if entry.trigger not in triggers]
+
     def channel_triggers(self) -> list[str]:
         """The registered channel commands, in registration order."""
         return [entry.trigger for entry in self._entries if entry.channel]

@@ -39,7 +39,7 @@ from src.twitch.local import project
 from src.twitch.local.lastseen import TRIGGER as LASTSEEN_TRIGGER, handle_lastseen
 from src.twitch.local.schedule import TRIGGER as SCHEDULE_TRIGGER, handle_schedule
 from src.twitch.local.mascot import feed as mascot
-from src.twitch.roll.client import RollLink, RollUnavailable
+from src.twitch.roll.client import GameCommand, RollLink, RollUnavailable
 
 logger = logging.getLogger(__name__)
 
@@ -51,9 +51,6 @@ ASK_TRIGGER = '!ask'
 SUMMARY_TRIGGER = '!summary'
 WHO_TRIGGER = '!who'
 VERSUS_TRIGGER = '!versus'
-ROLL_TRIGGER = '!roll'
-ROLLSTAT_TRIGGER = '!rollstat'
-ROLLBOARD_TRIGGER = '!rollboard'
 ASCII_TRIGGER = '!ascii'
 CLIP_TRIGGER = '!clip'
 
@@ -149,14 +146,8 @@ class ChatComponent(commands.Component):
         add(HELP_CHANNEL_TRIGGER, self._channel.handle_help, public=True)
         # The chat's numbers are for the streamer: not in the help, silent for anyone else
         add(STATS_TRIGGER,     handle_stats,     prefix=True, roles=frozenset({'broadcaster'}))
-        if roll is not None:
-            # Longer triggers first, by the rule above. The game's commands take a prefix only
-            # to answer «!roll 5» instead of ignoring it; the word boundary keeps «!rollstat» out of !roll
-            add(ROLLSTAT_TRIGGER,  self._game(ROLLSTAT_TRIGGER),  prefix=True)
-            # The month's board is the same for everyone and sits on the stream for a while:
-            # one shared pause, like help
-            add(ROLLBOARD_TRIGGER, self._game(ROLLBOARD_TRIGGER), prefix=True, public=True)
-            add(ROLL_TRIGGER,      self._game(ROLL_TRIGGER),      prefix=True)
+        # The game's commands come from the game itself (set_game_commands())
+        self._game_triggers: set[str] = set()
         add(SUMMARY_TRIGGER,   handle_summary,   prefix=True, kind=Kind.GEMINI)
         add(WHO_TRIGGER,       handle_who,       prefix=True, kind=Kind.GEMINI)
         add(VERSUS_TRIGGER,    handle_versus,    prefix=True, kind=Kind.GEMINI)
@@ -415,6 +406,21 @@ class ChatComponent(commands.Component):
                             window=Quota.WINDOW_MINUTES)
         await deny(self.bot, message, user, text + sub_hint(message.chatter, limit, Quota.SUB_PER_HOUR))
         return False
+
+    def set_game_commands(self, commands: list[GameCommand]) -> None:
+        """Register the commands the game declared, in place of the ones it declared before.
+
+        Each takes a prefix only to answer «!roll 5» instead of ignoring it; the word boundary
+        keeps «!rollstat» out of !roll, so their order does not matter.
+        """
+        if self._roll is None:
+            return
+        self._registry.remove(self._game_triggers)
+        for command in commands:
+            self._registry.add(command.trigger, self._game(command.trigger), prefix=True, public=command.public)
+        self._game_triggers = {command.trigger for command in commands}
+        # A channel command of the same name never answers now: logged, as on a CONTENT.md edit
+        self._channel.recheck()
 
     def _game(self, trigger: str) -> Handler:
         """A game command: the game service runs it, the bot only carries it."""

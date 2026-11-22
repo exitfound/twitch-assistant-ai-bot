@@ -10,6 +10,7 @@ from aiohttp import web
 from aiohttp.test_utils import TestClient, TestServer
 
 from src.twitch import bot as bot_module
+from src.twitch.roll import adapter as adapter_module
 from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core.config import Mascot
 from src.core import sse
@@ -325,10 +326,11 @@ async def test_the_overlays_start_only_when_enabled(monkeypatch, mascot, roll):
 
     monkeypatch.setattr(bot_module, 'mascot_loop', loop)
     monkeypatch.setattr(bot_module.sse, 'serve', loop)
-    monkeypatch.setattr(bot_module, 'serve', loop)
+    monkeypatch.setattr(adapter_module, 'serve', loop)
     bot = bot_module.Bot()
     if roll:
-        monkeypatch.setattr(bot._roll, 'events_loop', loop)
+        monkeypatch.setattr(bot._game.client, 'events_loop', loop)
+        monkeypatch.setattr(bot._game, '_load_commands', loop)
     bot._start_overlays()
     assert bot._tasks.running('mascot') is mascot
     assert bot._tasks.running('overlays') is mascot

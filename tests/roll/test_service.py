@@ -178,3 +178,45 @@ async def test_the_game_keeps_the_stream_state_fresh_by_itself(link, monkeypatch
         with contextlib.suppress(asyncio.CancelledError):
             await task
     assert not remote.stream_live
+
+
+async def test_the_game_declares_its_commands(link):
+    from src.roll.service import COMMANDS
+    _, client, _ = link
+    got = await client.commands()
+    assert [(c.trigger, c.public) for c in got] == [(c.trigger, c.public) for c in COMMANDS]
+
+
+async def test_the_bot_registers_what_the_game_declared_and_keeps_it_for_a_start_without_the_game(
+        link, monkeypatch):
+    """Declared once, kept in bot_state: a bot starting while the game is down still knows
+    !roll and answers «unavailable» instead of nothing."""
+    from unittest.mock import AsyncMock
+
+    from src.core.tasks import BackgroundTasks
+    from src.twitch.roll.adapter import RollAdapter
+    bot, client, _ = link
+    bot.add_component = AsyncMock()
+    adapter = RollAdapter(bot, FollowerCache(), BackgroundTasks(), lambda: False)
+    adapter.client = client
+    chat = chat_component(bot, game=False)
+    chat._roll = client
+    await adapter.attach(chat)
+    assert chat._registry.resolve('!roll') is None
+    await adapter._load_commands()
+    assert chat._registry.resolve('!roll 5').trigger == '!roll'
+    assert chat._registry.resolve('!rollboard').public
+
+    later = chat_component(bot, game=False)
+    later._roll = client
+    await RollAdapter(bot, FollowerCache(), BackgroundTasks(), lambda: False).attach(later)
+    assert later._registry.resolve('!rollstat').trigger == '!rollstat'
+    await adapter.client.close()
+
+
+def test_a_new_declaration_replaces_the_old_one(db):
+    from src.twitch.roll.client import GameCommand
+    chat = chat_component(FakeBot())
+    chat.set_game_commands([GameCommand('!dice')])
+    assert chat._registry.resolve('!roll') is None
+    assert chat._registry.resolve('!dice').trigger == '!dice'

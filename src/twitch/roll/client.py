@@ -51,7 +51,19 @@ class Spec:
     max_per_user: int           # per stream, 0 – no limit
 
 
+@dataclasses.dataclass(frozen=True)
+class GameCommand:
+    """A command the game declares: the bot registers it and carries it to the game."""
+    trigger: str
+    public: bool = False        # a shared pause for the whole chat, no follow check
+
+    def as_dict(self) -> dict:
+        return {'trigger': self.trigger, 'public': self.public}
+
+
 class RollLink(Protocol):
+
+    async def commands(self) -> list[GameCommand]: ...
 
     async def command(self, trigger: str, ctx: CommandContext) -> None:
         """Run a game command; the replies go to chat, the gate's refunds are applied to ctx."""
@@ -161,6 +173,13 @@ class RollClient:
             return
         if path == '/events/stream':
             logger.error('Игра так и не узнала о смене эфира (%s)', body['session_id'])
+
+    async def commands(self) -> list[GameCommand]:
+        try:
+            answer = await self._client.call('GET', '/commands')
+            return [GameCommand(**command) for command in answer['commands']]
+        except (ServiceUnavailable, KeyError, TypeError) as e:
+            raise RollUnavailable(str(e)) from e
 
     async def specs(self) -> list[Spec]:
         try:

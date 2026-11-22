@@ -52,6 +52,11 @@ class ChannelCommands:
             _report(commands, self._is_taken, self._registered())
         return commands
 
+    def recheck(self) -> None:
+        """The bot's commands changed (a service declared its own): log the clashes again."""
+        self._checked = None
+        self.check()
+
     def listing(self) -> list[str]:
         """What !channel names: the file's commands in file order, then the registered ones."""
         return _triggers(self.check(), self._is_taken, self._registered())

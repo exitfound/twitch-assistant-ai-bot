@@ -3,6 +3,7 @@
 Every call from the bot carries the stream state (session, live, rewards), so the game
 never acts on a session older than the event that reached it.
 """
+import dataclasses
 import logging
 from collections.abc import Awaitable, Callable
 
@@ -22,11 +23,25 @@ from src.roll.storage import get_applied
 
 logger = logging.getLogger(__name__)
 
-HANDLERS: dict[str, Callable[[Request], Awaitable[None]]] = {
-    '!roll': handle_roll,
-    '!rollstat': handle_rollstat,
-    board.TRIGGER: board.handle_rollboard,
-}
+Handler = Callable[[Request], Awaitable[None]]
+
+
+@dataclasses.dataclass(frozen=True)
+class Command:
+    trigger: str
+    handler: Handler
+    # One shared pause for the whole chat and no follow check, like help
+    public: bool = False
+
+
+# The game's commands, declared to the bot by /commands: the bot registers what it is told
+COMMANDS = (
+    Command('!rollstat', handle_rollstat),
+    # The month's board is the same for everyone and sits on the stream for a while
+    Command(board.TRIGGER, board.handle_rollboard, public=True),
+    Command('!roll', handle_roll),
+)
+HANDLERS: dict[str, Handler] = {command.trigger: command.handler for command in COMMANDS}
 
 
 async def on_stream(bot: RollPort, session_id: str, *, live: bool) -> None:
@@ -50,6 +65,7 @@ class GameService:
 
     def app(self) -> web.Application:
         app = web.Application(middlewares=[require_token(Service.TOKEN)])
+        app.router.add_get('/commands', self._commands)
         app.router.add_post('/command', self._command)
         app.router.add_post('/events/chat', self._chat)
         app.router.add_post('/events/stream', self._stream)
@@ -62,6 +78,9 @@ class GameService:
         body = await request.json()
         self._bot.update(body['state'])
         return body
+
+    async def _commands(self, _request: web.Request) -> web.Response:
+        return web.json_response({'commands': [{'trigger': c.trigger, 'public': c.public} for c in COMMANDS]})
 
     async def _command(self, request: web.Request) -> web.Response:
         body = await self._body(request)

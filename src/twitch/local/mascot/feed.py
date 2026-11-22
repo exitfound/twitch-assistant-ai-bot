@@ -1,7 +1,7 @@
 """SSE feed of the mascot mood: the OBS page listens, the bot pushes every change.
 
 GET /mascot/events – text/event-stream, event `mood`, data {"mood", "rate", "chatters"};
-the current state goes out on connect (src.core.sse.py).
+the current state goes out on connect (src/core/sse.py).
 GET /mascot/state – the same JSON once, for a quick look from a browser.
 """
 import asyncio

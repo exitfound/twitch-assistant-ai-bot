@@ -422,9 +422,11 @@ class ChatComponent(commands.Component):
             try:
                 await self._roll.command(trigger, ctx)
             except RollUnavailable:
-                # Nothing was played: the pause goes back, and the refusal is said once per 30 s
+                # Nothing was played: the pause goes back (the shared one of !rollboard too),
+                # and the refusal is said once per 30 s
                 logger.warning('Игра недоступна – %s от %s без ответа', trigger, ctx.user)
                 ctx.clear_cooldown()
+                self.bot.clear_cooldown(trigger, PUBLIC_SCOPE)
                 await deny(self.bot, ctx.message, ctx.user, Content.text('roll_unavailable', user=ctx.user))
         return handle
 

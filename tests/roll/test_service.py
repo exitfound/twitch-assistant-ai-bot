@@ -18,7 +18,7 @@ from src.roll.service import GameService
 from src.roll.specs import specs
 from src.roll.storage import get_tier, save_action
 from src.twitch.core.api import BotApi
-from src.twitch.core.commands import CommandContext
+from src.twitch.core.commands import PUBLIC_SCOPE, CommandContext
 from src.twitch.core.followers import FollowerCache
 from src.twitch.roll.client import RollClient, RollUnavailable
 
@@ -123,6 +123,9 @@ async def test_a_game_that_is_down_is_unavailable_and_the_viewer_hears_it(db, mo
     message = make_message('!roll', make_chatter('gop'))
     await component.event_message(message)
     assert message.respond.await_args.args[0] == 'texts.roll_unavailable'
+    # The board's shared pause goes back too: the next viewer may ask again at once
+    await component.event_message(make_message('!rollboard', make_chatter('other')))
+    assert not bot.cooldown_remaining('!rollboard', PUBLIC_SCOPE)
     await client.close()
 
 

@@ -615,6 +615,11 @@ class Service:
     BOT_API_URL: str | None = _env_url('BOT_API_URL')
     BOT_API_HOST: str = _env_raw('BOT_API_HOST') or '127.0.0.1'
     BOT_API_PORT: int = _env_int('BOT_API_PORT', 8790, 1, 65535)
+    # The voice service (Discord) as the bot reaches it: answers that reached chat, to be
+    # spoken; empty – the bot speaks nowhere
+    VOICE_URL: str | None = _env_url('VOICE_URL')
+    VOICE_API_HOST: str = _env_raw('VOICE_API_HOST') or '127.0.0.1'
+    VOICE_API_PORT: int = _env_int('VOICE_API_PORT', 8791, 1, 65535)
     # A shared secret on every internal call; empty – none, the network alone guards the APIs
     TOKEN: str | None = _env_raw('SERVICE_TOKEN')
 

@@ -13,6 +13,7 @@ from src.core import sse
 from src.twitch.core.component import ChatComponent
 from src.twitch.core.followers import FollowerCache
 from src.core.config import Emote, Film, Help, Mascot, Memory, Proactive, Pulse, Service, Twitch
+from src.core import speech
 from src.core.content import Content
 from src.core.cooldowns import Cooldowns
 from src.twitch.core.stream import StreamTracker, watch_stream
@@ -261,6 +262,8 @@ class Bot(commands.Bot):
             self._tasks.start('overlays', lambda: sse.serve(app, [mascot_feed.feed], Mascot.HOST, Mascot.PORT))
         if self._game is not None:
             self._game.start_services()
+        if Service.VOICE_URL and self._tasks.start('voice', speech.Forwarder(Service.VOICE_URL, Service.TOKEN).loop):
+            logger.info('Реплики бота уходят на озвучку: %s', Service.VOICE_URL)
 
     def _start_background_tasks(self) -> None:
         # The !film commands work without the channel id, so the session they open needs

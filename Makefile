@@ -42,8 +42,8 @@ lock:
 up:
 	docker compose up -d --build
 
-# The services to restart or follow: both by default, one with S=roll or S=bot
-S ?= bot roll
+# The services to restart or follow: all by default, one with S=bot, S=roll or S=voice
+S ?= bot roll voice
 
 restart:
 	docker compose restart $(S)

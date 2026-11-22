@@ -1,42 +1,16 @@
-"""Entry point: the CLI commands, or the bot itself on every platform it is configured for."""
+"""Entry point: the CLI commands, or the bot itself – Twitch; the game and the voice run as services of their own."""
 import asyncio
 import contextlib
 import logging
 import signal
 
-from src.core.config import Discord, validate_config
+from src.core.config import validate_config
 from src.core.content import validate_content
 from src.core.database import close_db, init_db
 from src.core.logging_setup import setup_logging
-from src.discord.bot import DiscordService
 from src.twitch.bot import Bot
 
 logger = logging.getLogger(__name__)
-
-
-def start_discord() -> tuple[DiscordService, asyncio.Task] | None:
-    """Discord beside Twitch, whenever its token is set; it never stops Twitch."""
-    if not Discord.TOKEN:
-        return None
-    missing = Discord.missing()
-    if missing:
-        logger.error('Discord не запущен: не заданы %s', ', '.join(missing))
-        return None
-    service = DiscordService()
-    return service, asyncio.create_task(service.run(), name='discord')
-
-
-async def stop_discord(started: tuple[DiscordService, asyncio.Task] | None) -> None:
-    if started is None:
-        return
-    service, task = started
-    try:
-        await service.stop()
-    except Exception:
-        logger.exception('Discord закрылся с ошибкой')
-    task.cancel()
-    with contextlib.suppress(asyncio.CancelledError):
-        await task
 
 
 async def run_bot() -> None:
@@ -54,12 +28,10 @@ async def run_bot() -> None:
 
     loop.add_signal_handler(signal.SIGTERM, _on_signal, 'SIGTERM')
     loop.add_signal_handler(signal.SIGINT, _on_signal, 'SIGINT')
-    discord_bot = None
     try:
-        # The schema is brought up to date before any platform starts: both write to the
-        # database, and a write during a migration would roll back its unfinished work
+        # The schema is brought up to date before the bot starts: a write during a
+        # migration would roll back its unfinished work
         await init_db()
-        discord_bot = start_discord()
         async with Bot() as bot:
             bot.on_shutdown_signal = _on_signal
             bot_task = asyncio.create_task(bot.start())
@@ -84,7 +56,6 @@ async def run_bot() -> None:
                     logger.exception('Бот остановился из-за ошибки')
             await bot.stop_background_tasks()
     finally:
-        await stop_discord(discord_bot)
         await close_db()
 
 

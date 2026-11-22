@@ -219,6 +219,9 @@ class ChatComponent(commands.Component):
         if text is None:
             text = message.text
             film_bridge.from_twitch(name, text, *film_bridge.look(message))
+        elif not text:
+            # A bare mark carries nothing to read or save
+            return
 
         # session_id is taken once: it changes when a stream starts or ends, and coroutines outlive that
         session_id = self.bot.session_id

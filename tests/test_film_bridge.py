@@ -18,7 +18,7 @@ def bridge(monkeypatch):
     monkeypatch.setattr(Film, 'API_TOKEN', 'token')
     monkeypatch.setattr(Film, 'ENABLED', True)
     monkeypatch.setattr(Film, 'BRIDGE', True)
-    monkeypatch.setattr(Film, 'HALL_MARK', '[KINOZAL]')
+    monkeypatch.setattr(Film, 'HALL_MARK', '🎬 [KZ]')
     monkeypatch.setattr(film, '_open', True)
     monkeypatch.setattr(film_bridge, '_outbox', None)
     state = type('Hall', (), {})()
@@ -57,13 +57,13 @@ def test_commands_and_empty_lines_stay_in_twitch(bridge, text):
 
 
 def test_a_line_that_came_from_the_hall_does_not_go_back(bridge):
-    film_bridge.from_twitch('Gopnik', '[KINOZAL] привет из кинозала')
+    film_bridge.from_twitch('Gopnik', '🎬 [KZ] привет из кинозала')
     assert queued() == []
 
 
 def test_without_a_mark_nothing_is_left_out(bridge, monkeypatch):
     monkeypatch.setattr(Film, 'HALL_MARK', '')
-    film_bridge.from_twitch('Gopnik', '[KINOZAL] попкорн')
+    film_bridge.from_twitch('Gopnik', '🎬 [KZ] попкорн')
     assert queued() == ['texts.film_bridge_to_hall']
 
 
@@ -122,10 +122,10 @@ async def test_the_bot_s_own_line_goes_to_the_hall_once(db, bridge):
 async def test_a_hall_line_is_read_without_its_mark_and_stays_out_of_the_hall(db, bridge):
     from src.core.db import chat as db_chat
     component = ChatComponent(FakeBot())
-    await component.event_message(make_message('[KINOZAL] кино огонь', make_chatter('fan')))
+    await component.event_message(make_message('🎬 [KZ] кино огонь', make_chatter('fan')))
     assert queued() == []
     rows = await db_chat.get_recent_chat('2026-09-22 20:00', 5)
-    assert any('кино огонь' in str(r) and '[KINOZAL]' not in str(r) for r in rows), rows
+    assert any('кино огонь' in str(r) and '🎬 [KZ]' not in str(r) for r in rows), rows
 
 
 async def test_a_command_from_the_hall_works_like_in_twitch(db, bridge, monkeypatch):
@@ -135,16 +135,18 @@ async def test_a_command_from_the_hall_works_like_in_twitch(db, bridge, monkeypa
         return {'active': True, 'code': '4817', 'title': None}
     monkeypatch.setattr(film, 'gate', gate)
     component = ChatComponent(FakeBot())
-    message = make_message('[KINOZAL] !film', make_chatter('fan'))
+    message = make_message('🎬 [KZ] !film', make_chatter('fan'))
     await component.event_message(message)
     message.respond.assert_awaited_once_with('texts.film_info')
 
 
 def test_from_hall_takes_only_a_leading_mark(bridge, monkeypatch):
-    assert film_bridge.from_hall('[KINOZAL]  !roll') == '!roll'
-    assert film_bridge.from_hall('привет [KINOZAL]') is None
-    monkeypatch.setattr(Film, 'BRIDGE', False)
-    assert film_bridge.from_hall('[KINOZAL] привет') is None
+    assert film_bridge.from_hall('🎬 [KZ]  !roll') == '!roll'
+    assert film_bridge.from_hall('привет 🎬 [KZ]') is None
+    monkeypatch.setattr(Film, 'BRIDGE', False)  # the gate posts hall lines without the bot's bridge
+    assert film_bridge.from_hall('🎬 [KZ] !film') == '!film'
+    monkeypatch.setattr(Film, 'ENABLED', False)
+    assert film_bridge.from_hall('🎬 [KZ] привет') is None
 
 
 async def test_a_viewer_line_reaches_the_queue_through_the_dispatcher(db, bridge):

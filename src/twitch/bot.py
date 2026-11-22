@@ -196,10 +196,10 @@ class Bot(commands.Bot):
         ended = self.session_id
         # A rerun or a premiere ending, or a redelivered offline, ends no stream of ours
         was_live = self.stream.stream_id is not None
-        await self.stream.offline()
         # Before the steps below: one of them failing must not leave the hall open
         if Film.ENABLED and was_live:
             self._tasks.start(FILM_CLOSE_TASK, lambda: film.close_after_stream(self), once=True)
+        await self.stream.offline()
         await self._rewards.set_open(False)
         await roll_overlay.refresh(ended, live=False)
         await roll_board.regalia(ended, live=False)

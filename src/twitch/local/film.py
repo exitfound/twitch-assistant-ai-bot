@@ -1,13 +1,8 @@
-"""!film – the cinema hall on its own site: the link, the current session's code and the film.
+"""!film – the cinema hall's link, session code and film title (BOT.md «Шаг 7и»).
 
-The session lives in the hall's gate (`FILM_URL`/_gate/api/session); the bot only asks
-it. «!film start», «!film title» and «!film stop» belong to FILM_CONTROL_ACCESS: a new
-session with a new code (refused while one is open – a new code would throw every viewer
-out), a new title for the open one, and its end. A session left open when the stream ends
-is closed by the bot after STREAM_RESUME_MINUTES (close_after_stream).
-The session lives only while the bot does: heartbeat_loop() renews the gate's lease, and
-the bot closes the session on its way out (close_on_shutdown). The same heartbeat repeats
-the link and the code in chat every FILM_REMIND_MINUTES while a session is open (Reminder).
+The session, its code and title live in the hall's gate (`FILM_URL`/_gate/api/session); the bot
+reads and changes them only through it. A session lives while the bot does: heartbeat_loop()
+renews the gate's lease, close_on_shutdown() ends it, close_after_stream() ends one left open.
 """
 import asyncio
 import logging
@@ -53,8 +48,12 @@ class NoSession(GateError):
 
 
 # Whether a session is open, by the gate's last answer about it: the chat bridge runs only then.
-# The heartbeat asks once a minute, start and stop change it at once
+# The heartbeat refreshes it once a minute, any other session call at once
 _open = False
+
+# Serialises the «no session open» check and the POST: two concurrent starts would both see
+# the hall closed, and the second would void the first one's code
+_start_lock = asyncio.Lock()
 
 
 def is_open() -> bool:
@@ -81,7 +80,11 @@ async def gate(method: str, title: str | None = None, limit: aiohttp.ClientTimeo
     """One call to the session API: GET – the state, POST – a new session, PATCH – a new title, DELETE – the end."""
     global _open
     body = {'title': title} if method in ('POST', 'PATCH') else None
-    data = await request(method, API_PATH, body, limit)
+    try:
+        data = await request(method, API_PATH, body, limit)
+    except NoSession:
+        _open = False
+        raise
     if not isinstance(data, dict):
         raise GateError(f'{method}: не JSON-объект')
     _open = bool(data.get('active'))
@@ -89,7 +92,7 @@ async def gate(method: str, title: str | None = None, limit: aiohttp.ClientTimeo
 
 
 def _title(ctx: CommandContext) -> str | None:
-    """The title from the command's args in their original case, squeezed and cut; None – none given."""
+    """The title from the args in their original case, whitespace collapsed, cut to TITLE_MAX; None – none."""
     title = ' '.join(ctx.original_args.split())[:TITLE_MAX]
     return title or None
 
@@ -128,16 +131,18 @@ async def handle_film_start(ctx: CommandContext) -> None:
     viewer would be thrown back to the code page. A new film is «!film title».
     """
     try:
-        current = await gate('GET')
-        if current.get('active'):
-            ctx.clear_cooldown()
-            await reply(ctx.message, Content.text('film_already_open', user=ctx.user, code=current.get('code', ''),
-                                                  title_command=TITLE_TRIGGER, stop_command=STOP_TRIGGER))
-            return
-        state = await gate('POST', _title(ctx))
+        async with _start_lock:
+            current = await gate('GET')
+            if not current.get('active'):
+                state = await gate('POST', _title(ctx))
     except GateError as error:
         logger.warning('Кинозал: сеанс не открылся (%s)', error)
         await reply(ctx.message, Content.text('film_error', user=ctx.user))
+        return
+    if current.get('active'):
+        ctx.clear_cooldown()
+        await reply(ctx.message, Content.text('film_already_open', user=ctx.user, code=current.get('code', ''),
+                                              title_command=TITLE_TRIGGER, stop_command=STOP_TRIGGER))
         return
     logger.info('Кинозал: сеанс открыт (%s)', state.get('title') or 'без названия')
     await ctx.bot.send_chat_message(_text('film_open', state))
@@ -171,7 +176,7 @@ async def handle_film_stop(ctx: CommandContext) -> None:
         logger.warning('Кинозал: сеанс не закрылся (%s)', error)
         await reply(ctx.message, Content.text('film_error', user=ctx.user))
         return
-    # The gate answers 200 with nothing to close too: then there is no film to say goodbye to
+    # The gate answers 200 with `closed: false` when there was nothing to close
     if not state.get('closed'):
         await reply(ctx.message, Content.text('film_stop_none', user=ctx.user))
         return
@@ -180,12 +185,10 @@ async def handle_film_stop(ctx: CommandContext) -> None:
 
 
 async def close_after_stream(bot: BotPort) -> None:
-    """The stream ended: the session open at that moment is closed once a resume is ruled out.
+    """Close the session open at the stream end once STREAM_RESUME_MINUTES rule out a resume.
 
-    The wait is STREAM_RESUME_MINUTES – a stream back within it is the same stream, and
-    the bot cancels this task on stream start. The session is remembered at the end and
-    compared by its code and start, not by clocks: a session opened after the end (a film
-    off stream) is a different one and is left alone, whatever the gate's clock says.
+    A stream back within the window cancels this task. The session is matched by code and start,
+    not by clocks: one opened after the end (a film off stream) is left alone.
     """
     try:
         at_end = await gate('GET')
@@ -210,12 +213,11 @@ async def close_after_stream(bot: BotPort) -> None:
 
 
 class Reminder:
-    """The link and the code again every FILM_REMIND_MINUTES of an open session.
+    """The link and the code again every FILM_REMIND_MINUTES of an open session, fed by the heartbeat.
 
-    Fed the heartbeat's answers. A new session (a new code or start) restarts the count –
-    the start announced it itself; a closed one stops it. The clock is the bot's monotonic
-    one, so the gate's clock and a wrong system time do not matter; a gate silent for longer
-    than the interval gives one reminder when it is back, not a burst.
+    A new session (code or start) restarts the count, since the start announced it; a closed one
+    stops it. The clock is the bot's monotonic one; a gate silent past the interval gives one
+    reminder on its return, not a burst.
     """
 
     def __init__(self) -> None:
@@ -237,14 +239,14 @@ class Reminder:
         self.since = self.since + every if now - self.since < 2 * every else now
         try:
             await bot.send_chat_message(_text('film_remind', state))
-        except Exception as error:  # a chat hiccup must not stop the heartbeat: the session hangs on it
+        except Exception as error:  # a send failure must not stop the heartbeat: the lease depends on it
             logger.warning('Кинозал: напоминание не ушло в чат (%r)', error)
 
 
 async def heartbeat_loop(bot: BotPort) -> None:
-    """Tell the gate the bot is alive once a minute; without it the gate ends the session.
+    """Renew the gate's lease once a minute; without it the gate ends the session.
 
-    Each answer also goes to the Reminder: an open session's link and code are repeated in chat.
+    Each answer also goes to the Reminder.
     """
     failing = False
     reminder = Reminder()

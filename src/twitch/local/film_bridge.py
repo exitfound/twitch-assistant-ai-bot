@@ -1,15 +1,9 @@
-"""The chat bridge Twitch → cinema hall, while a session is open.
+"""The chat bridge Twitch → cinema hall while a session is open (BOT.md «Мост чатов кинозала»).
 
-Every Twitch line – the viewers' and the bot's own, not commands – goes to the gate,
-which posts it to the hall's chat from the author's twin «nick [TW]» (`texts.film_bridge_to_hall`).
-With the line go the author's chat colour, badges and the line's emotes (look()): the hall shows
-the nick in the same colour with the same badges, and the emotes as pictures.
-
-The other way round is the gate's: a line from the hall by someone who signed in with
-Twitch goes to Twitch from that viewer's own account, starting with FILM_HALL_MARK. The
-bot sees it in chat like any other viewer's line – it is one: from_hall() takes the mark
-off, so a command or a call to the bot from the hall works as in Twitch, and the line
-does not go back to the hall. The bot's answer is a Twitch line, so the hall sees it.
+Every Twitch line – the viewers' and the bot's own, not commands – goes to the gate's chat API
+as `texts.film_bridge_to_hall`, with the author's colour, badges and the line's emotes (look()).
+A hall line comes to Twitch from the gate as the viewer's own, starting with FILM_HALL_MARK:
+from_hall() takes the mark off, so it is read like any line and does not go back to the hall.
 """
 import asyncio
 import logging
@@ -20,6 +14,7 @@ from src.twitch.local import film
 
 logger = logging.getLogger(__name__)
 
+# Lines waiting for the gate; a full queue drops the new line with a warning
 OUTBOX_MAX = 100
 
 _outbox: asyncio.Queue[dict] | None = None
@@ -33,16 +28,18 @@ def _queue() -> asyncio.Queue[dict]:
 
 
 def from_hall(text: str) -> str | None:
-    """The line without the hall's mark if it came from the hall, otherwise None."""
+    """The line without the hall's mark if it came from the hall, otherwise None.
+
+    Not tied to FILM_BRIDGE: hall lines come to Twitch from the gate whatever the bot bridges.
+    """
     mark = Film.HALL_MARK
-    if Film.BRIDGE and mark and text.startswith(mark):
+    if Film.ENABLED and mark and text.startswith(mark):
         return text[len(mark):].strip()
     return None
 
 
 def look(message) -> tuple[str | None, dict[str, str], list[str]]:
-    """The author's chat colour (#rrggbb, None – not chosen), the line's emotes {name: id} and the
-    author's badges ["moderator/1", "subscriber/12", ...] as Twitch shows them."""
+    """The author's colour (#rrggbb, None – not chosen), the line's emotes {name: id}, the badges ["set/version"]."""
     colour = getattr(message, 'colour', None)
     color = getattr(colour, 'html', None) if colour is not None else None
     emotes: dict[str, str] = {}
@@ -57,16 +54,16 @@ def look(message) -> tuple[str | None, dict[str, str], list[str]]:
 
 def from_twitch(name: str, text: str, color: str | None = None, emotes: dict[str, str] | None = None,
                 badges: list[str] | None = None) -> None:
-    """A Twitch viewer's line: queued for the hall while a session is open. Never waits.
+    """A Twitch line, a viewer's or the bot's own: queued for the hall while a session is open. Never waits.
 
-    `color`, `emotes` and `badges` (from look()) go along for the hall's look: the gate keeps them.
+    `color`, `emotes` and `badges` come from look(); the gate keeps them for the hall's page.
     """
     if not Film.BRIDGE or not film.is_open():
         return
     text = ' '.join(text.split())
     if not text or text.startswith('!'):
         return
-    # Came from the hall in the first place (the gate posted it as the viewer)
+    # A hall line the gate posted as the viewer: it does not go back
     if Film.HALL_MARK and text.startswith(Film.HALL_MARK):
         return
     line: dict = {'body': Content.text('film_bridge_to_hall', user=name, text=text)}
@@ -74,7 +71,7 @@ def from_twitch(name: str, text: str, color: str | None = None, emotes: dict[str
         line['color'] = color
     if emotes:
         line['emotes'] = emotes
-    if badges is not None:  # [] too: the badges were taken off, the hall drops them
+    if badges is not None:  # [] too: the author has no badges now, the hall drops the old ones
         line['badges'] = badges
     try:
         _queue().put_nowait(line)

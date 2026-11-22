@@ -328,8 +328,8 @@ class Film:
     # gate. The hall's lines come to Twitch from the gate, as the viewers themselves
     BRIDGE: bool = ENABLED and _env_bool('FILM_BRIDGE', False)
     # The mark the gate puts before a hall line in Twitch (HALL_MARK on its server): such a
-    # line is not bridged back. Empty – nothing is left out
-    HALL_MARK: str = (_env_raw('FILM_HALL_MARK') or '[KINOZAL]').strip()
+    # line is not bridged back. Unset – the default; set but empty – nothing is left out
+    HALL_MARK: str = os.getenv('FILM_HALL_MARK', '🎬 [KZ]').strip()
     # While a session is open the bot repeats the link and the code every REMIND_MINUTES,
     # the first time that long after the start's own announcement. 0 – no reminders
     REMIND_MINUTES: int = _env_int('FILM_REMIND_MINUTES', 15, 0, 240)

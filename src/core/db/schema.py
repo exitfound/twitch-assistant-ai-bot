@@ -23,19 +23,27 @@ async def init_db() -> None:
     # The one explicit way to open the database again after close_db()
     reopen()
     db = await get_db()
-    async with db.execute('PRAGMA user_version') as cursor:
-        (version,) = await cursor.fetchone()
-    for name, step in STEPS:
-        try:
-            await step(db)
-        except Exception:
-            logger.error('Схема: шаг «%s» не выполнен', name)
-            raise
-    if version != SCHEMA_VERSION:
-        # Written last: only a start that went through every step records the version
-        await db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
-        logger.info('Схема: версия %d → %d', version, SCHEMA_VERSION)
-    await db.commit()
+    # One write transaction for the whole walk: the bot and the game start together, and
+    # two processes checking and altering the same table at once would fail one of them.
+    # The second waits for the first (BUSY_TIMEOUT) and then finds every step done
+    await db.execute('BEGIN IMMEDIATE')
+    try:
+        async with db.execute('PRAGMA user_version') as cursor:
+            (version,) = await cursor.fetchone()
+        for name, step in STEPS:
+            try:
+                await step(db)
+            except Exception:
+                logger.error('Схема: шаг «%s» не выполнен', name)
+                raise
+        if version != SCHEMA_VERSION:
+            # Written last: only a start that went through every step records the version
+            await db.execute(f'PRAGMA user_version = {SCHEMA_VERSION}')
+            logger.info('Схема: версия %d → %d', version, SCHEMA_VERSION)
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
 
 
 async def _chat_messages(db: aiosqlite.Connection) -> None:

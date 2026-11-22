@@ -270,3 +270,22 @@ async def test_total_stats(db):
     await _chat('2026-09-19', 1)
     await database.save_chat_message('2026-09-19', 'gop', 'сосурян привет', addressed=True)
     assert await database.get_total_stats() == (4, 1, 1, 1)
+
+
+def test_two_processes_bring_up_one_fresh_database_together(tmp_path):
+    """The bot and the game start at once and both walk the migrations: neither may fail."""
+    import os
+    import subprocess
+    import sys
+    db = tmp_path / 'fresh.db'
+    env = {**os.environ, 'BOT_DB_PATH': str(db), 'PYTHON_DOTENV_DISABLED': '1'}
+    code = ('import asyncio\n'
+            'from src.core.database import close_db, init_db\n'
+            'async def main():\n'
+            '    await init_db()\n'
+            '    await close_db()\n'
+            'asyncio.run(main())\n')
+    procs = [subprocess.Popen([sys.executable, '-c', code], env=env, stderr=subprocess.PIPE, text=True)
+             for _ in range(3)]
+    errors = [p.communicate(timeout=60)[1] for p in procs]
+    assert [p.returncode for p in procs] == [0, 0, 0], errors

@@ -9,7 +9,7 @@ from twitchio.ext import commands
 
 from src.twitch.core import stream as twitch_stream
 from src.twitch.core.chat_socket import SocketWatch, check_private_api, keep_migrated_sockets
-from src.twitch.core import sse
+from src.core import sse
 from src.twitch.core.component import ChatComponent
 from src.twitch.core.followers import FollowerCache
 from src.core.config import Emote, Film, Help, Mascot, Memory, Proactive, Pulse, Rewards, Roll, Twitch

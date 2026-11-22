@@ -37,6 +37,7 @@ def random_delay(min_minutes: float, max_minutes: float) -> float:
 NICK_TRAILING = ',.:;!?'
 # A Twitch login is at most 25 characters: anything longer is not a nick
 NICK_MAX = 25
+_NICK_RE = re.compile(r'[a-z0-9_]{1,25}')
 
 
 def clean_nick(raw: str) -> str:
@@ -47,6 +48,22 @@ def clean_nick(raw: str) -> str:
     arbitrary length cannot be turned into a message of the viewer's choosing.
     """
     return raw.lstrip('@').rstrip(NICK_TRAILING).lower()[:NICK_MAX]
+
+
+def parse_nick(raw: str) -> str | None:
+    """Nick from a command argument or a reward input: one word without @ and trailing punctuation.
+
+    Viewers write «@Nick» or «nick,». More than one word, or anything that does not
+    look like a login – None.
+    """
+    words = raw.strip().split()
+    if len(words) != 1:
+        return None
+    nick = clean_nick(words[0])
+    # clean_nick() cuts to the login length: a longer word is not a login, not a cut one
+    if len(nick) < len(words[0].lstrip('@').rstrip(NICK_TRAILING)):
+        return None
+    return nick if _NICK_RE.fullmatch(nick) else None
 
 
 def defuse(text: str) -> str:

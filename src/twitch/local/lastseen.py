@@ -11,7 +11,7 @@ from src.core.content import Content
 from src.core.database import get_last_message_time
 from src.twitch.core.commands import CommandContext
 from src.twitch.core.replies import reply
-from src.twitch.local.roll.rules import parse_nick
+from src.core.utils import parse_nick
 
 TRIGGER = '!lastseen'
 

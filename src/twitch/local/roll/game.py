@@ -19,7 +19,8 @@ from typing import NamedTuple
 
 from src.core.config import Rewards, Roll, Twitch
 from src.core.database import get_previous_stream_session, get_session_start, has_chatted, transaction
-from src.twitch.core.viewer import Tier, by_tier
+from src.core.utils import parse_nick
+from src.core.tier import Tier, by_tier
 from src.twitch.local.roll import rules
 from src.twitch.local.roll.storage import (
     RollRow, activate_perks, add_choke, add_perk, clear_chokes, clear_chokes_outside, clear_curses_outside,
@@ -568,7 +569,7 @@ async def _target(
     if len(user_input.split()) > 1:
         # «nick1 nick2», «@nick спасибо»: which nick was meant is a guess, so none is taken
         return Outcome(Status.EXTRA_WORDS)
-    target = rules.parse_nick(user_input)
+    target = parse_nick(user_input)
     if target is None:
         return Outcome(Status.BAD_TARGET)
     if target == actor and not allow_self:

@@ -107,11 +107,11 @@ make lock            # recompile requirements*.txt after editing requirements*.i
 
 | Package | Holds | Put here |
 |---|---|---|
-| `src/core/` | the shared skeleton: config, texts, DB, logging, utils, cooldowns, background tasks | nothing platform- or feature-specific |
+| `src/core/` | the shared skeleton: config, texts, DB, logging, utils, cooldowns, background tasks, the status ladder, the OBS overlays' SSE server | nothing platform- or feature-specific |
 | `src/gemini/` | the brain: everything that costs a Gemini call and is not tied to a platform – prompts, context, the fallback ladder, the cleanup of an answer, long-term memory, the `!ascii` download and rendering | anything that builds prompts or talks to Gemini |
 | `src/cli/` | `bot.py --…` commands; the bot does not start | a maintenance command |
 | `src/twitch/` | everything tied to Twitch: `bot.py` (the twitchio `Bot`) and the Twitch side of every feature | see the three rows below |
-| `src/twitch/core/` | the Twitch skeleton: command registry, chat dispatcher and its gate, per-stream limits, viewer tiers, replies in chat, chat sockets, tokens, the stream tracker, follower checks, the OBS overlays' SSE server | nothing feature-specific. Twitch features depend on it, never the reverse – the one exception is `component.py`, which registers every feature's commands |
+| `src/twitch/core/` | the Twitch skeleton: command registry, chat dispatcher and its gate, per-stream limits, badges → tier, replies in chat, chat sockets, tokens, the stream tracker, follower checks | nothing feature-specific. Twitch features depend on it, never the reverse – the one exception is `component.py`, which registers every feature's commands |
 | `src/twitch/gemini/` | Twitch handlers of generated answers: free text, `!ask`, `!who`, `!versus`, `!summary`, `!ascii`, proactive remarks, the response pipeline | a Twitch command that generates text (`kind=Kind.GEMINI`) |
 | `src/twitch/local/` | сосурян's Twitch features without Gemini: simple commands, follow replies, emote spam, the periodic command reminder, the `roll/` game and the `mascot/` OBS overlay feed | a small command or event reply served from SQLite + `CONTENT.md` |
 | `src/discord/` | everything tied to Discord: `bot.py` (the discord.py client, kept up by `DiscordService`: the voice channel by `!join` / `!leave`, the voice by `!voice`, `!help`) and `local/voice/` – the bot's answers spoken through the TTS server | a Discord feature, inside the package of its kind (`discord/local/…`, later `discord/gemini/…`) |
@@ -143,9 +143,11 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `activity.py` – `ChatWatch`: «has anyone written since» for the chat loops
 - `cooldowns.py` – `Cooldowns` on the monotonic clock
 - `speech.py` – `say(text, source)` / `listen()`: an answer that reached a platform's chat, handed to whoever voices it; never blocks or raises. BOT.md «Голос в Discord»
+- `tier.py` – `Tier` and `by_tier()`: the one status ladder behind every per-status number; `tier_sub_hint()`, the «a subscription widens it» tail of a limit refusal, only where the subscriber's limit is higher
+- `sse.py` – `Feed` (one SSE event name: listeners, `publish()`, the state a new page starts from, pings, a stuck listener drops old items) and `serve()`: one aiohttp server on `MASCOT_HOST`:`MASCOT_PORT` for every overlay, open streams closed first on shutdown. BOT.md «Канал для OBS»
 - `tasks.py` – `BackgroundTasks`: loops by name, never started twice; `once=True` for a task meant to finish; `cancel(name)` for one task
 - `logging_setup.py` – `setup_logging()`, `make_formatter()` (log times in `BOT_TIMEZONE`, secrets replaced by `redact()`)
-- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `safe_format`, `defuse`, `find_banned` (the stop list), `local_time`, `random_delay`, `gather_cancelling`. `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
+- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `parse_nick` (one word that looks like a login: `!lastseen`, `!rollstat`, the rewards that take a nick), `safe_format`, `defuse`, `find_banned` (the stop list), `local_time`, `random_delay`, `gather_cancelling`. `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
 
 **gemini** (shared)
 - `client.py` – `get_client()`, `generate()` (chat, with the answer deadline), `generate_checked()` (the reason there is no text), `make_gen_config()`, `background()` (the slots memory, the pulse and the fact check share, `use_all_slots()` for the CLI backfill), `using_model()` (another model for one task's requests, the probe's candidate), `SAFETY_OFF` / `SAFETY_CHECK`, `usage`, `PRICES` / `cost_estimate()` (the one place the Gemini prices live, per model). BOT.md «Шаг 10: Вызов Gemini»
@@ -170,10 +172,9 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `chat_socket.py` – `SocketWatch` (resubscribes when no socket carries the chat or the redemption subscription; after a failure only the minute check retries), `check_private_api()`, `keep_migrated_sockets()` (keeps a migrated socket in twitchio's registry)
 - `tokens.py` – the bot's and the channel's tokens (`add_bot_token()`, `add_broadcaster_token()`), token saving, OAuth links (`OAUTH_SCOPES_FULL`: what the bot reads as the channel's moderator – followers and the chat list; `add_login_routes()` – the short `/bot` and `/channel` on twitchio's OAuth server, which a terminal cannot wrap and a copy cut short; `print_login_links()` – both, printed by `make oauth`), `token_problem()`, `token_dead()` (a revoked authorization: retrying is pointless)
 - `port.py` – `BotPort` / `StreamBot`: what features need from the bot (incl. `create_clip()`, `fetch_chatters()` – Twitch's chat list for the mass flasks, `fetch_schedule()` – the channel's schedule). Core and the features never import `src/twitch/bot.py`; `tests/test_bot.py` checks that both `Bot` and `tests/fakes.py`'s `FakeBot` have every member, and what the follow gate needs (`channel_id`, `create_partialuser()`)
-- `viewer.py` – `Tier`, `tier_of()` (a subscription outranks the moderator and VIP badges), `by_tier()`: the one status ladder behind every per-status number; `sub_hint()` / `tier_sub_hint()`, the «a subscription widens it» tail of a limit refusal, only where the subscriber's limit is higher
+- `viewer.py` – `tier_of()`: chat badges → `Tier` (a subscription outranks the moderator and VIP badges); `sub_hint()` – `tier_sub_hint()` by the badges
 - `limits.py` – `limit_for()` (one ladder), `deny()` (a limit refusal at most once per 30 s) and `PerStreamLimit`: per-stream limit of a command (`!ask`, `!who`, `!versus`, `!summary`, `!ascii`, `!clip`), one call per viewer at a time, count only what reached chat
 - `followers.py` – `FollowerCache`: follower check via Helix with a TTL, fails open; one cache for chat and rewards, `forget()` on a new follow
-- `sse.py` – `Feed` (one SSE event name: listeners, `publish()`, the state a new page starts from, pings, a stuck listener drops old items) and `serve()`: one aiohttp server on `MASCOT_HOST`:`MASCOT_PORT` for every overlay, open streams closed first on shutdown. BOT.md «Канал для OBS»
 - `replies.py` – `reply()` (a reply in chat that never raises), `reply_to_bot()` (the bot's line a message replies to)
 
 **twitch/gemini**

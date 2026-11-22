@@ -10,7 +10,7 @@ from aiohttp.test_utils import TestClient, TestServer
 
 from fakes import FakeBot, always, make_chatter, make_message
 from src.core.config import Rewards, Roll
-from src.twitch.core import sse
+from src.core import sse
 from src.twitch.core.commands import CommandContext
 from src.twitch.local.roll import game, overlay, rules
 from src.twitch.local.roll.command import handle_roll, handle_rollstat

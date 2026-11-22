@@ -11,8 +11,9 @@ from fakes import FakeBot, always, make_chatter, make_message
 from src.twitch.core.commands import CommandContext
 from src.core.config import Follow, Rewards, Roll, Twitch
 from src.twitch.core.component import ChatComponent
-from src.twitch.core.viewer import Tier
+from src.core.tier import Tier
 from src.core.database import get_db, save_chat_message, save_stream
+from src.core.utils import parse_nick
 from src.twitch.local.roll import game, perks, rules
 from src.twitch.local.roll import command as command_module
 from src.twitch.local.roll.command import handle_roll, handle_rollstat
@@ -809,7 +810,7 @@ async def test_perk_curse_is_laid_on_the_first_throw_once(db, top):
     ('nick, и ещё', None), ('nick1 nick2', None), ('ник', None), ('', None), ('x' * 26, None),
 ])
 def test_parse_nick(raw, nick):
-    assert rules.parse_nick(raw) == nick
+    assert parse_nick(raw) == nick
 
 
 def test_minutes_left_take_the_earlier_deadline():

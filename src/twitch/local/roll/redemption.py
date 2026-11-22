@@ -11,7 +11,7 @@ from src.core.config import Follow, Rewards, Roll, Twitch
 from src.core.content import Content
 from src.core.database import save_bot_interaction
 from src.twitch.core.port import BotPort
-from src.twitch.core.viewer import Tier, tier_sub_hint
+from src.core.tier import Tier, tier_sub_hint
 from src.twitch.local.roll import game, overlay, perks, rules
 from src.twitch.local.roll.storage import get_action_status, get_tier
 from src.twitch.local.roll.texts import (

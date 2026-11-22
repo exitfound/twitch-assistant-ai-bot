@@ -13,7 +13,7 @@ from src.twitch import bot as bot_module
 from fakes import FakeBot, make_chatter, make_message
 from src.twitch.core.component import ChatComponent
 from src.core.config import Mascot
-from src.twitch.core import sse
+from src.core import sse
 from src.twitch.local.mascot import feed, mood
 from src.twitch.local.mascot.mood import MoodTracker, target
 

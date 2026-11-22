@@ -5,6 +5,7 @@ import math
 from src.twitch.core.commands import CommandContext
 from src.core.config import Roll
 from src.core.content import Content
+from src.core.utils import parse_nick
 from src.twitch.core.limits import deny
 from src.twitch.core.viewer import Tier, sub_hint, tier_of
 from src.twitch.core.replies import reply
@@ -116,7 +117,7 @@ async def handle_rollstat(ctx: CommandContext) -> None:
     or another player's with «!rollstat ник». No Gemini, no throw: reading changes nothing."""
     target = ctx.user
     if ctx.args:
-        target = rules.parse_nick(ctx.original_args)
+        target = parse_nick(ctx.original_args)
         if target is None:
             # «!rollstat два слова»: only a nick may follow, and silence reads as a broken bot
             await ctx.refuse()

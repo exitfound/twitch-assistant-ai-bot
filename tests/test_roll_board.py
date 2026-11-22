@@ -8,7 +8,7 @@ from fakes import FakeBot, make_chatter, make_message
 from src.core.config import Roll, Twitch
 from src.core.database import get_state, save_stream
 from src.core.utils import local_time
-from src.twitch.core import sse
+from src.core import sse
 from src.twitch.core.commands import PUBLIC_SCOPE, CommandContext
 from src.twitch.core.component import ChatComponent
 from src.twitch.local.roll import board, overlay

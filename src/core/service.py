@@ -50,7 +50,7 @@ class ServiceClient:
         except TimeoutError as e:
             raise ServiceUnavailable(f'{self.name} {method} {path}: нет ответа за {seconds} с', timeout=True) from e
         except (aiohttp.ClientError, ValueError) as e:
-            raise ServiceUnavailable(f'{self.name} {method} {path}: {e!r}') from e
+            raise ServiceUnavailable(f'{self.name} {method} {path}: {e or type(e).__name__}') from e
 
     async def close(self) -> None:
         if self._session is not None:

@@ -392,3 +392,38 @@ async def test_the_game_down_at_a_refresh_keeps_the_commands_it_declared(link, m
     monkeypatch.setattr(client, 'commands', AsyncMock(side_effect=RollUnavailable('down')))
     assert await adapter._refresh_commands() is False
     assert chat._registry.resolve('!roll 5').trigger == '!roll'
+
+
+@pytest.mark.parametrize(('path', 'body'), [
+    ('/redemption', {'action': 'shield', 'redemption_id': 'r-1', 'user': 'gop'}),     # no user_id
+    ('/command', {'trigger': '!roll', 'user': 'gop', 'tier': 'king', 'message_id': 'm'}),
+    ('/events/chat', {'user': 'gop'}),
+    ('/events/stream', {}),
+    ('/rewards/applied', {'ids': 'r-1'}),
+])
+async def test_a_body_the_game_cannot_read_is_refused_before_any_work(link, path, body):
+    """A bot and a game on different versions after one of them restarted: the call is refused
+    as never done (400), so a redemption is refunded at once instead of waiting for a check."""
+    bot, client, _ = link
+    state = {'session_id': bot.session_id, 'live': True, 'rewards_active': True, 'at': 1.0}
+    with pytest.raises(ServiceUnavailable) as caught:
+        await client._client.call('POST', path, {'state': state, **body})
+    assert not caught.value.maybe_done
+    with pytest.raises(ServiceUnavailable) as caught:
+        await client._client.call('POST', path, {**body})          # no state at all
+    assert not caught.value.maybe_done
+
+
+@pytest.mark.parametrize(('path', 'body'), [('/chat', {}), ('/reply', {'text': 'x'}), ('/chat', ['text'])])
+async def test_a_body_the_bot_cannot_read_is_refused(link, path, body):
+    _, _, remote = link
+    with pytest.raises(ServiceUnavailable) as caught:
+        await remote._client.call('POST', path, body)
+    assert not caught.value.maybe_done
+
+
+async def test_a_redemption_the_game_refused_to_read_is_refunded_not_rechecked(link, monkeypatch):
+    bot, client, _ = link
+    monkeypatch.setattr(client, '_state', lambda session_id=None: {'session_id': bot.session_id})
+    with pytest.raises(RollUnavailable):
+        await client.redeem(game.Action.SHIELD, 'r-1', 'gop', '42', '')

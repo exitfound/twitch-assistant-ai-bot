@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 from aiohttp import web
 
 from src.core.config import Service
-from src.core.service import require_token
+from src.core.service import read_json, require_token
 from src.twitch.core.followers import FollowerCache
 from src.twitch.core.limits import deny
 from src.twitch.core.replies import reply
@@ -57,11 +57,11 @@ class BotApi:
                                   'rewards_active': bot.rewards_active, 'at': time.time()})
 
     async def _chat(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await read_json(request, 'text')
         return web.json_response({'sent': await self._bot.send_chat_message(str(body['text']))})
 
     async def _reply(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await read_json(request, 'message_id', 'text')
         message = self._held.get(str(body['message_id']))
         if message is None:
             # The command's call has ended: there is nothing to reply to any more

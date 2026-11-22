@@ -70,6 +70,30 @@ def _reason(error: Exception) -> str:
     return str(error) or type(error).__name__
 
 
+def bad_request(request: web.Request, reason: str) -> web.HTTPBadRequest:
+    """A body this side cannot read: 400 tells the caller the work was not done."""
+    logger.warning('Запрос %s отклонён: %s', request.path, reason)
+    return web.HTTPBadRequest(text=reason)
+
+
+async def read_json(request: web.Request, *required: str) -> dict:
+    """The request's JSON object with every required key, or 400 before any work is done.
+
+    Two services on different versions after one of them restarted refuse each other's
+    calls instead of half-applying them.
+    """
+    try:
+        body = await request.json()
+    except ValueError:
+        raise bad_request(request, 'не JSON') from None
+    if not isinstance(body, dict):
+        raise bad_request(request, 'не объект JSON')
+    missing = [key for key in required if key not in body]
+    if missing:
+        raise bad_request(request, 'нет полей: ' + ', '.join(missing))
+    return body
+
+
 def require_token(token: str | None) -> Callable:
     """Middleware: with a token set, a request without it is refused."""
     @web.middleware

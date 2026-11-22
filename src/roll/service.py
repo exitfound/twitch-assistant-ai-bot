@@ -10,7 +10,7 @@ from collections.abc import Awaitable, Callable
 from aiohttp import web
 
 from src.core.config import Service
-from src.core.service import require_token
+from src.core.service import bad_request, read_json, require_token
 from src.core.tier import Tier
 from src.roll import announce, board, overlay, perks, tiers
 from src.roll.command import handle_roll, handle_rollstat
@@ -42,6 +42,8 @@ COMMANDS = (
     Command('!roll', handle_roll),
 )
 HANDLERS: dict[str, Handler] = {command.trigger: command.handler for command in COMMANDS}
+# The stream state every call from the bot carries (RollClient._state())
+STATE_FIELDS = ('session_id', 'live', 'rewards_active')
 
 
 async def on_stream(bot: RollPort, session_id: str, *, live: bool) -> None:
@@ -74,16 +76,26 @@ class GameService:
         app.router.add_post('/rewards/applied', self._applied)
         return app
 
-    async def _body(self, request: web.Request) -> dict:
-        body = await request.json()
-        self._bot.update(body['state'])
+    async def _body(self, request: web.Request, *required: str) -> dict:
+        """The body with its stream state and every required field, checked before any work;
+        the state is applied then."""
+        body = await read_json(request, 'state', *required)
+        state = body['state']
+        if not isinstance(state, dict) or any(key not in state for key in STATE_FIELDS):
+            raise bad_request(request, 'нет состояния эфира')
+        if 'tier' in required:
+            try:
+                Tier(body['tier'])
+            except ValueError:
+                raise bad_request(request, f'неизвестный статус {body["tier"]!r}') from None
+        self._bot.update(state)
         return body
 
     async def _commands(self, _request: web.Request) -> web.Response:
         return web.json_response({'commands': [{'trigger': c.trigger, 'public': c.public} for c in COMMANDS]})
 
     async def _command(self, request: web.Request) -> web.Response:
-        body = await self._body(request)
+        body = await self._body(request, 'trigger', 'user', 'tier', 'message_id')
         handler = HANDLERS.get(body['trigger'])
         if handler is None:
             return web.json_response({'error': 'unknown command'}, status=404)
@@ -109,14 +121,14 @@ class GameService:
                                   'clear_public': gate.clear_public})
 
     async def _chat(self, request: web.Request) -> web.Response:
-        body = await self._body(request)
+        body = await self._body(request, 'user', 'tier')
         session_id = body['state']['session_id']
         await perks.on_chat(self._bot, session_id, body['user'])
         await tiers.on_chat(self._bot, session_id, body['user'], Tier(body['tier']))
         return web.json_response({})
 
     async def _stream(self, request: web.Request) -> web.Response:
-        body = await self._body(request)
+        body = await self._body(request, 'session_id')
         # On an end the event is about the stream that ended, while the state is the date session
         await on_stream(self._bot, body['session_id'], live=self._bot.stream_live)
         return web.json_response({})
@@ -125,7 +137,7 @@ class GameService:
         return web.json_response({'specs': [spec.as_dict() for spec in specs()]})
 
     async def _redemption(self, request: web.Request) -> web.Response:
-        body = await self._body(request)
+        body = await self._body(request, 'action', 'redemption_id', 'user', 'user_id')
         user_id = str(body['user_id'])
         decision = await handle_redemption(
             self._bot, body['action'], body['redemption_id'], body['user'], body.get('input') or '',
@@ -134,5 +146,7 @@ class GameService:
         return web.json_response({'decision': decision})
 
     async def _applied(self, request: web.Request) -> web.Response:
-        body = await request.json()
+        body = await read_json(request, 'ids')
+        if not isinstance(body['ids'], list):
+            raise bad_request(request, 'ids – не список')
         return web.json_response({'applied': sorted(await get_applied([str(i) for i in body['ids']]))})

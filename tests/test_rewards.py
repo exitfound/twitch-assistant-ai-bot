@@ -323,3 +323,48 @@ async def test_a_redemption_whose_connection_dropped_is_checked_not_refunded(db,
     bot.send_chat_message.assert_not_awaited()
     for task in list(service._rechecks):
         task.cancel()
+
+
+async def test_rewards_that_are_not_up_are_not_touched_on_twitch(db, twitch):
+    """Before the start (or after the token died) pausing would only be refused: the stream
+    state is kept for start(), and nothing is sent."""
+    service, _, broadcaster = twitch
+    await service.set_open(True)
+    await service.stop()
+    assert broadcaster.paused == []
+    await service.start('chan', open_=True)
+    service.drop()
+    await service.set_open(False)
+    await service.stop()
+    assert set(broadcaster.paused) == {False}
+
+
+async def test_a_stop_pauses_the_rewards_and_ends_the_rechecks(db, twitch, monkeypatch):
+    service, _, broadcaster = twitch
+    await service.start('chan', open_=True)
+    broadcaster.paused.clear()
+    recheck = asyncio.create_task(asyncio.sleep(60))
+    service._rechecks.add(recheck)
+    await service.stop()
+    assert set(broadcaster.paused) == {True} and not service.active
+    await asyncio.sleep(0)
+    assert recheck.cancelled()
+
+
+async def test_a_recheck_that_never_reaches_the_game_leaves_it_to_the_next_start(db, twitch, monkeypatch, caplog):
+    """No status after all the tries: the next start's stale settling decides, and the
+    redemption is no longer held back from it."""
+    from src.twitch.roll import rewards
+    monkeypatch.setattr(rewards, 'RECHECK_SECONDS', 0)
+    service, bot, _ = twitch
+    await service.start('chan', open_=True)
+    monkeypatch.setattr(service._roll, 'redeem', AsyncMock(side_effect=RollSlow()))
+    monkeypatch.setattr(service._roll, 'applied', AsyncMock(side_effect=RollUnavailable()))
+    reward_id = next(iter(service._actions))
+    await service.on_redemption(SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
+                                                user=SimpleNamespace(name='gop', id='42'), user_input=''))
+    await asyncio.gather(*service._rechecks)
+    assert _statuses(bot) == {}
+    assert 'r-1' not in service._busy
+    assert service._roll.applied.await_count == rewards.RECHECK_TRIES
+    assert 'так и не сверен' in caplog.text

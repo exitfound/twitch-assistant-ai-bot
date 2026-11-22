@@ -316,3 +316,37 @@ async def test_the_old_session_keyed_memory_is_renamed_in_one_walk(tmp_path, mon
         assert await cursor.fetchall() == [('s1', 1, 2)]
     assert not db.in_transaction
     await connection.close_db()
+
+
+class _LockedFile:
+    """A connection whose WAL switch fails with `errors`, one per try, then succeeds."""
+
+    def __init__(self, *errors: str) -> None:
+        self.errors = list(errors)
+        self.tries = 0
+
+    async def execute(self, sql):
+        self.tries += 1
+        if self.errors:
+            raise sqlite3.OperationalError(self.errors.pop(0))
+
+
+async def test_the_wal_switch_waits_out_another_process():
+    db = _LockedFile('database is locked', 'database is locked')
+    await connection._wal(db)
+    assert db.tries == 3
+
+
+async def test_the_wal_switch_gives_up_at_the_busy_timeout(monkeypatch):
+    monkeypatch.setattr(connection, 'BUSY_TIMEOUT', 0)
+    db = _LockedFile(*['database is locked'] * 1000)
+    with pytest.raises(sqlite3.OperationalError, match='locked'):
+        await connection._wal(db)
+    assert db.tries < 1000
+
+
+async def test_another_failure_of_the_wal_switch_is_not_retried():
+    db = _LockedFile('disk I/O error')
+    with pytest.raises(sqlite3.OperationalError, match='disk'):
+        await connection._wal(db)
+    assert db.tries == 1

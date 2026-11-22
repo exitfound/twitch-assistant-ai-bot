@@ -5,6 +5,7 @@ RemoteBot behind the game's API (src/roll/service.py); RollClient links them.
 """
 import asyncio
 import contextlib
+import logging
 
 import pytest
 from aiohttp.test_utils import TestServer
@@ -260,3 +261,134 @@ async def test_a_limit_refusal_from_the_game_shares_the_bots_brake(link):
         await remote.reply(ctx.message.id, 'отказ 2', deny=True)
     ctx.message.respond.assert_awaited_once_with('отказ 1')
     assert bot.cooldown_remaining('gop', 'deny')
+
+
+async def test_a_stream_event_tells_the_game_which_stream_it_was(link, monkeypatch):
+    """On an end the state already holds the date session: the event names the stream that ended."""
+    from src.roll import service as service_module
+    bot, client, remote = link
+    told = []
+
+    async def on_stream(bot_, session_id, *, live):
+        told.append((session_id, live))
+    monkeypatch.setattr(service_module, 'on_stream', on_stream)
+    bot.stream_live = False
+    task = asyncio.create_task(client.events_loop())
+    try:
+        await client.stream('2026-11-22 19:46')
+        await asyncio.wait_for(client._events.join(), 3)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    assert told == [('2026-11-22 19:46', False)]
+    assert not remote.stream_live
+
+
+async def test_the_game_asks_the_bot_who_follows_and_who_is_in_chat(link):
+    bot, _, remote = link
+    bot.follows = False
+    assert await remote.follows('42') is False
+    bot.fetch_chatters.return_value = {'gop', 'lurker'}
+    assert await remote.fetch_chatters() == {'gop', 'lurker'}
+    bot.fetch_chatters.return_value = None
+    assert await remote.fetch_chatters() is None
+
+
+async def test_a_reply_after_the_command_ended_is_not_sent(link):
+    """The bot keeps the message only while the command's call runs."""
+    _, _, remote = link
+    assert await remote.reply('gone', 'поздно') is False
+
+
+async def test_without_the_bot_the_game_loses_its_lines_and_lets_the_buyer_play(caplog):
+    """The bot is down: lines are logged as lost, the follow check fails open, a lost bot is
+    logged once however many checks fail."""
+    caplog.set_level(logging.INFO)
+    remote = RemoteBot(ServiceClient('бот', 'http://127.0.0.1:9'))
+    try:
+        assert await remote.sync() is False
+        assert await remote.sync() is False
+        assert caplog.text.count('Бот не ответил') == 1
+        assert await remote.send_chat_message('строка') is False
+        assert await remote.reply('m-1', 'ответ') is False
+        assert await remote.fetch_chatters() is None
+        assert await remote.follows('42') is True
+    finally:
+        await remote._client.close()
+
+
+async def _flaky_game(failures: int) -> tuple[TestServer, list[str]]:
+    """A game that answers 500 to its first `failures` events, then 200."""
+    from aiohttp import web
+    hits: list[str] = []
+
+    async def handler(request):
+        hits.append(request.path)
+        return web.json_response({}, status=500 if len(hits) <= failures else 200)
+    app = web.Application()
+    app.router.add_post('/events/{kind}', handler)
+    server = TestServer(app)
+    await server.start_server()
+    return server, hits
+
+
+@pytest.mark.parametrize(('failures', 'hits_expected', 'lost'), [
+    (1, 2, False),      # a restart: the stream event goes through on the next try
+    (99, 3, True),      # the game stays down: said once all the tries are spent
+])
+async def test_a_stream_event_is_retried_while_the_game_restarts(db, monkeypatch, caplog, failures, hits_expected,
+                                                                 lost):
+    from src.twitch.roll import client as client_module
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(client_module, 'STREAM_RETRIES', 3)
+    monkeypatch.setattr(client_module, 'STREAM_RETRY_SECONDS', 0)
+    server, hits = await _flaky_game(failures)
+    monkeypatch.setattr(Service, 'ROLL_URL', str(server.make_url('')).rstrip('/'))
+    bot = FakeBot()
+    client = RollClient(bot, BotApi(bot, FollowerCache()))
+    try:
+        await client._send('/events/stream', {'state': client._state(), 'session_id': 's-1'})
+        assert len(hits) == hits_expected
+        assert ('так и не узнала' in caplog.text) is lost
+        assert ('снова на связи' in caplog.text) is not lost
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_a_chat_event_is_tried_once(db, monkeypatch):
+    """A lost chat event costs a perk at most; retrying would hold up every later one."""
+    server, hits = await _flaky_game(99)
+    monkeypatch.setattr(Service, 'ROLL_URL', str(server.make_url('')).rstrip('/'))
+    bot = FakeBot()
+    client = RollClient(bot, BotApi(bot, FollowerCache()))
+    try:
+        await client._send('/events/chat', {'state': client._state(), 'user': 'gop', 'tier': 'regular'})
+        assert hits == ['/events/chat']
+    finally:
+        await client.close()
+        await server.close()
+
+
+async def test_the_game_down_at_a_refresh_keeps_the_commands_it_declared(link, monkeypatch):
+    """A refresh while the game restarts changes nothing; an unchanged list is not registered again."""
+    from unittest.mock import AsyncMock
+
+    from src.core.tasks import BackgroundTasks
+    from src.twitch.roll.adapter import RollAdapter
+    bot, client, _ = link
+    bot.add_component = AsyncMock()
+    adapter = RollAdapter(bot, FollowerCache(), BackgroundTasks(), lambda: False)
+    adapter.client = client
+    chat = chat_component(bot, game=False)
+    chat._roll = client
+    await adapter.attach(chat)
+    assert await adapter._refresh_commands()
+    registered = []
+    monkeypatch.setattr(chat, 'set_game_commands', registered.append)
+    assert await adapter._refresh_commands()
+    assert registered == []
+    monkeypatch.setattr(client, 'commands', AsyncMock(side_effect=RollUnavailable('down')))
+    assert await adapter._refresh_commands() is False
+    assert chat._registry.resolve('!roll 5').trigger == '!roll'

@@ -3,6 +3,7 @@
 Channel points depend on this module, so every documented rule has a test here.
 """
 import asyncio
+import contextlib
 import time
 
 import pytest
@@ -1780,3 +1781,39 @@ async def test_rollstat_with_your_own_nick_is_your_own(db):
 
 async def test_rollstat_with_more_than_a_nick_is_refused(db):
     assert await _rollstat('asker', 'два слова') == ['texts.rollstat_bad_input']
+
+
+async def test_the_choke_loop_steps_only_on_air_and_survives_a_failure(monkeypatch):
+    """Offline the steps wait; a failed step is logged and the next check runs."""
+    from src.roll import choke, overlay
+    monkeypatch.setattr(choke, 'CHOKE_CHECK_SECONDS', 0)
+    bot = FakeBot()
+    bot.stream_live = False
+    published, ticks = [], []
+    results = [RuntimeError('db'), None, 'standings']
+    done = asyncio.Event()
+
+    async def tick(session_id):
+        ticks.append(session_id)
+        result = results.pop(0) if results else None
+        if not results:
+            done.set()
+        if isinstance(result, Exception):
+            raise result
+        return result
+    monkeypatch.setattr(choke.game, 'tick_chokes', tick)
+    monkeypatch.setattr(overlay, 'choked', lambda standings: {'type': 'choked', 'of': standings})
+    monkeypatch.setattr(overlay, 'publish', published.append)
+    task = asyncio.create_task(choke.choke_loop(bot))
+    try:
+        for _ in range(5):
+            await asyncio.sleep(0)
+        assert ticks == []
+        bot.stream_live = True
+        await asyncio.wait_for(done.wait(), 3)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    assert len(ticks) >= 3 and set(ticks) == {bot.session_id}
+    assert published == [{'type': 'choked', 'of': 'standings'}]

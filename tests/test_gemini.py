@@ -558,3 +558,93 @@ def test_cost_is_estimated_at_the_models_price(monkeypatch):
     assert client.cost_estimate(1_000_000, 0, 'gemini-3.8-flash') == 0.75
     assert client.cost_estimate(1, 1, 'gemini-9-ultra') is None
     assert client.cost_text(None) == 'цена модели неизвестна'
+
+
+# --- !who and !versus ---------------------------------------------------------
+
+
+@pytest.fixture
+def who_ctx(ctx, monkeypatch):
+    """ctx for !who / !versus, with a scripted answer and room in the per-stream limit."""
+    monkeypatch.setattr(PerStream, 'FOLLOWER', 5)
+    walked = AsyncMock(return_value=('Он пишет капсом и спорит с ботом.', 'вся выборка'))
+    monkeypatch.setattr(commands, 'walk', walked)
+    return ctx, walked
+
+
+async def _speaks(nick: str) -> None:
+    from src.core.database import save_chat_message
+    await save_chat_message('2026-09-22 20:00', nick, 'я тут был')
+
+
+@pytest.mark.parametrize(('args', 'text'), [('', 'texts.who_usage'), ('nobody', 'texts.who_unknown')])
+async def test_who_without_a_known_nick_costs_nothing(db, who_ctx, args, text):
+    """A missing or unknown nick: no Gemini call, no use of the limit."""
+    ctx, walked = who_ctx
+    ctx.args = args
+    await commands.handle_who(ctx)
+    ctx.message.respond.assert_awaited_once_with(text)
+    walked.assert_not_awaited()
+    assert await count_bot_uses('gop', WHO_KIND, 60) == 0
+
+
+async def test_who_about_a_known_chatter_answers_and_counts(db, who_ctx):
+    from src.gemini.who import who_tag
+    ctx, _ = who_ctx
+    await _speaks('nosok222')
+    ctx.args = '@Nosok222'
+    await commands.handle_who(ctx)
+    ctx.message.respond.assert_awaited_once_with('@gop Он пишет капсом и спорит с ботом.')
+    assert await _saved(who_tag('nosok222')) == ['Он пишет капсом и спорит с ботом.']
+    assert await count_bot_uses('gop', WHO_KIND, 60) == 1
+
+
+async def test_who_with_nothing_from_gemini_says_so_and_costs_nothing(db, who_ctx):
+    ctx, walked = who_ctx
+    walked.return_value = (None, 'последние')
+    await _speaks('nosok222')
+    ctx.args = 'nosok222'
+    await commands.handle_who(ctx)
+    ctx.message.respond.assert_awaited_once_with('texts.who_failed')
+    assert await count_bot_uses('gop', WHO_KIND, 60) == 0
+
+
+@pytest.mark.parametrize(('args', 'speakers', 'text'), [
+    ('nosok222', [], 'texts.versus_usage'),
+    ('nosok222 @NOSOK222', ['nosok222'], 'texts.versus_usage'),      # one person twice
+    ('nosok222 ne2oi', [], 'texts.versus_unknown'),
+    ('nosok222 ne2oi', ['nosok222'], 'texts.versus_unknown_one'),
+])
+async def test_versus_needs_two_known_chatters(db, who_ctx, args, speakers, text):
+    """With one side unknown the model would make that person up: a refusal, at no cost."""
+    from src.gemini.who import VERSUS_KIND
+    ctx, walked = who_ctx
+    for nick in speakers:
+        await _speaks(nick)
+    ctx.args = args
+    await commands.handle_versus(ctx)
+    ctx.message.respond.assert_awaited_once_with(text)
+    walked.assert_not_awaited()
+    assert await count_bot_uses('gop', VERSUS_KIND, 60) == 0
+
+
+async def test_versus_of_two_known_chatters_answers_and_counts(db, who_ctx):
+    from src.gemini.who import VERSUS_KIND, versus_tag
+    ctx, _ = who_ctx
+    await _speaks('nosok222')
+    await _speaks('ne2oi')
+    ctx.args = 'nosok222 ne2oi'
+    await commands.handle_versus(ctx)
+    ctx.message.respond.assert_awaited_once_with('@gop Он пишет капсом и спорит с ботом.')
+    assert await _saved(versus_tag('nosok222', 'ne2oi')) == ['Он пишет капсом и спорит с ботом.']
+    assert await count_bot_uses('gop', VERSUS_KIND, 60) == 1
+
+
+async def test_versus_with_nothing_from_gemini_says_so(db, who_ctx):
+    ctx, walked = who_ctx
+    walked.return_value = (None, 'последние')
+    await _speaks('nosok222')
+    await _speaks('ne2oi')
+    ctx.args = 'nosok222 ne2oi'
+    await commands.handle_versus(ctx)
+    ctx.message.respond.assert_awaited_once_with('texts.versus_failed')

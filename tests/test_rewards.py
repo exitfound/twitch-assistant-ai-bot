@@ -7,11 +7,13 @@ from unittest.mock import AsyncMock
 import pytest
 import twitchio
 
+from fakes import InProcessRoll
+
 from src.core.utils import safe_format
 from src.roll import game, specs
 from src.roll.storage import save_action
 from src.twitch.core.followers import FollowerCache
-from src.twitch.roll.client import LocalRoll, RollUnavailable
+from src.twitch.roll.client import RollUnavailable
 from src.twitch.roll.rewards import CANCELED, FULFILLED, RewardService, get_reward_ids
 
 
@@ -73,7 +75,7 @@ def twitch():
         send_chat_message=AsyncMock(return_value=True),
         _http=SimpleNamespace(patch_custom_reward_redemption=AsyncMock()),
     )
-    return RewardService(bot, LocalRoll(bot, FollowerCache())), bot, broadcaster
+    return RewardService(bot, InProcessRoll(bot, FollowerCache())), bot, broadcaster
 
 
 async def test_start_creates_the_rewards_and_opens_them_live(db, twitch):
@@ -195,7 +197,7 @@ async def test_the_follow_question_goes_to_the_shared_cache_by_user_id(db, twitc
     """The chat's cache: a follow event clears it there, and the buyer is asked by id."""
     _, bot, _ = twitch
     followers = SimpleNamespace(is_follower=AsyncMock(return_value=False))
-    service = RewardService(bot, LocalRoll(bot, followers))
+    service = RewardService(bot, InProcessRoll(bot, followers))
     await service.start('chan', open_=True)
     answers = []
 

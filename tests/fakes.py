@@ -104,10 +104,46 @@ async def play(handler, ctx) -> None:
     await apply_gate(ctx, ctx.prompt.split()[0], **dataclasses.asdict(request.gate))
 
 
+class InProcessRoll:
+    """RollLink with the game in the test's own process: the bot and the game share FakeBot."""
+
+    def __init__(self, bot, followers) -> None:
+        self._bot = bot
+        self._followers = followers
+
+    async def command(self, trigger: str, ctx) -> None:
+        from src.roll.service import HANDLERS
+        await play(HANDLERS[trigger], ctx)
+
+    async def chat(self, session_id: str, user: str, tier) -> None:
+        from src.roll import perks, tiers
+        await perks.on_chat(self._bot, session_id, user)
+        await tiers.on_chat(self._bot, session_id, user, tier)
+
+    async def stream(self, session_id: str) -> None:
+        from src.roll.service import on_stream
+        await on_stream(self._bot, session_id, live=self._bot.stream_live)
+
+    async def specs(self):
+        from src.roll.specs import specs
+        from src.twitch.roll.client import Spec
+        return [Spec(**spec.as_dict()) for spec in specs()]
+
+    async def redeem(self, action, redemption_id, user, user_id, user_input):
+        from src.roll.redemption import handle_redemption
+        return await handle_redemption(
+            self._bot, action, redemption_id, user, user_input,
+            follows=lambda: self._followers.is_follower(self._bot, user_id),
+        )
+
+    async def applied(self, redemption_ids):
+        from src.roll.storage import get_applied
+        return await get_applied(redemption_ids)
+
+
 def chat_component(bot, followers=None, *, game: bool = True):
     """The dispatcher as the bot builds it, with the game linked in this process."""
     from src.twitch.core.component import ChatComponent
     from src.twitch.core.followers import FollowerCache
-    from src.twitch.roll.client import LocalRoll
     followers = followers if followers is not None else FollowerCache()
-    return ChatComponent(bot, followers, LocalRoll(bot, followers) if game else None)
+    return ChatComponent(bot, followers, InProcessRoll(bot, followers) if game else None)

@@ -313,21 +313,27 @@ async def test_a_repeated_delivery_counts_one_chatter(monkeypatch, db):
     assert mood.tracker.chatters == 1
 
 
-@pytest.mark.parametrize('mascot, roll', [(True, False), (False, True), (False, False)])
+@pytest.mark.parametrize('mascot, roll', [(True, False), (False, True), (False, False), (True, True)])
 async def test_the_overlays_start_only_when_enabled(monkeypatch, mascot, roll):
-    """The server runs for either overlay; the mood recount only for the mascot."""
+    """The bot serves the mascot's page and recount; the game serves its own overlay, and the
+    bot runs only the API and the event queue the game needs."""
     monkeypatch.setattr(Mascot, 'ENABLED', mascot)
-    monkeypatch.setattr(bot_module.Roll, 'OVERLAY_ENABLED', roll)
+    monkeypatch.setattr(bot_module.Service, 'ROLL_URL', 'http://roll.test' if roll else None)
 
-    async def loop(*_args):
+    async def loop(*_args, **_kwargs):
         await asyncio.Event().wait()
 
     monkeypatch.setattr(bot_module, 'mascot_loop', loop)
     monkeypatch.setattr(bot_module.sse, 'serve', loop)
+    monkeypatch.setattr(bot_module, 'serve', loop)
     bot = bot_module.Bot()
+    if roll:
+        monkeypatch.setattr(bot._roll, 'events_loop', loop)
     bot._start_overlays()
     assert bot._tasks.running('mascot') is mascot
-    assert bot._tasks.running('overlays') is (mascot or roll)
+    assert bot._tasks.running('overlays') is mascot
+    assert bot._tasks.running('bot_api') is roll
+    assert bot._tasks.running('roll_events') is roll
     await bot.stop_background_tasks()
 
 

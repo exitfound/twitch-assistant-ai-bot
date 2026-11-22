@@ -295,8 +295,9 @@ async def test_a_dead_token_goes_to_the_failure_hook(caplog):
 
 @pytest.fixture
 def live_bot(monkeypatch):
-    """A Bot with rewards on, the channel known, the stream live and the chat recorded."""
+    """A Bot with the game and rewards on, the channel known, the stream live and the chat recorded."""
     monkeypatch.setattr(bot_module.Rewards, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Service, 'ROLL_URL', 'http://roll.test')
     monkeypatch.setattr(bot_module.Bot, 'stream_live', True)
     monkeypatch.setattr(bot_module.Bot, 'session_id', '2026-09-30 20:05')
     # the bot has created its rewards before: a dead token leaves them open on Twitch
@@ -363,7 +364,7 @@ async def test_a_failed_reward_start_is_retried_until_it_works(live_bot, monkeyp
     assert not live_bot._tasks.running('rewards_retry')
     live_bot.send_chat_message.assert_not_awaited()
     # Mid-stream the champion's Благодать, held back while the rewards were down, comes now
-    told.assert_awaited_once_with(live_bot.session_id, live=True, rewards_active=True)
+    told.assert_awaited_once_with(live_bot.session_id)
 
 
 async def test_a_dead_token_at_start_is_not_retried(live_bot, monkeypatch):
@@ -651,3 +652,12 @@ async def test_the_short_login_links_reach_twitch_with_the_full_scopes():
             assert scope in full.headers['Location'] and 'force_verify=true' in full.headers['Location']
     finally:
         await client.close()
+
+
+def test_without_the_game_the_rewards_stay_off(monkeypatch):
+    """The rewards belong to the game: without its service the bot neither creates nor watches them."""
+    monkeypatch.setattr(bot_module.Rewards, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Service, 'ROLL_URL', None)
+    bot = bot_module.Bot()
+    assert bot._roll is None
+    assert not bot._rewards_enabled

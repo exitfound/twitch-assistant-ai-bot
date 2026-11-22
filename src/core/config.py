@@ -373,6 +373,10 @@ class Roll:
     BURST_PAUSE_MINUTES: int = _env_int('ROLL_BURST_PAUSE_MINUTES', 1, 1, 1440)
     # The game on the stream: the OBS page and its SSE feed on the overlays' port (MASCOT_PORT)
     OVERLAY_ENABLED: bool = _env_bool('ROLL_OVERLAY_ENABLED', False)
+    # The game's OBS page, served by the game service. Local only by default, like the mascot;
+    # compose sets 0.0.0.0 inside the container and publishes it itself
+    OVERLAY_HOST: str = _env_raw('ROLL_OVERLAY_HOST') or '127.0.0.1'
+    OVERLAY_PORT: int = _env_int('ROLL_OVERLAY_PORT', 8788, 1, 65535)
 
 
 def _curse_range() -> tuple[int, int]:
@@ -590,6 +594,29 @@ class Mascot:
     SIT, STAND, DANCE = _mascot_thresholds()
     STEP_DOWN_SECONDS: int = _env_int('MASCOT_STEP_DOWN_SECONDS', 60, 0, 3600)
     MAX_RATE: float = _env_float('MASCOT_MAX_RATE', 1.5, 1.0, 2.0)
+
+
+def _env_url(name: str) -> str | None:
+    raw = _env_raw(name)
+    return raw.rstrip('/') if raw else None
+
+
+class Service:
+    """The bot's services and their internal APIs, reached over the compose network.
+
+    The APIs listen on 127.0.0.1 by default, for a run from the host; compose sets 0.0.0.0
+    inside the container and never publishes them.
+    """
+    # The game service as the bot reaches it; empty – the game is off: no !roll, no rewards
+    ROLL_URL: str | None = _env_url('ROLL_URL')
+    ROLL_API_HOST: str = _env_raw('ROLL_API_HOST') or '127.0.0.1'
+    ROLL_API_PORT: int = _env_int('ROLL_API_PORT', 8789, 1, 65535)
+    # The bot's API as the game reaches it: chat lines, the follow check, the chat list
+    BOT_API_URL: str | None = _env_url('BOT_API_URL')
+    BOT_API_HOST: str = _env_raw('BOT_API_HOST') or '127.0.0.1'
+    BOT_API_PORT: int = _env_int('BOT_API_PORT', 8790, 1, 65535)
+    # A shared secret on every internal call; empty – none, the network alone guards the APIs
+    TOKEN: str | None = _env_raw('SERVICE_TOKEN')
 
 
 class Discord:

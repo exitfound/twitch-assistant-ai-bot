@@ -1,6 +1,7 @@
 """Server-sent events for the OBS overlays: a page listens, the bot pushes every change.
 
-One aiohttp server on MASCOT_HOST:MASCOT_PORT carries every overlay's routes. A feed sends
+Each service serves its own overlays on one aiohttp server: the bot – the mascot on
+MASCOT_HOST:MASCOT_PORT, the game – its overlay on ROLL_OVERLAY_HOST:ROLL_OVERLAY_PORT. A feed sends
 its current state on connect, so a reloaded page picks up where it was, and `ping` every
 PING_SECONDS of silence, so the page can tell a dead connection.
 """
@@ -11,6 +12,8 @@ from collections.abc import Callable, Iterable
 
 from aiohttp import web
 
+from src.core import service
+
 logger = logging.getLogger(__name__)
 
 PING_SECONDS = 15       # keeps idle connections alive; the page reconnects after a longer silence
@@ -18,7 +21,6 @@ QUEUE_SIZE = 16         # a stuck client loses old items, never blocks the other
 # A stream never ends by itself: without a stop signal the server's shutdown waits for every
 # open page (60 s by default), longer than the 30 s docker gives the whole bot to stop
 STOP = None
-SHUTDOWN_SECONDS = 2
 # Pages are local files in OBS or served from another origin
 CORS = {'Access-Control-Allow-Origin': '*'}
 
@@ -75,20 +77,10 @@ class Feed:
 
 
 async def serve(app: web.Application, feeds: Iterable[Feed], host: str, port: int) -> None:
-    """Serve the overlays until cancelled. A busy port is logged, the rest of the bot runs on."""
-    runner = web.AppRunner(app, access_log=None, shutdown_timeout=SHUTDOWN_SECONDS)
-    await runner.setup()
-    try:
-        await web.TCPSite(runner, host, port).start()
-    except OSError as e:
-        logger.error('Оверлеи: порт %s:%d не открылся (%s) – OBS ничего не получит', host, port, e)
-        await runner.cleanup()
-        return
-    logger.info('Оверлеи для OBS на http://%s:%d', host, port)
-    try:
-        await asyncio.Event().wait()
-    finally:
-        # open pages end their streams first, then the server stops at once
+    """Serve the overlays until cancelled; open pages end their streams first, then the server stops."""
+    feeds = list(feeds)
+
+    def stop() -> None:
         for feed in feeds:
             feed.stop()
-        await runner.cleanup()
+    await service.serve(app, host, port, 'Оверлеи для OBS', on_stop=stop)

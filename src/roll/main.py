@@ -59,6 +59,7 @@ async def run() -> None:
         # A restart mid-stream: titles and regalia for the overlay, and the perks the bot's
         # stream start may have failed to deliver while the game was down; nothing is granted twice
         await on_stream(bot, bot.session_id, live=bot.stream_live)
+        tasks.start('state', bot.state_loop)
         # Curses come from rewards and from the previous stream's results
         if Rewards.ENABLED or Roll.PERKS_ENABLED:
             tasks.start('curse_lift', lambda: curse_lift_loop(bot))

@@ -4,6 +4,7 @@ The stream state is the one the bot sent last: every request from the bot carrie
 the service asks for it at start. Until the bot answers, the game takes the stream as
 offline, as the bot itself does before it has looked.
 """
+import asyncio
 import logging
 from urllib.parse import quote
 
@@ -15,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 # The mass flask waits for Twitch's chat list up to 5 s on the bot's side
 CHATTERS_SECONDS = 8
+# The state is asked for this often between the bot's own calls: a stream end the game
+# missed while it was down must not leave the choking flask stepping offline
+STATE_SECONDS = 60
 
 
 class RemoteBot:
@@ -26,6 +30,8 @@ class RemoteBot:
         self._session: str | None = None
         self.stream_live = False
         self.rewards_active = False
+        # Whether the last state request went through: a lost bot is logged once, not every minute
+        self._reachable = True
 
     @property
     def session_id(self) -> str:
@@ -42,9 +48,26 @@ class RemoteBot:
         try:
             self.update(await self._client.call('GET', '/state'))
         except (ServiceUnavailable, KeyError) as e:
-            logger.info('Бот не ответил на запрос состояния: %s', e)
+            if self._reachable:
+                logger.info('Бот не ответил на запрос состояния: %s', e)
+                self._reachable = False
             return False
+        if not self._reachable:
+            logger.info('Бот снова отвечает | Сессия: %s | Эфир: %s', self.session_id,
+                        'идёт' if self.stream_live else 'нет')
+            self._reachable = True
         return True
+
+    async def state_loop(self) -> None:
+        """Keep the stream state fresh between the bot's calls, for as long as the game runs."""
+        logger.info('Сверка состояния эфира с ботом включена (раз в %d с)', STATE_SECONDS)
+        try:
+            while True:
+                await asyncio.sleep(STATE_SECONDS)
+                await self.sync()
+        except asyncio.CancelledError:
+            logger.info('Сверка состояния эфира остановлена')
+            raise
 
     async def send_chat_message(self, text: str) -> bool:
         try:

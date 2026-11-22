@@ -154,3 +154,27 @@ def test_the_remote_bot_and_the_fake_satisfy_the_game_port():
     remote = RemoteBot(ServiceClient('бот', 'http://bot.test'))
     assert members <= set(dir(remote))
     assert members <= set(dir(FakeBot()))
+
+
+async def test_the_game_keeps_the_stream_state_fresh_by_itself(link, monkeypatch):
+    """A stream end the game missed: its own check picks it up without a call from the bot."""
+    from src.roll import remote as remote_module
+    bot, _, remote = link
+    assert await remote.sync() and remote.stream_live
+    bot.stream_live = False
+    monkeypatch.setattr(remote_module, 'STATE_SECONDS', 0)
+    synced, real = asyncio.Event(), remote.sync
+
+    async def sync():
+        answered = await real()
+        synced.set()
+        return answered
+    monkeypatch.setattr(remote, 'sync', sync)
+    task = asyncio.create_task(remote.state_loop())
+    try:
+        await asyncio.wait_for(synced.wait(), 3)
+    finally:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+    assert not remote.stream_live

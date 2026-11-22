@@ -7,15 +7,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --no-compile --require-hashes --target /deps -r requirements.txt
 
 # ruaccent's models (ё and word stress for the voice) are downloaded here: the bot then
-# starts without the network, and /deps, where ruaccent keeps part of them, is read-only
-COPY src/discord/local/voice/stress.py .
-RUN PYTHONPATH=/deps python -c "import pathlib, stress; stress.load(pathlib.Path('/opt/ruaccent'))"
+# starts without the network, and /deps, where ruaccent keeps part of them, is read-only.
+# stress.py imports the voice's text helpers, so the whole package comes along; this stage
+# is thrown away, the runtime image gets the tree from the bind mount
+COPY src/ src/
+RUN PYTHONPATH=/deps:/build python -c "import pathlib; from src.discord.local.voice import stress; stress.load(pathlib.Path('/opt/ruaccent'))"
 # What its tiny mode never reads (350 MB): the rule engine with its morphology, the stress
 # usage model, the full dictionary. The emptied koziev directory must stay, or load()
 # downloads it again
 RUN rm -rf /deps/ruaccent/koziev/* /opt/ruaccent/.cache /opt/ruaccent/nn/nn_stress_usage_predictor \
         /opt/ruaccent/dictionary/accents.json.gz /opt/ruaccent/dictionary/rule_engine \
-    && PYTHONPATH=/deps HF_HUB_OFFLINE=1 python -c "import pathlib, stress; stress.load(pathlib.Path('/opt/ruaccent')); print(stress.apply('Все пришли, и все было хорошо.', True))"
+    && PYTHONPATH=/deps:/build HF_HUB_OFFLINE=1 python -c "import pathlib; from src.discord.local.voice import stress; stress.load(pathlib.Path('/opt/ruaccent')); print(stress.apply('Все пришли, и все было хорошо.', True))"
 
 # libopus encodes the Discord voice; distroless has no package manager, so the library is
 # taken from Debian here (cp follows the .so.0 symlink to the real file)

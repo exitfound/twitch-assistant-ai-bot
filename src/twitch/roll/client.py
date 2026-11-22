@@ -33,7 +33,11 @@ STREAM_RETRY_SECONDS = 5
 
 
 class RollUnavailable(Exception):
-    """The game did not answer: down, restarting or too slow."""
+    """The game did not answer: down or restarting. Nothing was done."""
+
+
+class RollSlow(Exception):
+    """The game did not answer in time: it may have done the work all the same."""
 
 
 @dataclasses.dataclass(frozen=True)
@@ -63,7 +67,8 @@ class RollLink(Protocol):
 
     async def redeem(self, action: str, redemption_id: str, user: str, user_id: str,
                      user_input: str) -> bool | None:
-        """True – fulfill, False – refund, None – a repeat, leave the status alone."""
+        """True – fulfill, False – refund, None – a repeat, leave the status alone.
+        RollSlow – no answer in time: the game's journal tells later."""
 
     async def applied(self, redemption_ids: list[str]) -> set[str]:
         """Those of the redemptions the game has applied."""
@@ -172,9 +177,7 @@ class RollClient:
             answer = await self._client.call('POST', '/redemption', body, seconds=REDEEM_SECONDS)
         except ServiceUnavailable as e:
             if e.timeout:
-                # Maybe applied, maybe not: the status waits for the next start, which reads the journal
-                logger.warning('Игра не ответила вовремя на выкуп %s – статус выставит следующий старт', redemption_id)
-                return None
+                raise RollSlow(str(e)) from e
             raise RollUnavailable(str(e)) from e
         return answer.get('decision')
 

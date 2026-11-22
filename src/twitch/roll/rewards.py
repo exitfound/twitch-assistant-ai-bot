@@ -22,7 +22,7 @@ from twitchio.ext import commands
 
 from src.core.content import Content
 from src.core.database import get_db, transaction
-from src.twitch.roll.client import RollLink, RollUnavailable, Spec
+from src.twitch.roll.client import RollLink, RollSlow, RollUnavailable, Spec
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +32,11 @@ REWARDS_SCOPE = 'channel:manage:redemptions'
 
 FULFILLED = 'FULFILLED'
 CANCELED = 'CANCELED'
+
+# A redemption the game did not answer in time is looked up in its journal this much later,
+# and again while the game cannot say; after that it waits for the next start
+RECHECK_SECONDS = 60
+RECHECK_TRIES = 10
 
 
 async def get_reward_ids() -> dict[str, str]:
@@ -78,6 +83,7 @@ class RewardService:
         self._channel_id: str | None = None
         self._actions: dict[str, str] = {}      # Twitch reward id → action
         self._titles: dict[str, str] = {}       # action → its title, for the line when the game is down
+        self._rechecks: set[asyncio.Task] = set()
         # Whether the rewards should be open, i.e. the stream is live. Written by set_open()
         # even before start() finishes, so a stream starting mid-start is not lost
         self._open = False
@@ -139,6 +145,8 @@ class RewardService:
 
     async def stop(self) -> None:
         """Pause the rewards: while the bot is away, there is nothing to spend points on."""
+        for task in list(self._rechecks):
+            task.cancel()
         if not self.active:
             return
         self.active = False
@@ -170,6 +178,13 @@ class RewardService:
         user = (payload.user.name or '').lower()
         try:
             decision = await self._roll.redeem(action, payload.id, user, payload.user.id, payload.user_input)
+        except RollSlow:
+            # Maybe applied, maybe not: the game's journal tells, a minute later
+            logger.warning('Игра не ответила вовремя на выкуп %s – сверю по журналу', payload.id)
+            task = asyncio.create_task(self._recheck(payload.reward.id, payload.id))
+            self._rechecks.add(task)
+            task.add_done_callback(self._rechecks.discard)
+            return
         except RollUnavailable:
             # The game is down: the points go back, and the buyer hears why
             logger.warning('Игра недоступна – выкуп %s от %s отменён', action, user)
@@ -180,6 +195,20 @@ class RewardService:
         if decision is None:
             return
         await self._set_status(payload.reward.id, payload.id, FULFILLED if decision else CANCELED)
+
+    async def _recheck(self, reward_id: str, redemption_id: str) -> None:
+        """Settle a redemption the game was too slow to answer by its journal: applied –
+        fulfilled, anything else – refunded, as a stale one is after a start."""
+        for _ in range(RECHECK_TRIES):
+            await asyncio.sleep(RECHECK_SECONDS)
+            try:
+                applied = redemption_id in await self._roll.applied([redemption_id])
+            except RollUnavailable:
+                continue
+            await self._set_status(reward_id, redemption_id, FULFILLED if applied else CANCELED)
+            logger.info('Выкуп %s сверен по журналу игры: %s', redemption_id, 'применён' if applied else 'возврат')
+            return
+        logger.warning('Выкуп %s так и не сверен – его разберёт следующий старт наград', redemption_id)
 
     def _broadcaster(self) -> twitchio.PartialUser:
         return self._bot.create_partialuser(self._channel_id)

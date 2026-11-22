@@ -13,7 +13,7 @@ from src.core.utils import safe_format
 from src.roll import game, specs
 from src.roll.storage import save_action
 from src.twitch.core.followers import FollowerCache
-from src.twitch.roll.client import RollUnavailable
+from src.twitch.roll.client import RollSlow, RollUnavailable
 from src.twitch.roll.rewards import CANCELED, FULFILLED, RewardService, get_reward_ids
 
 
@@ -274,3 +274,23 @@ async def test_without_the_game_the_rewards_do_not_start(db, twitch, monkeypatch
         await service.start('chan', open_=True)
     assert not service.active
     assert broadcaster.created == []
+
+
+@pytest.mark.parametrize(('applied', 'status'), [(True, FULFILLED), (False, CANCELED)])
+async def test_a_redemption_the_game_was_slow_on_is_settled_by_its_journal(db, twitch, monkeypatch, applied, status):
+    """No answer in time: the game may have applied it. A minute later its journal decides,
+    and the points do not hang until the next start."""
+    from src.twitch.roll import rewards
+    monkeypatch.setattr(rewards, 'RECHECK_SECONDS', 0)
+    service, bot, _ = twitch
+    await service.start('chan', open_=True)
+    monkeypatch.setattr(service._roll, 'redeem', AsyncMock(side_effect=RollSlow()))
+    answers = [RollUnavailable(), {'r-1'} if applied else set()]
+    monkeypatch.setattr(service._roll, 'applied', AsyncMock(side_effect=answers))
+    reward_id = next(iter(service._actions))
+    await service.on_redemption(SimpleNamespace(id='r-1', reward=SimpleNamespace(id=reward_id),
+                                                user=SimpleNamespace(name='gop', id='42'), user_input=''))
+    assert _statuses(bot) == {}
+    await asyncio.gather(*service._rechecks)
+    assert _statuses(bot) == {'r-1': status}
+    bot.send_chat_message.assert_not_awaited()

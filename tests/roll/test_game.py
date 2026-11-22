@@ -1817,3 +1817,35 @@ async def test_the_choke_loop_steps_only_on_air_and_survives_a_failure(monkeypat
             await task
     assert len(ticks) >= 3 and set(ticks) == {bot.session_id}
     assert published == [{'type': 'choked', 'of': 'standings'}]
+
+
+def test_rollstat_says_each_effect_on_the_player():
+    from src.roll.command import status_parts
+    standing = game.Standing(value=40, free_left=1, shield_left=3, shield_minutes_left=9, flask_left=2,
+                             choke_left=4, choke_stacks=2, blessed_left=5, luck_left=6, luck_next=30,
+                             luck_stacks=1, champion=('champ', 90), loser=('gop', 3))
+    assert status_parts(standing, user='gop', target='gop') == [
+        'texts.rollstat_self', 'texts.roll_free_left',
+        # A bought shield is the one that holds: the champion's perk shield is not said beside it
+        'texts.rollstat_shield_left', 'texts.rollstat_flask',
+        'texts.rollstat_luck', 'texts.rollstat_choke', 'texts.rollstat_blessed',
+        'texts.rollstat_loser', 'texts.roll_champion',
+    ]
+
+
+def test_rollstat_of_a_cursed_player_says_the_luck_waits():
+    from src.roll.command import status_parts
+    standing = game.Standing(value=40, ceiling=50, curse_minutes_left=7, luck_left=6, luck_next=30, luck_stacks=1)
+    assert status_parts(standing, user='asker', target='victim') == [
+        'texts.rollstat_cursed_other', 'texts.rollstat_curse_hold_other', 'texts.rollstat_luck_cursed',
+        'texts.rollstat_nobody',
+    ]
+
+
+async def test_rollstat_offline_says_so(db):
+    message = make_message('!rollstat', make_chatter('gop'))
+    bot = FakeBot(session_id=S)
+    bot.stream_live = False
+    await play(handle_rollstat, CommandContext(message=message, user='gop', prompt='!rollstat',
+                                               original_text='!rollstat', session_id=S, bot=bot))
+    message.respond.assert_awaited_once_with('texts.roll_offline')

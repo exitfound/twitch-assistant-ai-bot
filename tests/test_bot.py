@@ -662,3 +662,43 @@ def test_without_the_game_the_rewards_stay_off(monkeypatch):
     bot = bot_module.Bot()
     assert bot._game is None
     assert not bot.rewards_active
+
+
+def _idle(*_args):
+    import asyncio
+    return asyncio.sleep(3600)
+
+
+@pytest.mark.parametrize(('emotes', 'spam'), [(['Kappa'], True), ([], False)])
+async def test_the_background_tasks_follow_their_flags(live_bot, monkeypatch, caplog, emotes, spam):
+    """With the channel known every switched-on loop starts; emote spam needs emotes to spam."""
+    import logging
+    caplog.set_level(logging.INFO)
+    for flag in (bot_module.Proactive, bot_module.Pulse):
+        monkeypatch.setattr(flag, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Help, 'ANNOUNCE_ENABLED', True)
+    monkeypatch.setattr(bot_module.Emote, 'SPAM_ENABLED', True)
+    monkeypatch.setattr(bot_module.Content, 'items', lambda key: emotes)
+    for loop in ('proactive_loop', 'pulse_loop', 'help_loop', 'emote_spam_loop', 'watch_stream'):
+        monkeypatch.setattr(bot_module, loop, _idle)
+    monkeypatch.setattr(live_bot._chat, 'loop', _idle)
+    monkeypatch.setattr(live_bot._game.rewards_watch, 'loop', _idle)
+    live_bot._start_background_tasks()
+    try:
+        expected = {'chat_watch', 'rewards_watch', 'stream_watch', 'proactive', 'pulse', 'help'}
+        assert all(live_bot._tasks.running(name) for name in expected)
+        assert live_bot._tasks.running('emote_spam') is spam
+        assert ('список эмотов в CONTENT.md пуст' in caplog.text) is not spam
+        assert 'Проактивные сообщения включены' in caplog.text
+    finally:
+        await live_bot._tasks.stop()
+
+
+async def test_without_the_channel_id_only_the_cinema_runs_and_the_rest_is_explained(live_bot, monkeypatch, caplog):
+    monkeypatch.setattr(bot_module.Proactive, 'ENABLED', True)
+    monkeypatch.setattr(bot_module.Film, 'ENABLED', False)
+    monkeypatch.setattr(bot_module.Film, 'BRIDGE', False)
+    live_bot._channel_id = None
+    live_bot._start_background_tasks()
+    assert not live_bot._tasks.running('chat_watch') and not live_bot._tasks.running('proactive')
+    assert 'фоновые задачи не запущены' in caplog.text

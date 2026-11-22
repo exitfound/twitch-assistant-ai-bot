@@ -123,27 +123,43 @@ async def handle_rollstat(ctx: Request) -> None:
         await ctx.reply(Content.text('roll_offline', user=ctx.user))
         return
     overlay.publish(overlay.wake())
-    # Another player's texts speak of them, not to them: the keys with _other
-    other = target != ctx.user
-    suffix = '_other' if other else ''
-    if other:
+    if target != ctx.user:
         # No badges for someone who did not write this message: their status as chat last wrote it
         tier = Tier(await get_tier(ctx.session_id, target) or Tier.REGULAR)
         limit, unlimited = rules.free_limit(tier), tier == Tier.BROADCASTER
     else:
         limit, unlimited = rules.free_limit(ctx.tier), ctx.broadcaster
     standing = await game.status(ctx.session_id, target, limit=limit, unlimited=unlimited)
+    parts = status_parts(standing, user=ctx.user, target=target)
+    # Many effects at once can pass Twitch's limit: the answer goes out in as many messages as it needs
+    for piece in split_message(compose(*parts)):
+        await ctx.reply(piece)
+
+
+def status_parts(standing: game.Standing, *, user: str, target: str) -> list[str]:
+    """The pieces of a !rollstat answer: the roll, the effects on the player, the session's titles.
+
+    Another player's texts speak of them, not to them: the keys with _other.
+    """
+    suffix = '' if target == user else '_other'
+    return [_roll_line(standing, user, target, suffix), *_protection_lines(standing, target, suffix),
+            *_flask_lines(standing, target, suffix), *_title_lines(standing)]
+
+
+def _roll_line(standing: game.Standing, user: str, target: str, suffix: str) -> str:
     if standing.value is None:
-        own = Content.text(f'rollstat_none{suffix}', user=ctx.user, target=target)
-    elif standing.ceiling is not None:
-        # Under АГОНИЯ the next throw is capped lower than a curse ever goes: the lower one is said
-        ceiling = standing.ceiling if standing.agony_left is None else min(standing.ceiling, rules.agony_throw_top())
-        own = Content.text(f'rollstat_cursed{suffix}', user=ctx.user, target=target, value=standing.value,
-                           max=Roll.MAX, ceiling=ceiling)
-    else:
-        own = Content.text(f'rollstat_self{suffix}', user=ctx.user, target=target, value=standing.value,
-                           max=Roll.MAX)
-    parts = [own]
+        return Content.text(f'rollstat_none{suffix}', user=user, target=target)
+    if standing.ceiling is None:
+        return Content.text(f'rollstat_self{suffix}', user=user, target=target, value=standing.value, max=Roll.MAX)
+    # Under АГОНИЯ the next throw is capped lower than a curse ever goes: the lower one is said
+    ceiling = standing.ceiling if standing.agony_left is None else min(standing.ceiling, rules.agony_throw_top())
+    return Content.text(f'rollstat_cursed{suffix}', user=user, target=target, value=standing.value,
+                        max=Roll.MAX, ceiling=ceiling)
+
+
+def _protection_lines(standing: game.Standing, target: str, suffix: str) -> list[str]:
+    """Free throws, the curse, the shields and the swap."""
+    parts = []
     if standing.free_left is not None:
         parts.append(Content.text('roll_free_left', free_left=standing.free_left))
     if standing.curse_power is not None:
@@ -159,8 +175,13 @@ async def handle_rollstat(ctx: Request) -> None:
         parts.append(Content.text('rollstat_perk_shield', minutes=standing.shield_minutes_left))
     if standing.flask_left is not None:
         parts.append(Content.text(f'rollstat_flask{suffix}', target=target, minutes=standing.flask_left))
-    # The luck and the choke are as strong as the mass flask holding the game makes them now
+    return parts
+
+
+def _flask_lines(standing: game.Standing, target: str, suffix: str) -> list[str]:
+    """The luck, the choke and the mass flasks: as strong as the mass flask holding the game makes them."""
     mode = 'agony' if standing.agony_left is not None else 'blessing' if standing.blessed_left is not None else None
+    parts = []
     if standing.luck_left is not None and standing.ceiling is not None:
         # The curse beats the luck: its minutes run, but no lucky throw comes until the curse lifts
         parts.append(Content.text('rollstat_luck_cursed', minutes=standing.luck_left))
@@ -176,14 +197,16 @@ async def handle_rollstat(ctx: Request) -> None:
         parts.append(Content.text('rollstat_blessed', minutes=standing.blessed_left))
     if standing.agony_left is not None:
         parts.append(Content.text('rollstat_agony', minutes=standing.agony_left, **mass_values()))
+    return parts
+
+
+def _title_lines(standing: game.Standing) -> list[str]:
     if standing.champion is None:
-        parts.append(Content.text('rollstat_nobody'))
-    else:
-        # A lone player is the champion, and there is no loser yet
-        if standing.loser is not None:
-            loser, loser_val = standing.loser
-            parts.append(Content.text('rollstat_loser', loser=loser, loser_val=loser_val, max=Roll.MAX))
-        parts.append(champion_note(game.Outcome(game.Status.OK, champion=standing.champion)))
-    # Many effects at once can pass Twitch's limit: the answer goes out in as many messages as it needs
-    for piece in split_message(compose(*parts)):
-        await ctx.reply(piece)
+        return [Content.text('rollstat_nobody')]
+    parts = []
+    # A lone player is the champion, and there is no loser yet
+    if standing.loser is not None:
+        loser, loser_val = standing.loser
+        parts.append(Content.text('rollstat_loser', loser=loser, loser_val=loser_val, max=Roll.MAX))
+    parts.append(champion_note(game.Outcome(game.Status.OK, champion=standing.champion)))
+    return parts

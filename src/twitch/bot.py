@@ -282,23 +282,30 @@ class Bot(commands.Bot):
             self._game.start_watch()
         # The Twitch check catches a missed stream start or end
         tasks.start('stream_watch', lambda: watch_stream(self))
-        if Proactive.ENABLED and tasks.start('proactive', lambda: proactive_loop(self)):
-            logger.info('Проактивные сообщения включены (раз в %d–%d мин)',
-                        Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)
-        if Pulse.ENABLED and tasks.start('pulse', lambda: pulse_loop(self)):
-            logger.info('Пульс чата включён (раз в %d мин во время эфира, пока пишут)', Pulse.INTERVAL_MINUTES)
-        if Help.ANNOUNCE_ENABLED and tasks.start('help', lambda: help_loop(self)):
-            logger.info('Напоминания о командах включены (раз в %d мин)', Help.ANNOUNCE_INTERVAL_MINUTES)
-        if Emote.SPAM_ENABLED and not tasks.running('emote_spam'):
-            if Content.items('emotes'):
-                tasks.start('emote_spam', lambda: emote_spam_loop(self))
-                logger.info('Спам эмотами включён (раз в %d–%d мин)',
-                            Emote.SPAM_INTERVAL_MIN_MINUTES, Emote.SPAM_INTERVAL_MAX_MINUTES)
-            else:
-                logger.warning(
-                    'EMOTE_SPAM_ENABLED=true, но список эмотов в CONTENT.md пуст – '
-                    'задача не запущена'
-                )
+        loops = (
+            (Proactive.ENABLED, 'proactive', lambda: proactive_loop(self),
+             ('Проактивные сообщения включены (раз в %d–%d мин)',
+              Proactive.INTERVAL_MIN_MINUTES, Proactive.INTERVAL_MAX_MINUTES)),
+            (Pulse.ENABLED, 'pulse', lambda: pulse_loop(self),
+             ('Пульс чата включён (раз в %d мин во время эфира, пока пишут)', Pulse.INTERVAL_MINUTES)),
+            (Help.ANNOUNCE_ENABLED, 'help', lambda: help_loop(self),
+             ('Напоминания о командах включены (раз в %d мин)', Help.ANNOUNCE_INTERVAL_MINUTES)),
+        )
+        for enabled, name, loop, announce in loops:
+            if enabled and tasks.start(name, loop):
+                logger.info(*announce)
+        if Emote.SPAM_ENABLED:
+            self._start_emote_spam()
+
+    def _start_emote_spam(self) -> None:
+        if self._tasks.running('emote_spam'):
+            return
+        if not Content.items('emotes'):
+            logger.warning('EMOTE_SPAM_ENABLED=true, но список эмотов в CONTENT.md пуст – задача не запущена')
+            return
+        self._tasks.start('emote_spam', lambda: emote_spam_loop(self))
+        logger.info('Спам эмотами включён (раз в %d–%d мин)',
+                    Emote.SPAM_INTERVAL_MIN_MINUTES, Emote.SPAM_INTERVAL_MAX_MINUTES)
 
     async def event_subscription_revoked(self, payload) -> None:
         # Twitch says why: authorization_revoked, user_removed, … The watch handles the rest

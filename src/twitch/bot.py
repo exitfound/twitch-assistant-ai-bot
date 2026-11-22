@@ -266,14 +266,9 @@ class Bot(commands.Bot):
             logger.info('Реплики бота уходят на озвучку: %s', Service.VOICE_URL)
 
     def _start_background_tasks(self) -> None:
-        # The !film commands work without the channel id, so the session they open needs
-        # its heartbeat too, or the gate ends it after GATE_LEASE_SECONDS
-        if Film.ENABLED:
-            self._tasks.start('film_heartbeat', lambda: film.heartbeat_loop(self))
-        if Film.BRIDGE and self._tasks.start('film_bridge', film_bridge.bridge_loop):
-            logger.info('Мост чата Twitch в кинозал включён (пока открыт сеанс)')
+        self._start_cinema()
         if not self._channel_id:
-            if Proactive.ENABLED or Emote.SPAM_ENABLED or (self._game is not None and self._game.rewards_enabled):
+            if self._needs_channel():
                 logger.warning('ID канала не получен – фоновые задачи не запущены')
             return
         tasks = self._tasks
@@ -296,6 +291,19 @@ class Bot(commands.Bot):
                 logger.info(*announce)
         if Emote.SPAM_ENABLED:
             self._start_emote_spam()
+
+    def _start_cinema(self) -> None:
+        # The !film commands work without the channel id, so the session they open needs
+        # its heartbeat too, or the gate ends it after GATE_LEASE_SECONDS
+        if Film.ENABLED:
+            self._tasks.start('film_heartbeat', lambda: film.heartbeat_loop(self))
+        if Film.BRIDGE and self._tasks.start('film_bridge', film_bridge.bridge_loop):
+            logger.info('Мост чата Twitch в кинозал включён (пока открыт сеанс)')
+
+    def _needs_channel(self) -> bool:
+        """Whether a switched-on loop waits for the channel id: worth a warning when it is missing."""
+        rewards = self._game is not None and self._game.rewards_enabled
+        return Proactive.ENABLED or Emote.SPAM_ENABLED or rewards
 
     def _start_emote_spam(self) -> None:
         if self._tasks.running('emote_spam'):

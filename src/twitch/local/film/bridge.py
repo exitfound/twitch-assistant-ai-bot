@@ -10,7 +10,7 @@ import logging
 
 from src.core.config import Film
 from src.core.content import Content
-from src.twitch.local import film
+from src.twitch.local.film import hall as film
 
 logger = logging.getLogger(__name__)
 
@@ -53,10 +53,11 @@ def look(message) -> tuple[str | None, dict[str, str], list[str]]:
 
 
 def from_twitch(name: str, text: str, color: str | None = None, emotes: dict[str, str] | None = None,
-                badges: list[str] | None = None) -> None:
+                badges: list[str] | None = None, login: str | None = None) -> None:
     """A Twitch line, a viewer's or the bot's own: queued for the hall while a session is open. Never waits.
 
-    `color`, `emotes` and `badges` come from look(); the gate keeps them for the hall's page.
+    `color`, `emotes` and `badges` come from look(); the gate keeps them for the hall's page. `name` is
+    the display name; `login` lets the gate match a hall ban, which it keeps by login.
     """
     if not Film.BRIDGE or not film.is_open():
         return
@@ -73,6 +74,8 @@ def from_twitch(name: str, text: str, color: str | None = None, emotes: dict[str
         line['emotes'] = emotes
     if badges is not None:  # [] too: the author has no badges now, the hall drops the old ones
         line['badges'] = badges
+    if login:
+        line['login'] = login
     try:
         _queue().put_nowait(line)
     except asyncio.QueueFull:

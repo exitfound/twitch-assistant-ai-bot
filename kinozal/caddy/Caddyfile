@@ -1,0 +1,38 @@
+{$KINOZAL_DOMAIN} {
+	header {
+		-Server
+		X-Robots-Tag "noindex, nofollow"
+		Referrer-Policy no-referrer
+	}
+
+	# --- Owncast admin: reachable only through an SSH tunnel to 127.0.0.1:8080 ---
+	# (handle is required: a bare respond runs after the handle blocks and would never apply)
+	handle /admin* {
+		respond 404
+	}
+	handle /api/admin* {
+		respond 404
+	}
+
+	# --- code login ---
+	handle /_gate/* {
+		reverse_proxy gate:8000
+	}
+
+	handle /robots.txt {
+		respond "User-agent: *
+Disallow: /
+"
+	}
+
+	# --- everything else (site, HLS, chat) requires a valid cookie ---
+	handle {
+		forward_auth gate:8000 {
+			uri /_gate/auth
+			# the access check needs no chat websocket headers; without them the gate logs no «Unsupported upgrade request»
+			header_up -Connection
+			header_up -Upgrade
+		}
+		reverse_proxy owncast:8080
+	}
+}

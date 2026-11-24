@@ -1,0 +1,1222 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@500;700&display=swap");
+
+/* Kinozal: the Owncast page's styles (customstyles), uploaded by kinozal.sh style, no restart needed.
+   Black page, grey #1A1A1A panels with a border, lavender for accents only; app.py's entry page shares the palette. */
+
+/* =================================================================================================================
+   theme: palette, Owncast and antd variables, base font
+   ================================================================================================================= */
+:root {
+  --kz-bg: #000;
+  --kz-panel: #1A1A1A;
+  --kz-chat: #1A1A1A;
+  --kz-below: #151515;
+  --kz-raised: #2A2A2A;
+  --kz-field: #111;
+  --kz-line: #333;
+  --kz-line-hi: #555;
+  --kz-accent: #BAF;
+  --kz-accent-hi: #DCF;
+  --kz-glow: rgba(136, 102, 255, .4);
+  --kz-text: #EEE;
+  --kz-dim: #AAA;
+  --kz-ink: #111;
+  --kz-pink: #F9B;
+
+  --theme-rounded-corners: 10px;
+  --theme-text-body-font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
+  --theme-text-display-font-family: "Unbounded", system-ui, sans-serif;
+
+  --theme-color-action: var(--kz-accent);
+  --theme-color-action-hover: var(--kz-accent-hi);
+  --theme-color-action-disabled: #666;
+  --theme-color-error: var(--kz-pink);
+  --theme-color-warning: #EC8;
+
+  --theme-color-background-main: var(--kz-bg);
+  --theme-color-background-header: var(--kz-panel);
+  --theme-color-background-secondary: var(--kz-panel);
+  --theme-color-background-light: var(--kz-raised);
+
+  --theme-color-components-text-on-light: var(--kz-text);
+  --theme-color-components-text-on-dark: var(--kz-text);
+  --theme-color-components-content-background: var(--kz-panel);
+
+  --theme-color-components-chat-background: var(--kz-chat);
+  --theme-color-components-chat-text: var(--kz-text);
+
+  --theme-color-components-video-background: #000;
+  --theme-color-components-video-status-bar-background: var(--kz-panel);
+  --theme-color-components-video-status-bar-foreground: var(--kz-dim);
+  --theme-color-components-video-live-indicator: var(--kz-pink);
+
+  --theme-color-components-primary-button-background: var(--kz-accent);
+  --theme-color-components-primary-button-border: var(--kz-accent);
+  --theme-color-components-primary-button-text: var(--kz-ink);
+  --theme-color-components-secondary-button-background: transparent;
+  --theme-color-components-secondary-button-border: var(--kz-line-hi);
+  --theme-color-components-secondary-button-text: var(--kz-accent);
+
+  --theme-color-components-form-field-background: var(--kz-field);
+  --theme-color-components-form-field-border: var(--kz-line-hi);
+  --theme-color-components-form-field-text: var(--kz-text);
+  --theme-color-components-form-field-placeholder: #888;
+
+  --theme-color-components-menu-background: var(--kz-raised);
+  --theme-color-components-menu-item-text: var(--kz-text);
+  --theme-color-components-menu-item-hover-bg: rgba(185, 166, 242, .08);
+  --theme-color-components-menu-item-focus-bg: rgba(185, 166, 242, .14);
+
+  --theme-color-components-modal-header-background: var(--kz-raised);
+  --theme-color-components-modal-header-text: var(--kz-text);
+  --theme-color-components-modal-content-background: var(--kz-chat);
+  --theme-color-components-modal-content-text: var(--kz-text);
+
+  /* nick colours, Owncast's eight slots: violet and pink one step lighter to stay visible on the dark panel */
+  --theme-color-users-0: #FA5;
+  --theme-color-users-1: #FF5;
+  --theme-color-users-2: #AF5;
+  --theme-color-users-3: #5FA;
+  --theme-color-users-4: #5FF;
+  --theme-color-users-5: #5AF;
+  --theme-color-users-6: #B7F;
+  --theme-color-users-7: #F6A;
+
+  --chat-message-text-size: 1rem;
+
+  /* antd inside Owncast */
+  --primary-color: var(--kz-accent);
+  --primary-color-hover: var(--kz-accent-hi);
+  --primary-color-active: var(--kz-accent);
+}
+
+/* antd sets its own colours and sizes on .css-var-* elements; a doubled selector overrides them */
+[class*="css-var-"][class*="css-var-"] {
+  --ant-color-primary: var(--kz-accent);
+  --ant-color-primary-hover: var(--kz-accent-hi);
+  --ant-color-primary-active: var(--kz-accent);
+  --ant-color-primary-text: var(--kz-accent);
+  --ant-color-link: var(--kz-accent);
+  --ant-color-link-hover: var(--kz-accent-hi);
+  --ant-color-text-light-solid: var(--kz-ink);
+  --ant-color-bg-elevated: var(--kz-raised);
+  --ant-color-text: var(--kz-text);
+  --ant-color-text-secondary: var(--kz-dim);
+  --ant-font-size: 15px;
+  --ant-font-size-sm: 13px;
+  --ant-font-size-lg: 17px;
+  --ant-font-size-icon: 14px;
+  --ant-control-height: 36px;
+  --ant-control-height-sm: 28px;
+  --ant-control-height-lg: 44px;
+}
+
+html { font-size: 16px; color-scheme: dark; }  /* color-scheme: dark browser scrollbars and form fields */
+html, body { background: var(--kz-bg); }
+
+/* =================================================================================================================
+   layout: everything fits the window, no page scrolling
+   ================================================================================================================= */
+/* the «Powered by Owncast» footer is hidden: it makes the page scroll */
+[class*="Main-module"][class*="__footerContainer"],
+[class*="Footer-module"][class*="__footer"] { display: none; }
+
+:root { --kz-header-h: 45px; --kz-below-h: 76px; }
+
+@media (min-width: 768px) {
+  :root { --player-container-height: calc(100vh - var(--kz-header-h) - var(--kz-below-h)); }
+
+  @supports (height: 100dvh) {
+    :root { --player-container-height: calc(100dvh - var(--kz-header-h) - var(--kz-below-h)); }
+  }
+}
+
+/* the keyboard «skip to footer» link leads nowhere: the footer is hidden */
+a[href$="#footer"][class*="__skipLink"] { display: none; }
+
+/* the player column is a container: the player and the plaque adapt to its width (cqw, @container) */
+[class*="Content-module"][class*="__mainColumn"] { container-type: inline-size; }
+
+/* player column: a very short window still scrolls, without a scrollbar (as Owncast intends) */
+[class*="Content-module"][class*="__mainColumn"] { scrollbar-width: none; }
+
+/* =================================================================================================================
+   panels
+   ================================================================================================================= */
+/* header shorter than Owncast's 70px to leave room for the film; the 32px icon still fits */
+:root { --header-height: var(--kz-header-h); }
+
+@media (max-width: 768px) { :root { --header-height: var(--kz-header-h); } }
+
+[class*="Header-module"][class*="__header"] {
+  box-sizing: border-box;
+  height: var(--kz-header-h);
+  padding-top: 0;
+  padding-bottom: 0;
+  align-items: center;
+  background: var(--kz-panel);
+  border-bottom: 1px solid var(--kz-line);
+  box-shadow: none;
+}
+
+[class*="Header-module"][class*="__title"],
+[class*="ContentHeader-module"][class*="__title"] {
+  font-family: "Unbounded", system-ui, sans-serif;
+  letter-spacing: .05em;
+  color: var(--kz-text);
+  text-shadow: 0 0 12px var(--kz-glow);
+}
+
+[class*="Header-module"][class*="__title"] { font-size: clamp(.85rem, 2.4vw, 1.05rem); line-height: 1; margin: 0; }
+
+/* header only: [class*="Header-module"] also matches ContentHeader, the block below the player */
+header [class*="Header-module"][class*="__logo"]:not([class*="__logoImage"]) { display: flex; align-items: center; gap: .45rem; height: 100%; }
+
+header [class*="Header-module"][class*="__title"] { padding: 0; margin: 0; text-align: left; }
+[class*="Header-module"][class*="__logoImage"] { width: 32px; height: 32px; max-width: none; max-height: none; flex: none; display: flex; margin: 0; padding: 0; }
+
+[class*="Header-module"][class*="__logoImage"] .ant-avatar {
+  position: static;
+  width: 32px !important;
+  height: 32px !important;
+  margin: 0;
+  inset: auto;
+  transform: none;
+}
+
+[class*="Header-module"][class*="__logoImage"] img { width: 100%; height: 100%; max-width: none; max-height: none; object-fit: cover; }
+
+#kz-logout {
+  margin-left: auto;
+  margin-right: .5rem;
+  padding: .15rem .65rem;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 8px;
+  color: var(--kz-dim);
+  font-size: .75rem;
+  line-height: 1.4;
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+#kz-logout:hover, #kz-logout:focus-visible { color: var(--kz-accent); border-color: var(--kz-accent); }
+
+/* the language switch (custom.js) before "Log out": RU | EN in one outline, the current language highlighted; the
+   header's font, as "Log out" has */
+#kz-lang {
+  display: inline-flex;
+  margin-left: auto;
+  margin-right: .4rem;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 8px;
+}
+
+#kz-lang button {
+  padding: .15rem .45rem;
+  border: 0;
+  background: transparent;
+  color: var(--kz-dim);
+  font: inherit;
+  font-size: .75rem;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+#kz-lang button:first-child { border-radius: 7px 0 0 7px; }
+#kz-lang button:last-child { border-radius: 0 7px 7px 0; }
+#kz-lang button[aria-pressed="true"] { background: var(--kz-raised); color: var(--kz-text); cursor: default; }
+#kz-lang button[aria-pressed="false"]:hover, #kz-lang button[aria-pressed="false"]:focus-visible { color: var(--kz-accent); }
+#kz-lang + #kz-logout { margin-left: 0; }
+
+header [class*="UserDropdown-module"][class*="__root"] button {
+  height: 26px;
+  padding: 0 .65rem;
+  border-radius: 8px;
+  font-size: .8rem;
+  gap: .35rem;
+}
+
+header [class*="UserDropdown-module"][class*="__root"] [class*="__username"] { font-size: .8rem; }
+header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75rem; }
+[class*="Header-module"][class*="__chatOfflineText"] { font-size: .75rem; }
+
+/* the status row below the player is hidden: viewers and session time are in #kz-live (custom.js) */
+[class*="Statusbar-module"][class*="__statusbar"] { display: none; }
+
+[class*="Content-module"][class*="__mainColumn"] { background: var(--kz-below); }
+[class*="ContentHeader-module"][class*="__root"] { background: var(--kz-below); }
+
+/* Owncast's logo and title here repeat the header; #kz-now (custom.js) replaces them */
+[class*="ContentHeader-module"][class*="__logoTitleSection"] { display: none; }
+
+/* without Owncast's 38px margins the block spans the column, viewers and timer sit next to the chat */
+[class*="DesktopContent-module"][class*="__bottomSectionContent"] { margin: 0; flex: 1 1 auto; width: 100%; }
+
+[class*="ContentHeader-module"][class*="__root"] {
+  position: relative;
+  box-sizing: border-box;
+  min-height: var(--kz-below-h);
+  display: flex;
+  align-items: center;
+  padding: 10px 1rem;
+}
+
+#kz-now { display: flex; align-items: center; gap: .9rem; min-width: 0; padding-right: 11rem; }
+
+#kz-now .kz-ava {
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: var(--kz-raised) center / cover no-repeat;
+  box-shadow: 0 0 0 2px var(--kz-below), 0 0 0 4px var(--kz-line-hi);
+}
+
+#kz-now .kz-ava.kz-on { box-shadow: 0 0 0 2px var(--kz-below), 0 0 0 4px var(--kz-accent); }
+
+#kz-now .kz-ava.kz-on::after {
+  content: "LIVE";
+  position: absolute;
+  left: 50%;
+  bottom: -6px;
+  transform: translateX(-50%);
+  padding: 0 .3rem;
+  border-radius: 4px;
+  background: var(--kz-pink);
+  color: var(--kz-ink);
+  font: 700 .62rem/1.35 var(--theme-text-display-font-family);
+  letter-spacing: .05em;
+}
+
+#kz-now .kz-text { min-width: 0; }
+
+#kz-now .kz-title {
+  margin: 0;
+  font-family: var(--theme-text-display-font-family);
+  font-weight: 700;
+  font-size: 1.3rem;
+  line-height: 1.3;
+  color: var(--kz-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#kz-now .kz-lead { font-weight: 500; color: var(--kz-text); }
+#kz-now .kz-film { text-shadow: 0 0 12px var(--kz-glow); }
+
+#kz-now .kz-sub {
+  margin: .1rem 0 0;
+  font-size: .9rem;
+  line-height: 1.4;
+  color: var(--kz-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+#kz-now .kz-chan { color: var(--kz-accent); font-weight: 600; text-decoration: none; border-radius: 3px; }
+#kz-now .kz-chan:hover { color: var(--kz-accent-hi); text-decoration: underline; text-underline-offset: 3px; }
+
+@container (max-width: 760px) {
+  #kz-now { gap: .7rem; padding-right: 0; flex: 1; }
+  #kz-now .kz-ava { width: 40px; height: 40px; }
+  #kz-now .kz-text { flex: 1; }
+  #kz-now .kz-title { font-size: 1rem; white-space: normal; }
+
+  #kz-now .kz-film {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow: hidden;
+    max-height: 2.6em;
+  }
+
+  #kz-now .kz-lead { display: block; min-height: 1.6rem; padding-right: 9rem; font-size: .75rem; line-height: 1.6rem; }
+  #kz-now .kz-lead[hidden] { display: none; }
+  [class*="ContentHeader-module"] #kz-live { top: 10px; transform: none; gap: .8rem; font-size: .85rem; }
+  #kz-now .kz-sub { font-size: .78rem; }
+}
+
+#kz-live {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  right: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 1.1rem;
+  font-family: var(--theme-text-display-font-family);
+  font-size: .95rem;
+  color: var(--kz-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+#kz-live[hidden], #kz-live [hidden] { display: none; }
+#kz-live .kz-viewers { display: inline-flex; align-items: center; gap: .4rem; }
+#kz-live .kz-viewers b { color: var(--kz-text); font-weight: 500; }
+#kz-live .kz-viewers svg { color: var(--kz-pink); }
+
+#kz-live .kz-timer {
+  color: var(--kz-text);
+  padding: .2rem .6rem;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 999px;
+}
+
+/* min-width rather than width: the chat can still be dragged wider by its corner */
+[class*="ChatContainer-module"][class*="__chatContainer"] {
+  border-left: 1px solid var(--kz-line);
+  min-width: clamp(320px, 22vw, 420px);
+}
+
+/* desktop: the chat takes the width the 16:9 frame does not need, so the player has no side bars */
+@media (min-width: 768px) {
+  [class*="ChatContainer-module"][class*="__chatContainer"] {
+    width: clamp(min(380px, 30vw), calc(100vw - var(--player-container-height) * 16 / 9), 600px) !important;
+    min-width: 0;
+  }
+
+  [class*="ChatContainer-module"][class*="__resizeHandle"] { display: none; }
+}
+
+[class*="ChatContainer-module"][class*="__chatTextField"] { border-top: 1px solid var(--kz-line); }
+
+/* Owncast's "Scroll to latest" button: Owncast sets dark text on a dark background inline, hence !important */
+[class*="ChatContainer-module"][class*="__toBottomWrap"] button {
+  font-size: .85rem;
+  font-weight: 600;
+  background: #FFF !important;
+  color: #000 !important;
+  border: 0 !important;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, .6);
+}
+
+[class*="ChatContainer-module"][class*="__toBottomWrap"] button * { color: inherit !important; }
+[class*="ChatContainer-module"][class*="__toBottomWrap"] button:hover { background: #E6E6E6 !important; }
+[class*="ChatContainer-module"][class*="__toBottomWrap"] button:focus-visible { outline: 2px solid var(--kz-accent); outline-offset: 2px; }
+
+/* chat row selectors match by substring, not by class suffix: antd appends «ant-tooltip-open» to the nick
+   on hover, which breaks a [class$="__user"] rule and makes the row re-render and flicker */
+/* rows as in Twitch: «badges nick: text» on one line, the nick on repeated rows too (Owncast hides it: .repeatUser) */
+[class*="ChatUserMessage-module"][class*="__root"] { line-height: 1.5; border-left: 0; }
+
+[class*="ChatUserMessage-module"][class*="__messagePadding"] { padding: .2rem 5px 0; }
+
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__user"]:not([class*="__userName"]):not([class*="__userBadges"]),
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__repeatUser"] {
+  display: inline-flex;
+  align-items: baseline;
+  margin-right: .45em;
+  font-weight: 600;
+}
+
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__user"]:not([class*="__userName"]):not([class*="__userBadges"])::after,
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__repeatUser"]::after { content: ":"; }
+
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__userName"] { overflow: visible; }
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__userBadges"] { order: -1; margin: 0 .3em 0 0; align-self: center; }
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__userBadges"]:empty { display: none; }
+
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__message"]:not([class*="__messagePadding"]),
+[class*="ChatUserMessage-module"][class*="__root"] [class*="__message"]:not([class*="__messagePadding"]) p { display: inline; margin: 0; }
+
+/* the gate makes @nick mentions in rows from Twitch bold; they get the accent colour */
+[class*="ChatUserMessage-module"][class*="__message"] strong { color: var(--kz-accent); font-weight: 600; }
+
+[class*="ChatUserBadge-module"][class*="__badge"] { width: 20px; height: 20px; font-size: .8rem; }
+[class*="ChatActionMessage-module"][class*="__chatAction"] { font-size: .9rem; background-color: var(--kz-raised); }
+
+[class*="ChatSystemMessage-module"][class*="__chatSystemMessage"] {
+  background: var(--kz-raised);
+  border-color: var(--kz-line-hi);
+}
+
+[class*="ChatTextField-module"][class*="__inputWrap"] {
+  background-color: var(--kz-field);
+  box-shadow: inset 0 0 0 1px var(--kz-line-hi);
+  align-items: center;
+  min-height: 0;
+  padding-top: .3rem;
+  padding-bottom: .3rem;
+}
+
+[class*="ChatTextField-module"][class*="__inputWrap"]:focus-within {
+  background-color: var(--kz-field);
+  box-shadow: inset 0 0 0 1px var(--kz-accent);
+}
+
+[class*="ChatTextField-module"][class*="__root"] div[role="textbox"] {
+  font-size: 1rem;
+  line-height: 1.5;
+  min-height: 1.5em;
+  max-height: calc(4 * 1.5em);
+  padding-top: .1rem;
+  padding-bottom: .1rem;
+  overflow-y: auto;
+}
+
+[class*="ChatTextField-module"][class*="__root"] div[role="textbox"]:focus { outline: none !important; }
+[class*="ChatTextField-module"][class*="__root"] :empty:before { color: #888; }
+[class*="ChatTextField-module"][class*="__inputWrap"] * { background-color: transparent; color: var(--kz-text); }
+[class*="ChatTextField-module"][class*="__inputWrap"] img { width: 24px; height: 24px; }
+
+[class*="ChatTextField-module"][class*="__emojiButton"],
+[class*="ChatTextField-module"][class*="__sendButton"] { color: var(--kz-dim); font-size: 1.25rem; align-self: center; padding-top: 0; padding-bottom: 0; }
+
+[class*="ChatTextField-module"][class*="__sendButton"] { padding-left: .5rem; padding-right: .6rem; }
+
+[class*="ChatTextField-module"][class*="__emojiButton"] *,
+[class*="ChatTextField-module"][class*="__sendButton"] * { color: inherit; }
+
+[class*="ChatTextField-module"][class*="__emojiButton"]:hover,
+[class*="ChatTextField-module"][class*="__sendButton"]:hover { color: var(--kz-accent); }
+
+/* =================================================================================================================
+   title block below the player: compact
+   ================================================================================================================= */
+[class*="ContentHeader-module"][class*="__title"] { font-size: 1.5rem; line-height: 1.2; margin: 0; }
+
+[class*="ContentHeader-module"][class*="__subtitle"] {
+  color: #DDD;
+  font-size: 1rem;
+  font-weight: 400;
+  letter-spacing: .01em;
+}
+
+[class*="ContentHeader-module"][class*="__tagList"] { display: none; }
+
+[class*="Logo-module"][class*="__root"] {
+  width: 56px;
+  height: 56px;
+  border-width: 2px;
+  border-color: var(--kz-line-hi);
+  background-color: var(--kz-bg);
+}
+
+[class*="Logo-module"][class*="__container"] { width: 100%; height: 100%; }
+
+/* the button row above the title (Notify, Follow – disabled) is empty but takes 12px */
+[class*="Content-module"][class*="__actionButtonsContainer"] { display: none; }
+
+/* =================================================================================================================
+   player and controls
+   ================================================================================================================= */
+/* video.js sizes are in em of its font: 12px instead of 10px enlarges every button */
+.video-js { font-size: 12px; }
+
+.video-js .vjs-big-play-button,
+.video-js .vjs-big-play-button .vjs-icon-placeholder,
+.video-js .vjs-big-play-button .vjs-icon-placeholder:before {
+  color: #fff;
+  text-shadow: none;
+  filter: none;
+  box-shadow: none;
+}
+
+.video-js .vjs-big-play-button { opacity: .9; transition: opacity .15s, transform .15s; }
+
+.video-js:hover .vjs-big-play-button,
+.video-js .vjs-big-play-button:focus { opacity: 1; transform: scale(1.04); }
+
+/* Owncast paints the bar with a solid colour (!important), leaving a black strip: here it is transparent over the picture */
+.video-js.vjs-owncast .vjs-control-bar,
+.video-js .vjs-control-bar {
+  height: 4em;
+  align-items: center;
+  background-color: transparent !important;
+  background-image: linear-gradient(to top, rgba(0, 0, 0, .6), rgba(0, 0, 0, .25) 55%, rgba(0, 0, 0, 0));
+}
+
+/* all buttons on one axis: video.js puts its icons in a 36px row at the top of the 48px bar, «LIVE» in the middle */
+.video-js .vjs-control-bar > .vjs-control { height: 100%; }
+
+.video-js .vjs-control-bar .vjs-icon-placeholder:before,
+.video-js .vjs-control-bar .vjs-button > .vjs-icon-placeholder:before { line-height: 48px; }
+
+.video-js .vjs-seek-to-live-control { display: inline-flex; align-items: center; justify-content: center; line-height: 1; }
+
+.video-js .vjs-seek-to-live-control .vjs-icon-placeholder,
+.video-js .vjs-seek-to-live-control .vjs-seek-to-live-text { line-height: 1; height: auto; }
+
+.video-js .vjs-seek-to-live-control .vjs-icon-placeholder:before { line-height: 1; position: static; }
+
+/* desktop: the player is exactly 16:9 and centred, its height following the column width; fullscreen keeps video.js defaults */
+@media (min-width: 768px) {
+  [class*="OwncastPlayer-module"][class*="__container"] {
+    background: #000;
+    height: min(var(--player-container-height), 100cqw * 9 / 16) !important;
+  }
+
+  [class*="OwncastPlayer-module"][class*="__player"] { position: relative; height: 100%; }
+
+  [class*="OwncastPlayer-module"] .video-js:not(.vjs-fullscreen) {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: min(100%, calc(var(--player-container-height) * 16 / 9)) !important;
+    height: auto !important;
+    max-height: 100%;
+    aspect-ratio: 16 / 9;
+  }
+}
+
+.video-js .vjs-control,
+.video-js .vjs-control:before,
+.video-js .vjs-control .vjs-icon-placeholder:before,
+.video-js .vjs-time-control {
+  color: #fff;
+  text-shadow: none;
+  filter: none;
+  box-shadow: none;
+}
+
+.video-js .vjs-control:hover:before,
+.video-js .vjs-control:focus:before,
+.video-js .vjs-control:hover .vjs-icon-placeholder:before,
+.video-js .vjs-control:focus .vjs-icon-placeholder:before { text-shadow: none; }
+
+.video-js .vjs-control:hover { opacity: .8; }
+
+.video-js .vjs-control:focus-visible,
+.video-js .vjs-slider:focus-visible { outline: 2px solid var(--kz-accent); outline-offset: -2px; box-shadow: none; }
+
+.video-js.vjs-playing.vjs-user-inactive,
+.video-js.vjs-playing.vjs-user-inactive .vjs-tech { cursor: none; }
+
+.video-js .vjs-play-progress,
+.video-js .vjs-volume-level { background-color: var(--kz-accent); }
+
+.video-js .vjs-volume-bar, .video-js .vjs-progress-holder { background-color: rgba(255, 255, 255, .3); }
+.video-js .vjs-volume-level:before, .video-js .vjs-play-progress:before { text-shadow: none; }
+.video-js .vjs-menu-button-popup .vjs-menu .vjs-menu-content { background: rgba(26, 26, 26, .95); }
+
+.ant-btn.ant-btn-primary {
+  background: var(--kz-accent);
+  border-color: var(--kz-accent);
+  color: var(--kz-ink);
+  box-shadow: none;
+}
+
+.ant-btn.ant-btn-primary:hover { background: var(--kz-accent-hi); border-color: var(--kz-accent-hi); color: var(--kz-ink); }
+
+* { scrollbar-color: var(--kz-line-hi) transparent; }
+
+/* the hall nick is the Twitch nick: the menu has no «change name» or IndieAuth/Fediverse sign-in */
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item:has(> .anticon-edit),
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item:has(> .anticon-lock) { display: none !important; }
+
+.ant-dropdown .ant-dropdown-menu {
+  background: var(--kz-raised);
+  border: 1px solid var(--kz-line-hi);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+}
+
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item { color: var(--kz-text); font-size: .95rem; }
+.ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item:hover { background: rgba(185, 166, 242, .12); }
+
+/* =================================================================================================================
+   keyboard focus: a lavender outline everywhere (Owncast's is partly 1px dark on dark)
+   ================================================================================================================= */
+:where(button, a, [role="button"], [role="menuitem"], [tabindex]:not([tabindex="-1"])):focus-visible {
+  outline: 2px solid var(--kz-accent) !important;
+  outline-offset: 2px;
+}
+
+/* =================================================================================================================
+   no stream (session open, OBS not started yet or the stream dropped)
+   ================================================================================================================= */
+#offline-banner {
+  box-sizing: border-box;
+  min-height: var(--player-container-height, 62vw);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+  background: var(--kz-bg);
+}
+
+#offline-banner [class*="__innerContainer"] { width: min(36rem, 100%); max-width: none; margin: 0 auto; text-align: center; }
+
+#offline-banner [class*="__bodyText"]::before {
+  content: "Кино скоро начнётся";
+  display: block;
+  margin-bottom: 1rem;
+  font-family: var(--theme-text-display-font-family);
+  font-weight: 700;
+  font-size: clamp(1.4rem, 3vw, 2.25rem);
+  line-height: 1.2;
+  letter-spacing: .04em;
+  color: var(--kz-text);
+  text-shadow: 0 0 18px var(--kz-glow);
+}
+
+html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The film starts soon"; }
+#offline-banner [class*="__bodyText"] p { margin: 0; color: #BBB; font-size: 1rem; line-height: 1.5; text-wrap: pretty; }
+#offline-banner [class*="__lastLiveDate"] { display: none; }
+
+/* on a phone there is no chat without a stream: the offline screen fills the page above the title block */
+@media (max-width: 768px) {
+  #offline-banner { min-height: calc(100vh - var(--kz-header-h) - var(--kz-below-h)); }
+  @supports (height: 100dvh) { #offline-banner { min-height: calc(100dvh - var(--kz-header-h) - var(--kz-below-h)); } }
+}
+
+/* =================================================================================================================
+   phone: the Owncast chat (the window behind the «Chat» button) sits below the video, as in Twitch
+   ================================================================================================================= */
+@media (max-width: 768px) {
+  .ant-modal-root:has([class*="ChatModal-module"]) .ant-modal-mask { display: none; }
+
+  [class*="ChatModal-module"][class*="__modalWrapper"] {
+    top: var(--kz-chat-top, 50vh) !important;
+    overflow: hidden !important;
+    pointer-events: none;
+  }
+
+  [class*="ChatModal-module"][class*="__modalWrapper"] .ant-modal {
+    position: absolute !important;
+    inset: 0;
+    top: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    pointer-events: auto;
+    transform: none !important;
+  }
+
+  [class*="ChatModal-module"] .ant-modal-container {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    padding: 0;
+    border-radius: 0;
+    border-top: 1px solid var(--kz-line);
+    background: var(--kz-chat);
+    box-shadow: none;
+  }
+
+  /* the nick and menu are already in the page header; the chat needs no close button */
+  [class*="ChatModal-module"] .ant-modal-header,
+  [class*="ChatModal-module"] .ant-modal-close { display: none; }
+
+  [class*="ChatModal-module"] .ant-modal-body { flex: 1 1 auto; min-height: 0; padding: 0; }
+
+  [class*="ChatModal-module"] [class*="ChatContainer-module"][class*="__chatContainer"] {
+    height: 100% !important;
+    min-width: 0;
+    border-left: 0;
+  }
+
+  body:has([class*="ChatModal-module"]) [class*="__floatingMobileChatModalButton"] { display: none; }
+}
+
+/* =================================================================================================================
+   tablet portrait (769–1180px): full-width player, chat below it instead of a narrow side column
+   ================================================================================================================= */
+@media (min-width: 768px) and (max-width: 1180px) and (orientation: portrait) {
+  [class*="Content-module"][class*="__main"]:not([class*="__mainColumn"]) {
+    flex-direction: column;
+    height: calc(100dvh - var(--kz-header-h));
+  }
+
+  [class*="Content-module"][class*="__mainColumn"] { flex: none; width: 100%; height: auto; overflow: visible; }
+
+  [class*="ChatContainer-module"][class*="__chatContainer"] {
+    width: 100% !important;
+    flex: 1 1 0;
+    min-height: 0;
+    border-left: 0;
+    border-top: 1px solid var(--kz-line);
+  }
+}
+
+/* =================================================================================================================
+   phone landscape and large zoom in a short window: the whole video on screen
+   ================================================================================================================= */
+@media (orientation: landscape) and (max-height: 500px) {
+  :root { --kz-below-h: 0px; --player-container-height: calc(100dvh - var(--kz-header-h)); }
+  [class*="ContentHeader-module"][class*="__root"] { display: none; }
+
+  [class*="OwncastPlayer-module"][class*="__container"] {
+    position: relative;
+    background: #000;
+    height: min(var(--player-container-height), 100cqw * 9 / 16) !important;
+  }
+
+  [class*="OwncastPlayer-module"][class*="__player"] { position: relative; height: 100%; }
+
+  [class*="OwncastPlayer-module"] .video-js:not(.vjs-fullscreen) {
+    position: absolute;
+    inset: 0;
+    margin: auto;
+    width: min(100%, calc(var(--player-container-height) * 16 / 9)) !important;
+    height: auto !important;
+    max-height: 100%;
+    aspect-ratio: 16 / 9;
+  }
+}
+
+/* Owncast mobile layout in landscape: the «Chat» button opens a panel on the right over the video, with a close cross */
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 768px) {
+  [class*="ChatModal-module"][class*="__modalWrapper"] {
+    top: var(--kz-header-h) !important;
+    left: auto !important;
+    width: min(360px, 50vw);
+  }
+
+  [class*="ChatModal-module"] .ant-modal-container { border-top: 0; border-left: 1px solid var(--kz-line); background: rgba(26, 26, 26, .94); }
+  [class*="ChatModal-module"] .ant-modal-close { display: block; z-index: 2; }
+
+  /* the «Chat» button sits above the player (otherwise it cannot be clicked) and in the right margin, clear of the player buttons */
+  [class*="__floatingMobileChatModalButton"] {
+    z-index: 110;
+    width: auto;
+    right: 8px !important;
+    bottom: 8px !important;
+    height: 34px;
+    padding: 0 .7rem;
+    font-size: .8rem;
+  }
+
+  body:has([class*="ChatModal-module"]) [class*="__floatingMobileChatModalButton"] { display: none; }
+}
+
+/* =================================================================================================================
+   touch screens: buttons and links get a target of at least 44px (appearance unchanged)
+   ================================================================================================================= */
+@media (pointer: coarse) {
+  #kz-lang button, #kz-logout,
+  header [class*="UserDropdown-module"][class*="__root"] button, #kz-now .kz-chan { position: relative; }
+
+  #kz-lang button::after, #kz-logout::after,
+  header [class*="UserDropdown-module"][class*="__root"] button::after, #kz-now .kz-chan::after {
+    content: "";
+    position: absolute;
+    inset: -10px -4px;
+  }
+
+  #kz-now .kz-chan::after { inset: -14px -6px; }
+
+  [class*="ChatTextField-module"][class*="__emojiButton"],
+  [class*="ChatTextField-module"][class*="__sendButton"] { min-width: 44px; min-height: 44px; display: inline-flex; align-items: center; justify-content: center; padding: 0; }
+}
+
+/* =================================================================================================================
+   phone and tablet portrait (mobile layout): player exactly 16:9 by width
+   ================================================================================================================= */
+/* Owncast fixes the player height at 250px: at width 390 that is 219px of picture and 15px of black above and below */
+@media (max-width: 768px) and (orientation: portrait) {
+  [class*="Content-module"][class*="__mainColumn"] > .ant-row:has([class*="OwncastPlayer-module"]) { height: auto !important; }
+
+  [class*="OwncastPlayer-module"][class*="__container"],
+  [class*="OwncastPlayer-module"][class*="__player"],
+  [class*="OwncastPlayer-module"] .video-js:not(.vjs-fullscreen) { height: calc(100cqw * 9 / 16) !important; }
+}
+
+/* =================================================================================================================
+   narrow player (≤ 480px): 6 buttons × 48px + «LIVE» need 344px
+   ================================================================================================================= */
+/* a live stream needs no progress bar, and 40px buttons stay above the WCAG minimum of 24px */
+@container (max-width: 480px) {
+  .video-js .vjs-progress-control { display: none; }
+  .video-js .vjs-custom-control-spacer { display: flex; flex: 1 1 auto; }
+
+  .video-js .vjs-control-bar > .vjs-control:not(.vjs-seek-to-live-control):not(.vjs-custom-control-spacer) {
+    width: 40px;
+    flex: none;
+  }
+}
+
+/* =================================================================================================================
+   theatre mode (player button, key T; custom.js sets body.kz-theater)
+   ================================================================================================================= */
+.video-js .kz-theater-btn { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+.video-js .kz-theater-btn svg { display: block; }
+body.kz-theater .video-js .kz-theater-btn { color: var(--kz-accent); }
+
+body.kz-theater {
+  --header-height: 0px;
+  --kz-header-h: 0px;
+  --kz-below-h: 0px;
+  --player-container-height: 100vh;
+}
+
+@supports (height: 100dvh) { body.kz-theater { --player-container-height: 100dvh; } }
+
+body.kz-theater header[class*="Header-module"],
+body.kz-theater [class*="ContentHeader-module"][class*="__root"] { display: none; }
+
+body.kz-theater [class*="Content-module"][class*="__mainColumn"] { background: #000; }
+
+@media (min-width: 768px) {
+  body.kz-theater [class*="OwncastPlayer-module"][class*="__container"] { height: var(--player-container-height) !important; }
+
+  /* the theatre chat starts at 320px, as in Twitch: more room for the picture */
+  body.kz-theater [class*="ChatContainer-module"][class*="__chatContainer"] {
+    width: clamp(min(320px, 25vw), calc(100vw - var(--player-container-height) * 16 / 9), 600px) !important;
+  }
+}
+
+/* =================================================================================================================
+   chat: rows from Twitch – [TW] in Twitch violet #A970FF (~5:1; the brand #9146FF is 3.4:1)
+   ================================================================================================================= */
+/* the bot badge is redundant beside [TW]; Owncast badges are hidden where Twitch badges are shown */
+[class*="ChatUserMessage-module"] :is([class*="__user"]:not([class*="__userName"]):not([class*="__userBadges"]), [class*="__repeatUser"]):is(:has([data-kz-tw]), .kz-has-badges) [class*="__userBadges"] { display: none; }
+
+[class*="ChatUserMessage-module"] .kz-pre {
+  order: -2;
+  display: inline-flex;
+  align-items: center;
+  align-self: center;
+  gap: .3em;
+  margin-right: .35em;
+  font-weight: 400;
+}
+
+[class*="ChatUserMessage-module"] .kz-pre:empty { display: none; }
+.kz-pre .kz-time { color: #8C8C8C; font-size: .8em; font-variant-numeric: tabular-nums; font-weight: 400; }
+.kz-pre .kz-tw { color: #A970FF; font-weight: 700; }
+.kz-pre .kz-badge { width: 18px; height: 18px; display: block; }
+
+/* =================================================================================================================
+   chat: nick tooltip
+   ================================================================================================================= */
+/* an antd tooltip under the cursor flickers, and one a pixel past the window flickers the page scrollbar (17px on
+   Windows): the tooltip ignores the pointer, and the page never scrolls; only the chat and the column do */
+html, body { overflow: hidden; }
+
+.ant-tooltip { pointer-events: none; }
+.ant-tooltip .ant-tooltip-container, .ant-tooltip .ant-tooltip-inner { background: var(--kz-raised); color: var(--kz-text); }
+.ant-tooltip { --antd-arrow-background-color: var(--kz-raised); }
+
+/* Owncast's "You are now a moderator" line, posted on every moderator connection and reconnect, is hidden at 1px, not
+   display: none: the feed's virtual list cannot measure a 0px item and then draws no rows at all for the moderator */
+[class*="ChatModeratorNotification-module"][class*="__chatModerationNotification"] {
+  height: 1px;
+  overflow: hidden;
+  visibility: hidden;
+  margin: 0;
+  padding: 0;
+}
+
+/* Owncast's «…» moderation menu is hidden: delete and ban are row buttons (custom.js «moderation»). The menu
+   stays in the markup: only moderators have it, and custom.js places the buttons by it */
+[class*="ChatUserMessage-module"] [class*="__modMenuWrapper"] { display: none !important; }  /* Owncast has its own :hover rule */
+
+/* Twitch emotes drawn by custom.js: 28px as in Twitch, without growing the row */
+img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1px -4px; }
+
+/* =================================================================================================================
+   chat: header with a "Chat members" button, as in Twitch (custom.js «chat members»)
+   ================================================================================================================= */
+[class*="ChatContainer-module"][class*="__chatContainer"] { position: relative; display: flex; flex-direction: column; --kz-chathead-h: 40px; }
+
+/* Owncast row text has z-index 100: without its own layer the feed would show through the users panel and the «@» hint */
+[class*="ChatContainer-module"][class*="__chatContainer"] > [class*="__virtuoso"] { flex: 1 1 0; min-height: 0; isolation: isolate; }
+
+.kz-chathead {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  height: var(--kz-chathead-h);
+  border-bottom: 1px solid var(--kz-line);
+  background: var(--kz-chat);
+}
+
+.kz-ch-title { font: 600 .8rem/1 var(--theme-text-display-font-family); letter-spacing: .08em; text-transform: uppercase; color: var(--kz-dim); }
+
+.kz-ch-users, .kz-ch-bans, .kz-u-close {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kz-dim);
+  cursor: pointer;
+}
+
+.kz-ch-bans { right: 40px; }
+.kz-ch-count:empty { display: none; }
+
+.kz-ch-count {
+  position: absolute; top: 1px; right: 0;
+  min-width: 15px; height: 15px; padding: 0 4px; border-radius: 8px;
+  background: #E5484D; color: #fff; font: 700 10px/15px var(--theme-text-body-font-family); text-align: center;
+}
+
+.kz-ch-users:hover, .kz-ch-bans:hover, .kz-u-close:hover { background: var(--kz-raised); color: var(--kz-accent); }
+.kz-ch-users:focus-visible, .kz-ch-bans:focus-visible, .kz-u-close:focus-visible, .kz-u-name:focus-visible { outline: 2px solid var(--kz-accent); outline-offset: -2px; }
+
+@media (pointer: coarse) {
+  [class*="ChatContainer-module"][class*="__chatContainer"] { --kz-chathead-h: 46px; }
+  .kz-ch-users, .kz-ch-bans, .kz-u-close { width: 44px; height: 44px; right: 2px; }
+  .kz-ch-bans { right: 48px; }
+  .kz-u-name, .kz-m-item { min-height: 44px; }
+}
+
+/* phone landscape: Owncast's close cross is on the right of the chat window; the button goes to its left */
+@media (orientation: landscape) and (max-height: 500px) and (max-width: 768px) {
+  [class*="ChatModal-module"] .kz-ch-users { right: 44px; }
+  [class*="ChatModal-module"] .kz-ch-bans { right: 90px; }
+}
+
+/* the users list and the "Bans" window cover the feed; custom.js sets their bottom above the input */
+.kz-users, .kz-bans {
+  position: absolute;
+  inset: var(--kz-chathead-h) 0 0 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  background: var(--kz-chat);
+}
+
+.kz-u-head { position: relative; flex: none; display: flex; align-items: center; height: 44px; padding: 0 44px 0 14px; }
+.kz-u-title { font: 600 .95rem/1 var(--theme-text-display-font-family); color: var(--kz-text); }
+.kz-u-count { margin-left: .4em; color: var(--kz-dim); font: 400 .85rem var(--theme-text-body-font-family); }
+.kz-u-close { font-size: 1.5rem; line-height: 1; }
+
+.kz-u-search {
+  flex: none;
+  margin: 0 12px 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 6px;
+  background: var(--kz-field);
+  color: var(--kz-text);
+  font: inherit;
+}
+
+.kz-u-search:focus { outline: none; border-color: var(--kz-accent); box-shadow: 0 0 0 2px var(--kz-glow); }
+.kz-u-list { flex: 1 1 0; min-height: 0; overflow-y: auto; padding: 0 6px 12px; }
+.kz-u-group { margin: 14px 8px 6px; font: 600 .75rem/1 var(--theme-text-display-font-family); letter-spacing: .08em; text-transform: uppercase; color: var(--kz-dim); }
+
+.kz-u-name, .kz-m-item {
+  display: flex;
+  align-items: center;
+  gap: .35em;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kz-text);
+  font: 700 1rem/1.4 var(--theme-text-body-font-family);
+  text-align: left;
+  cursor: pointer;
+}
+
+.kz-u-name:hover, .kz-m-item:hover, .kz-m-item.kz-on { background: var(--kz-raised); }
+.kz-u-name .kz-badge, .kz-m-item .kz-badge { width: 18px; height: 18px; flex: none; }
+.kz-nick { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kz-u-note { margin: 16px 8px; color: var(--kz-dim); }
+.kz-b-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 6px; }
+.kz-b-row:hover { background: var(--kz-raised); }
+.kz-b-who { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.kz-b-name { display: flex; align-items: center; gap: .35em; font: 700 1rem/1.4 var(--theme-text-body-font-family); color: var(--kz-text); }
+.kz-b-name .kz-badge { width: 18px; height: 18px; flex: none; }
+.kz-b-meta { font-size: .8rem; color: var(--kz-dim); }
+
+.kz-b-lift {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 6px;
+  background: var(--kz-raised);
+  color: var(--kz-text);
+  font: 600 .85rem/1.2 var(--theme-text-body-font-family);
+  cursor: pointer;
+}
+
+.kz-b-lift:hover:not(:disabled) { border-color: var(--kz-accent); color: var(--kz-accent); }
+.kz-b-lift:focus-visible { outline: 2px solid var(--kz-accent); outline-offset: 1px; }
+.kz-b-lift:disabled { opacity: .6; cursor: default; }
+@media (pointer: coarse) { .kz-b-lift { min-height: 44px; } }
+
+/* =================================================================================================================
+   chat: nick suggestions on «@» above the input (custom.js «mentions»)
+   ================================================================================================================= */
+[class*="ChatTextField-module"][class*="__root"] { position: relative; }
+
+.kz-mention {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 4px);
+  z-index: 6;
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 8px;
+  background: var(--kz-raised);
+  box-shadow: 0 -6px 18px rgba(0, 0, 0, .5);
+}
+
+.kz-m-item:hover, .kz-m-item.kz-on { background: #383838; }
+.kz-m-item.kz-on { box-shadow: inset 3px 0 0 var(--kz-accent); }
+
+/* =================================================================================================================
+   chat: replying to a row, as in Twitch (custom.js «replies»)
+   ================================================================================================================= */
+[class*="ChatUserMessage-module"][class*="__root"] :is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn) {
+  position: absolute;
+  right: 6px;
+  top: 2px;
+  z-index: 110;  /* above Owncast's row background and text (z-index 100), otherwise the background takes the click */
+  display: none;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 6px;
+  background: var(--kz-raised);
+  color: var(--kz-text);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+[class*="ChatUserMessage-module"][class*="__root"] .kz-del-btn { right: 40px; }
+[class*="ChatUserMessage-module"][class*="__root"] .kz-ban-btn { right: 74px; }
+
+[class*="ChatUserMessage-module"][class*="__root"]:hover :is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn),
+[class*="ChatUserMessage-module"][class*="__root"]:focus-within :is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn),
+[class*="ChatUserMessage-module"][class*="__root"].kz-tap :is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn) { display: grid; }
+
+:is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn):hover { border-color: var(--kz-accent); color: var(--kz-accent); }
+
+[class*="ChatUserMessage-module"][class*="__root"] .kz-ban-btn.kz-armed {
+  display: flex; align-items: center; gap: 4px; width: auto; padding: 0 8px;
+  background: #E5484D; border-color: #E5484D; color: #fff;
+}
+
+.kz-ban-q { font: 600 .8rem/1 var(--theme-text-body-font-family); white-space: nowrap; }
+:is(.kz-del-btn, .kz-ban-btn).kz-fail { border-color: #E5484D; color: #E5484D; }
+:is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn):focus-visible, .kz-rb-close:focus-visible { outline: 2px solid var(--kz-accent); outline-offset: 1px; }
+
+@media (pointer: coarse) {
+  [class*="ChatUserMessage-module"][class*="__root"] :is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn) { width: 44px; height: 44px; top: 50%; transform: translateY(-50%); }
+  [class*="ChatUserMessage-module"][class*="__root"] .kz-del-btn { right: 54px; }
+  [class*="ChatUserMessage-module"][class*="__root"] .kz-ban-btn { right: 102px; }
+}
+
+.kz-reply-to, .kz-rb-body {
+  display: flex;
+  align-items: center;
+  gap: .35em;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  color: var(--kz-dim);
+  font-size: .8em;
+  line-height: 1.5;
+}
+
+.kz-reply-to { margin-bottom: 1px; }
+.kz-reply-to b, .kz-rb-body b { color: var(--kz-text); font-weight: 700; }
+.kz-r-icon { display: inline-grid; flex: none; }
+.kz-r-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+
+/* the reply bar is a line of its own above the field, so the field does not move */
+.kz-replybar {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 6px 10px 0;
+  padding: 4px 4px 4px 10px;
+  border-left: 3px solid var(--kz-accent);
+  border-radius: 6px;
+  background: var(--kz-raised);
+}
+
+.kz-rb-body { flex: 1 1 auto; font-size: .85rem; }
+
+.kz-rb-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--kz-dim);
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.kz-rb-close:hover { background: #383838; color: var(--kz-accent); }
+@media (pointer: coarse) { .kz-rb-close { width: 44px; height: 44px; } }
+
+/* =================================================================================================================
+   chat: delete and ban result – a plate at the top of the chat for 6 s (custom.js «moderation»)
+   ================================================================================================================= */
+.kz-note {
+  position: absolute;
+  top: calc(var(--kz-chathead-h) + 8px);
+  left: 8px;
+  right: 8px;
+  z-index: 7;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 1px solid var(--kz-line-hi);
+  border-radius: 8px;
+  background: var(--kz-raised);
+  color: var(--kz-text);
+  font-size: .9rem;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .5);
+}
+
+.kz-note span { flex: 1 1 auto; }
+
+.kz-note button {
+  flex: none; padding: 4px 10px; border: 1px solid var(--kz-accent); border-radius: 6px;
+  background: transparent; color: var(--kz-accent); font: 600 .85rem/1.2 var(--theme-text-body-font-family); cursor: pointer;
+}
+
+@media (pointer: coarse) { .kz-note button { min-height: 44px; } }
+
+/* =================================================================================================================
+   chat: Twitch voice lost – a plate above the input (custom.js «reconnect»)
+   ================================================================================================================= */
+.kz-voicebar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 8px 6px;
+  padding: 8px 12px;
+  border: 1px solid #E5484D;
+  border-radius: 8px;
+  background: rgba(229, 72, 77, .12);
+  color: var(--kz-text);
+  font-size: .9rem;
+}
+
+.kz-voicebar span { flex: 1 1 auto; }
+
+.kz-vb-go {
+  flex: none; padding: 4px 10px; border-radius: 6px; background: var(--kz-accent); color: #000 !important;
+  font: 700 .85rem/1.2 var(--theme-text-body-font-family); text-decoration: none;
+}
+
+@media (pointer: coarse) { .kz-vb-go { min-height: 44px; display: inline-flex; align-items: center; } }

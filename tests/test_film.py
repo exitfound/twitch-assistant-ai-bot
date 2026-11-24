@@ -9,7 +9,7 @@ from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core import config
 from src.core.config import Film, Follow
 from src.twitch.core.commands import CommandContext, Kind
-from src.twitch.local import film
+from src.twitch.local.film import hall as film
 
 
 @pytest.fixture

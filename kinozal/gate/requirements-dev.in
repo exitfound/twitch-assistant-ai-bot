@@ -1,0 +1,6 @@
+# The gate's tests: the runtime set plus the test client and the Owncast chat websocket
+-c requirements.txt
+-r requirements.in
+pytest==9.2.0
+httpx==0.28.1
+websockets==17.4

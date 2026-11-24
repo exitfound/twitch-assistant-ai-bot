@@ -7,7 +7,8 @@ import pytest
 from fakes import FakeBot, make_chatter, make_message, chat_component
 from src.core import content
 from src.core.config import Film
-from src.twitch.local import film, film_bridge
+from src.twitch.local.film import bridge as film_bridge
+from src.twitch.local.film import hall as film
 
 
 @pytest.fixture
@@ -206,10 +207,27 @@ async def test_the_colour_and_the_emotes_reach_the_gate_with_the_line(db, bridge
     component = chat_component(FakeBot())
     await component.event_message(_twitch_message('кино Kappa', '#00ff7f', [('Kappa', '25')], [('vip', '1')]))
     assert queued_lines() == [{'body': 'texts.film_bridge_to_hall', 'color': '#00ff7f', 'emotes': {'Kappa': '25'},
-                               'badges': ['vip/1']}]
+                               'badges': ['vip/1'], 'login': 'fan'}]
 
 
 async def test_a_line_without_a_colour_or_emotes_sends_only_the_text(db, bridge):
     component = chat_component(FakeBot())
     await component.event_message(_twitch_message('кино'))
-    assert queued_lines() == [{'body': 'texts.film_bridge_to_hall', 'badges': []}]
+    assert queued_lines() == [{'body': 'texts.film_bridge_to_hall', 'badges': [], 'login': 'fan'}]
+
+
+async def test_the_login_goes_along_when_the_display_name_differs(db, bridge, monkeypatch):
+    # the gate keeps a hall ban by login, while the line carries the display name
+    seen = []
+    monkeypatch.setattr(content.Content, 'text', staticmethod(lambda key, **kw: seen.append(kw) or key))
+    message = _twitch_message('кино')
+    message.chatter = make_chatter('vasya')
+    message.chatter.display_name = 'Вася'
+    await chat_component(FakeBot()).event_message(message)
+    assert queued_lines()[0]['login'] == 'vasya'
+    assert seen[-1]['user'] == 'Вася'
+
+
+def test_a_line_without_a_login_carries_none(bridge):
+    film_bridge.from_twitch('Gopnik', 'привет')
+    assert 'login' not in queued_lines()[0]

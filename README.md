@@ -398,6 +398,8 @@ cd data && BOT_DB_PATH=chat_history.db ../venv/bin/python3 ../bot.py
 
 Службы переживают друг друга. Лежит игра – на `!roll`, `!rollstat`, `!rollboard` бот отвечает «Roll сейчас недоступен» (не чаще раза в 30 секунд одному зрителю), за выкуп возвращает баллы с той же причиной, а награды не поднимаются, пока игра не ответит (бот повторяет попытку сам). Лежит бот – игра пишет в лог, что реплика не ушла, оверлей продолжает работать. Лежит голос – бот не ждёт его: реплики, которые некому озвучить, выкидываются, в лог – одна строка. Без `DISCORD_TOKEN` служба голоса пишет в лог, чего не хватает, и ждёт. Перезапуск одной службы другие не трогает. Без `ROLL_URL` (так бот запускается с хоста) игры нет вовсе: ни команд, ни наград. Подробно – BOT.md, «Служба игры».
 
+Кинозал в эти службы не входит: его сервер (`kinozal/`) работает на своём хосте и выкатывается отдельно (`make -C kinozal deploy`), `make up` и `make restart` его не трогают. Перезапуск бота закрывает открытый сеанс кинозала; порядок выкатки бота и кинозала вместе – [docs/KINOZAL.md](docs/KINOZAL.md), «Эксплуатация».
+
 | Что | Где на хосте | Где в контейнере |
 |---|---|---|
 | Код и `docs/CONTENT.md` | корень проекта | `/app`, только чтение |
@@ -468,8 +470,23 @@ make lint     # ruff
 make test     # pytest: ~330 тестов за несколько секунд, без сети, Gemini и .env
 make check    # ruff + pytest – перед слиянием ветки
 make fix      # автоисправления ruff
-make audit    # известные уязвимости в requirements.txt и requirements-dev.txt (исключения для PyNaCl и transformers – в Makefile)
+make audit    # известные уязвимости в requirements*.txt бота (исключения для PyNaCl и transformers – в Makefile)
 make lock     # пересобрать requirements*.txt после правки requirements*.in
+```
+
+Сервер кинозала (`kinozal/`) – отдельный стек на своём хосте, и команды у него свои: `kinozal/Makefile`, из корня – `make -C kinozal <цель>`. Шлюз работает на Python 3.14, поэтому его проверки идут в контейнере `python:3.14-slim`, а корневые `make lint` и `make audit` его не касаются. Подробно – [docs/KINOZAL.md](docs/KINOZAL.md), «Эксплуатация» и «Проверка локально».
+
+```bash
+make -C kinozal check        # перед слиянием правки кинозала: ruff шлюза, shellcheck kinozal.sh, тесты шлюза
+make -C kinozal audit        # известные уязвимости в зависимостях шлюза
+make -C kinozal test         # тесты шлюза; с OWNCAST_URL и OWNCAST_ADMIN_PASSWORD – и тесты чата на локальном Owncast
+make -C kinozal lock         # пересобрать kinozal/gate/requirements*.txt после правки .in
+make -C kinozal deploy       # выкатить кинозал на его хост (доступ – KINOZAL_* в .env, домен – из FILM_URL)
+make -C kinozal setup        # все настройки Owncast (только без потока)
+make -C kinozal style        # только оформление сайта (можно в эфире)
+make -C kinozal status       # стек, сеанс и поток на сервере кинозала
+make -C kinozal link         # ссылка для дока с чатом кинозала в OBS
+make -C kinozal stream-key   # ключ потока для OBS
 ```
 
 Зависимости разложены по соглашению pip-tools. В `requirements.in` – прямые, то есть всё, что импортирует код, с закреплёнными версиями; `make lock` собирает из него `requirements.txt` – всё дерево с хешами. Так же `requirements-dev.in` собирается в `requirements-dev.txt`: pytest, ruff, pip-audit и pip-tools с хешами, а общие с ботом пакеты – в версиях бота (`-c requirements.txt`). Правят только `.in`, файлы `.txt` генерируются. Образ ставит только `requirements.txt`, поэтому новая версия пакета доходит до бота, только если пересобрать образ.
@@ -632,6 +649,10 @@ docker compose run --rm bot /app/bot.py --lore-sources
 | `FILM_BRIDGE` | `false` | Мост чатов, пока открыт сеанс: строки чата Twitch, включая ответы бота, уходят в чат кинозала. Обратное направление ведёт шлюз кинозала: строки вошедших через Twitch он шлёт в Twitch от имени зрителя, с меткой `FILM_HALL_MARK` в начале; команды и обращения к боту из кинозала работают как в Twitch. Подробно – BOT.md, «Мост чатов кинозала» |
 | `FILM_REMIND_MINUTES` | `15` | Пока сеанс открыт, бот сам повторяет в чате ссылку, код и название раз в столько минут; первый раз – через столько же после объявления старта. `0` – не повторять |
 | `FILM_HALL_MARK` | `🎬 [KZ]` | Метка строки из кинозала в Twitch (`HALL_MARK` шлюза): такие строки бот в кинозал не возвращает. Пустое значение – ни одна строка не считается строкой из кинозала |
+| `KINOZAL_HOST` | – | Только для `kinozal/kinozal.sh`, бот не читает: вход по SSH на сервер кинозала – `user@host` или имя хоста из `~/.ssh/config`. Домен сервера скрипт берёт из `FILM_URL`, токен – из `FILM_API_TOKEN`, канал – из `TWITCH_CHANNEL` |
+| `KINOZAL_KEY` | – | Только для `kinozal/kinozal.sh`: путь к ключу SSH; пусто – ключ из ssh-agent или `~/.ssh/config` |
+| `KINOZAL_DIR` | `/opt/kinozal` | Только для `kinozal/kinozal.sh`: каталог кинозала на сервере |
+| `KINOZAL_TWITCH_CLIENT_ID`, `KINOZAL_TWITCH_CLIENT_SECRET` | – | Только для `kinozal/kinozal.sh`: своё приложение Twitch для входа в кинозал (не бота), Redirect URL `<FILM_URL>/_gate/twitch/callback`. Пусто – вход только по коду |
 | `STREAM_RESUME_MINUTES` | `15` | Стрим оборвался и снова пошёл за столько минут – это тот же эфир. `0` – всегда новый |
 | `REWARDS_ENABLED` | `true` | Награды за баллы канала. Без токена канала не работают; если бот уже создавал награды (токен был и Twitch его отозвал), раз за эфир пишет об этом в чат. `false` – ни наград, ни ссылки для входа, ни сообщения |
 | `REWARD_COST_EXTRA` | `100` | Цена доп. ролла, баллов |
@@ -758,6 +779,8 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   ├── BOT.md             # Подробный справочник: как устроена каждая механика
 │   ├── CONTENT.md         # Всё, что произносит бот: промпты, ответы в чат, эмоты, фоловы, стоп-лист (hot-reload)
 │   ├── index.html         # Карта бота: разделы, лимиты и паузы по статусу зрителя, публикуется make pages
+│   ├── KINOZAL.md         # Сервер кинозала: шлюз, мост чатов, страница и чат, конфиг, выкатка, проверка, хостинг
+│   ├── KINOZAL-OBS.md     # Кинозал в OBS: порядок киновечера, Branch Output, дорожки звука, заглушка, настройка
 │   ├── .nojekyll          # GitHub Pages отдаёт docs/ как есть, без сборки Jekyll
 │   └── TTS.md             # TTS-сервер для голоса в Discord: модель, установка, профили, запуск, API, диагностика
 ├── src/
@@ -817,14 +840,15 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │   │   │   ├── commands.py    # !help, !bot, !stat
 │   │   │   ├── channel.py     # Команды канала (!tg …) из секции channel в CONTENT.md, !channel
 │   │   │   ├── clip.py        # !clip: клип последних секунд эфира, ожидание, ссылка в чат
-│   │   │   ├── film.py        # !film: ссылка, код и название фильма кинозала, старт, смена названия и стоп сеанса через его шлюз
-│   │   │   ├── film_bridge.py # Мост чата Twitch в кинозал, пока открыт сеанс
 │   │   │   ├── schedule.py    # !schedule: ближайший стрим из расписания канала на Twitch
 │   │   │   ├── project.py     # !project: над чем идёт работа, текст задаёт стример
 │   │   │   ├── lastseen.py    # !lastseen: когда зритель последний раз писал в чат
 │   │   │   ├── follow.py      # Ответ на новый фолов
 │   │   │   ├── emote_spam.py  # Спам эмотами раз в интервал
 │   │   │   ├── help_announce.py # Напоминание о командах раз в интервал
+│   │   │   ├── film/          # Кинозал со стороны бота; сервер кинозала – kinozal/
+│   │   │   │   ├── hall.py      # !film: ссылка, код и название, старт, смена названия и стоп сеанса через шлюз, отметка, напоминание
+│   │   │   │   └── bridge.py    # Мост чата Twitch в кинозал, пока открыт сеанс
 │   │   │   └── mascot/        # Оверлей маскота в OBS по настроению чата
 │   │   │       ├── mood.py      # Правило: разные пишущие за окно – поза, спад по ступеням
 │   │   │       └── feed.py      # Поток настроения для страницы в OBS и цикл пересчёта
@@ -869,9 +893,23 @@ docker compose run --rm bot /app/bot.py --lore-sources
 │       ├── probe.py         # --probe-context: замер контекста и настроек генерации на реальных обращениях
 │       ├── knowledge.py     # Лор: парсинг txt, импорт, очистка
 │       └── emotes.py        # Синк эмотов из Twitch API в CONTENT.md
+├── kinozal/                 # Сервер кинозала – свой стек на своём хосте, в образ бота не входит (docs/KINOZAL.md)
+│   ├── docker-compose.yml   # Стек kinozal: Owncast, шлюз, Caddy
+│   ├── Makefile             # Команды кинозала: проверки, выкатка, настройка (make -C kinozal help)
+│   ├── ruff.toml            # Правила ruff для шлюза (Python 3.14)
+│   ├── .prettierrc.json     # Формат JavaScript кинозала (Prettier)
+│   ├── gate/                # Шлюз (FastAPI, Python 3.14): вход через Twitch и код, API сеанса для бота, мост чатов, баны
+│   │   ├── app.py
+│   │   ├── test_app.py      # Тесты шлюза: make -C kinozal test
+│   │   ├── requirements.in  # Свои зависимости шлюза; make -C kinozal lock собирает .txt с хешами
+│   │   └── Dockerfile
+│   ├── caddy/Caddyfile      # TLS, закрытая админка Owncast, forward_auth на шлюз
+│   ├── owncast/             # Оформление сайта: custom.css, custom.js, аватар, логотип
+│   ├── kinozal.sh           # Эксплуатация с рабочей машины: deploy, setup, style, status, link, stream-key
+│   └── tools/               # Проверки страницы в Playwright: раскладка, автопрокрутка, модерация
 ├── Dockerfile               # Двухстадийная сборка: зависимости и libopus в slim, итог на distroless
 ├── docker-compose.yml       # Три службы из одного образа – bot, roll и voice: тома, порты, политика перезапуска, ротация логов
-├── .dockerignore            # Секреты и данные в образ не попадают
+├── .dockerignore            # Секреты, данные и kinozal/ в образ не попадают
 ├── data/                    # Изменяемое состояние: база и токены (не коммитится)
 ├── requirements.in          # Прямые зависимости, версии закреплены: twitchio, discord.py[voice], aiohttp, google-genai, python-dotenv, aiosqlite, httpx, Pillow, numpy, ruaccent, transformers
 ├── requirements.txt         # Собран из .in (make lock): полный набор с хешами – его ставит образ
@@ -879,10 +917,10 @@ docker compose run --rm bot /app/bot.py --lore-sources
 ├── requirements-dev.txt     # Собран из requirements-dev.in с хешами, в версиях бота
 ├── tests/                   # pytest: игра (tests/roll/, вместе с вызовами между службами по HTTP), диспетчер, контекст, вывод, Gemini-слой на заглушках, память, CLI, !ascii, !clip, !film
 ├── pyproject.toml           # Только настройки инструментов: ruff, pytest
-├── Makefile                 # Повседневные команды: venv, lint, test, check, audit, lock, up, logs, backup
+├── Makefile                 # Повседневные команды: venv, lint, test, check, audit, lock, up, logs, backup (у кинозала свой – kinozal/Makefile)
 ├── .env                     # Секреты и настройки (не коммитится)
 ├── .env.example             # Шаблон .env со всеми переменными (только числа и флаги, текстов нет)
-└── .gitignore               # Исключает .env, venv/, __pycache__/, data/ и файлы базы
+└── .gitignore               # Исключает .env, venv/, __pycache__/, data/, файлы базы и секреты кинозала
 ```
 
 Куда класть новое: сначала служба или платформа, потом вид. Общее (база, конфиг, тексты, мозг Gemini, CLI, вызовы между службами) – в `src/core/`, `src/gemini/`, `src/cli/`, и оно не импортирует ни платформ, ни служб; одно исключение – память бота читает итоги игры из `roll/storage.py`. Всё, что завязано на платформу, – в её пакете (`src/twitch/`, `src/discord/`); в Twitch команда с генерацией – в `twitch/gemini/`, небольшая команда без Gemini – в `twitch/local/`, фича со своими таблицами, текстами и фоновыми задачами – в подпапку внутри своего пакета, как `twitch/local/mascot/`. Фича, выросшая в отдельную службу, – в `src/<служба>/` со своей точкой входа и своим контейнером, как игра `src/roll/`; службы друг друга не импортируют и говорят только через внутренние API. `twitch/core/` от фич не зависит, кроме диспетчера, который регистрирует их команды.
@@ -894,6 +932,7 @@ docker compose run --rm bot /app/bot.py --lore-sources
 - [docs/BOT.md](docs/BOT.md) – как устроена каждая механика, с числами и причинами
 - [docs/CONTENT.md](docs/CONTENT.md) – все тексты и промпты бота
 - [docs/TTS.md](docs/TTS.md) – TTS-сервер для голоса в Discord: установка, запуск, диагностика
+- [docs/KINOZAL.md](docs/KINOZAL.md) – сервер кинозала (`kinozal/`): шлюз, сайт и чат, выкатка; [docs/KINOZAL-OBS.md](docs/KINOZAL-OBS.md) – кинозал в OBS
 - [Карта бота](https://exitfound.github.io/twitch-assistant-ai-bot/) – лимиты и паузы по статусу зрителя, на GitHub Pages
 - [CLAUDE.md](CLAUDE.md) – правила для кода и документации
 

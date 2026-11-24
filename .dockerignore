@@ -16,4 +16,5 @@ backups/
 venv/
 __pycache__/
 tests/
+kinozal/
 ruaccent/

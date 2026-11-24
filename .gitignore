@@ -20,3 +20,6 @@ chat_history.backup-*.db
 .ruff_cache/
 .pytest_cache/
 logs/
+
+# The cinema hall (kinozal/): Playwright screenshots
+kinozal/tools/shots/

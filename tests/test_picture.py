@@ -152,7 +152,7 @@ async def test_whole_download_has_a_deadline(monkeypatch):
     monkeypatch.setattr(fetch, '_check_url', ok)
     monkeypatch.setattr(fetch, '_get', drip)
     monkeypatch.setattr(fetch.Picture, 'TIMEOUT', 0.05)
-    # The test's own deadline: without the fix it would hang instead of failing
+    # The test's own deadline: a download that ignores the timeout fails here instead of hanging
     async with asyncio.timeout(2):
         with pytest.raises(PictureError) as error:
             await fetch.fetch('https://93.184.216.34/slow.png')
@@ -274,8 +274,7 @@ def _ascii_ctx(bot=None):
 
 
 async def test_unexpected_error_answers_the_viewer(db, monkeypatch):
-    """An error outside the expected refusals went to twitchio's log, and the viewer who
-    paid a quota slot got silence."""
+    """An error outside the expected refusals gets an answer in chat: the viewer paid a quota slot."""
     async def broken(url):
         raise RuntimeError('pillow exploded')
     monkeypatch.setattr(command, 'fetch', broken)

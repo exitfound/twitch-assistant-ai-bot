@@ -1,7 +1,7 @@
 """A chat answer turned into text the Russian TTS model reads well.
 
-The server's own normalization is English (@ → «at», digits → English numbers) and is
-what gave the voice an American accent, so it is off and the text is prepared here:
+The server's own normalization is English (@ → «at», digits → English numbers) and gives
+the voice an American accent, so it is off and the text is prepared here:
 nicks and other Latin words in Cyrillic, emotes and links out, CAPS to normal case,
 numbers to Russian words.
 """

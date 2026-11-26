@@ -122,8 +122,8 @@ async def test_clear_memory_dry_run_deletes_nothing(db, capsys):
 
 
 async def test_lore_import_commits_in_batches(db, monkeypatch):
-    """One transaction for a big import held the write lock for ~16 s, and the running
-    bot's chat inserts failed with «database is locked» after SQLite's 5 s wait."""
+    """A big import commits in batches. One transaction would hold the write lock for ~16 s,
+    longer than SQLite's 5 s wait of the running bot's chat inserts."""
     monkeypatch.setattr(knowledge, 'IMPORT_BATCH', 2)
     commits = 0
     real_commit = db.commit
@@ -237,7 +237,7 @@ def test_no_arguments_mean_run_the_bot():
     ('telegram', json.dumps({'chats': {'list': [{'messages': [{'type': 'message', 'text': 5}]}, 'x']}}).encode()),
 ])
 def test_malformed_lore_is_a_clear_error(tmp_path, fmt, content):
-    """A wrong encoding or an unexpected export shape printed a raw traceback."""
+    """A wrong encoding or an unexpected export shape is a clear error, not a traceback."""
     path = tmp_path / 'lore.bin'
     path.write_bytes(content)
     with pytest.raises(LoreError):

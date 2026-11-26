@@ -145,7 +145,7 @@ def _not_found() -> twitchio.HTTPException:
 
 
 async def test_one_broken_reward_does_not_stop_the_pause_of_the_rest(db, twitch):
-    """The first reward deleted by hand left every one after it open while offline."""
+    """A reward deleted by hand does not keep the ones after it open while offline."""
     service, _, broadcaster = twitch
     await service.start('chan', open_=True)
     first, second = list(service._actions)[:2]

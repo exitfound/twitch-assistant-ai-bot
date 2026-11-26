@@ -227,7 +227,7 @@ class Bot(commands.Bot):
 
     async def event_ready(self) -> None:
         self.install_signal_handlers()
-        # twitchio fetched the bot's user at login, failing the start if it could not.
+        # twitchio fetches the bot's user at login and fails the start if it cannot.
         # ready fires once per start: an error escaping here would leave the bot deaf
         self._bot_name = getattr(self.user, 'name', None)
         if not self._bot_name:

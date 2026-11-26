@@ -393,8 +393,8 @@ async def _indexes(db: aiosqlite.Connection) -> None:
     await db.execute(
         'CREATE INDEX IF NOT EXISTS idx_bot_interactions_username ON bot_interactions(username)'
     )
-    # Always created: the dedup guarantee must not depend on whether the facts table
-    # itself was built with UNIQUE(username, fact).
+    # Always created: the dedup guarantee must not depend on whether an existing facts
+    # table carries UNIQUE(username, fact).
     await db.execute(
         'CREATE UNIQUE INDEX IF NOT EXISTS idx_facts_username_fact ON facts(username, fact)'
     )

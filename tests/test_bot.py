@@ -29,8 +29,7 @@ from src.twitch.core.port import BotPort, StreamBot
     (KeyError('no token for this user'), True),
 ])
 def test_oauth_hint_only_for_token_problems(error, hint):
-    """A network error or a 5xx printed «no token, log in here» and sent the owner to
-    re-authorise for nothing."""
+    """Only a token problem prints «log in here». A network error or a 5xx is not one."""
     assert tokens.token_problem(error) is hint
 
 
@@ -340,7 +339,7 @@ async def test_a_revoked_channel_token_stops_the_rewards_and_tells_the_chat_once
 
 
 async def test_a_failed_reward_start_is_retried_until_it_works(live_bot, monkeypatch):
-    """A Twitch blip at start left the rewards dead, and maybe open, until a restart."""
+    """A Twitch blip at start must not leave the rewards dead, and maybe open, until a restart."""
     monkeypatch.setattr(adapter_module, 'REWARDS_RETRY_SECONDS', 0)
     live_bot._game.broadcaster_token = True
     blips = [aiohttp.ClientConnectionError('down'), aiohttp.ClientConnectionError('down')]

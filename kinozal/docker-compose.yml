@@ -1,0 +1,58 @@
+name: kinozal
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  owncast:
+    image: owncast/owncast:0.3.0
+    restart: unless-stopped
+    command: ["-adminpassword", "${OWNCAST_ADMIN_PASSWORD:?}", "-streamkey", "${OWNCAST_STREAM_KEY:?}"]
+    ports:
+      - "1935:1935"
+      - "127.0.0.1:8080:8080"
+    volumes:
+      - owncast-data:/app/data
+    logging: *logging
+
+  gate:
+    build: ./gate
+    restart: unless-stopped
+    environment:
+      GATE_SECRET: ${GATE_SECRET:?}
+      GATE_API_TOKEN: ${GATE_API_TOKEN:?}
+      GATE_CODE_LEN: ${GATE_CODE_LEN:-4}
+      GATE_LEASE_SECONDS: ${GATE_LEASE_SECONDS:-180}
+      TWITCH_CLIENT_ID: ${TWITCH_CLIENT_ID:-}
+      TWITCH_CLIENT_SECRET: ${TWITCH_CLIENT_SECRET:-}
+      TWITCH_CHANNEL: ${TWITCH_CHANNEL:?}
+      GATE_PUBLIC_URL: https://${KINOZAL_DOMAIN:?}
+      OWNCAST_ADMIN_PASSWORD: ${OWNCAST_ADMIN_PASSWORD:?}
+    volumes:
+      - gate-data:/data
+    logging: *logging
+
+  caddy:
+    image: caddy:2.11.9-alpine
+    restart: unless-stopped
+    depends_on: [gate, owncast]
+    environment:
+      KINOZAL_DOMAIN: ${KINOZAL_DOMAIN:?}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./caddy:/etc/caddy:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    logging: *logging
+
+volumes:
+  owncast-data:
+  gate-data:
+  caddy-data:
+  caddy-config:

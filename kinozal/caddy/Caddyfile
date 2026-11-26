@@ -1,0 +1,63 @@
+{
+	servers {
+		timeouts {
+			read_header 10s
+		}
+	}
+}
+
+{$KINOZAL_DOMAIN} {
+	header {
+		-Server
+		-Via
+		Cache-Control public private
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		X-Frame-Options DENY
+		Cross-Origin-Opener-Policy same-origin
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		X-Robots-Tag "noindex, nofollow"
+		Referrer-Policy no-referrer
+	}
+
+	request_body {
+		max_size 1MB
+	}
+
+	# --- Owncast admin and integrations ---
+	# Admin is reachable only through an SSH tunnel to 127.0.0.1:8080.
+	# The gate calls the integrations API inside the compose network, viewers never do.
+	# A bare respond would run after the handle blocks and never apply, hence handle
+	@internal path /admin* /api/admin* /api/integrations*
+	handle @internal {
+		respond 404
+	}
+
+	# --- code login ---
+	handle /_gate/* {
+		reverse_proxy gate:8000
+	}
+
+	handle /robots.txt {
+		respond "User-agent: *
+Disallow: /
+"
+	}
+
+	handle {
+		forward_auth gate:8000 {
+			uri /_gate/auth
+			header_up -Connection
+			header_up -Upgrade
+		}
+		reverse_proxy owncast:8080 {
+			header_down -Access-Control-Allow-Origin
+		}
+	}
+}
+
+# The redirect Caddy makes on its own sends Server: Caddy. ACME HTTP challenges are still answered here
+http://{$KINOZAL_DOMAIN} {
+	header -Server
+	redir https://{host}{uri} 308
+}

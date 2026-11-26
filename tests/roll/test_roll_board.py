@@ -345,3 +345,54 @@ async def test_the_drawn_place_has_its_own_text(db, monkeypatch):
                         else f"{kw.get('champions', '')}|{kw.get('losers', '')}")
     assert board.text(result, final=True) == ('rollboard_place_drawn:b, rollboard_place:a|'
                                               'rollboard_place_drawn:mid, rollboard_place:gop')
+
+
+async def both_titles_to_one():
+    """m is the month's champion ×3 and its подзалупный ×2."""
+    await stream('2026-09-01 20:00', {'m': 99, 'a': 1})
+    await stream('2026-09-02 20:00', {'m': 98, 'b': 2})
+    await stream('2026-09-03 20:00', {'m': 97, 'c': 3})
+    await stream('2026-09-04 20:00', {'m': 1, 'd': 90})
+    await stream('2026-09-05 20:00', {'m': 2, 'e': 80})
+
+
+def coin(monkeypatch, kept: str) -> None:
+    """The coin keeps the title named; a lot among nicks takes the last of the tie."""
+    monkeypatch.setattr(board.random, 'choice', lambda items: kept if kept in items else items[-1])
+
+
+async def test_a_nick_winning_both_titles_keeps_one_and_leaves_the_other_table(db, monkeypatch):
+    await both_titles_to_one()
+    coin(monkeypatch, 'champion')
+    result = await board.final('2026-09')
+    assert names(result.champions) == [('m', 3, 1), ('d', 1, 2), ('e', 1, 3)]
+    # Without m the подзалупные tie, and the lot settles it as any tie
+    assert names(result.losers) == [('c', 1, 1), ('a', 1, 2), ('b', 1, 3)]
+    assert [p.drawn for p in result.losers.places] == [True, False, False]
+    assert json.loads(await get_state('roll_board_winners:2026-09')) == {
+        'champion': 'm', 'loser': 'c', 'without': {'loser': 'm'}}
+    # The kept draw shows the same board on every later read
+    monkeypatch.setattr(board.random, 'choice', lambda items: pytest.fail('drawn twice'))
+    again = await board.final('2026-09')
+    assert again.champions == result.champions and again.losers == result.losers
+
+
+async def test_the_coin_may_keep_the_loser_title_and_give_the_champion_to_the_rest(db, monkeypatch):
+    await both_titles_to_one()
+    coin(monkeypatch, 'loser')
+    result = await board.final('2026-09')
+    assert names(result.champions) == [('e', 1, 1), ('d', 1, 2)]
+    assert names(result.losers) == [('m', 2, 1), ('a', 1, 2), ('b', 1, 3)]
+
+
+async def test_one_nick_in_both_titles_holds_only_for_the_month_on_the_way(db):
+    await both_titles_to_one()
+    result = await board.standings('2026-09')
+    assert names(result.champions)[0] == ('m', 3, 1) and names(result.losers)[0] == ('m', 2, 1)
+
+
+async def test_kept_winners_without_a_left_out_nick_stand_as_drawn(db):
+    await both_titles_to_one()
+    await board.set_state('roll_board_winners:2026-09', json.dumps({'champion': 'm', 'loser': 'm'}))
+    result = await board.final('2026-09')
+    assert names(result.champions)[0] == ('m', 3, 1) and names(result.losers)[0] == ('m', 2, 1)

@@ -1,4 +1,4 @@
-"""!film – the cinema hall's link, session code and film title (BOT.md «Шаг 7и»).
+"""!film – the cinema hall's link, session code and film title (docs/KINOZAL.md «Команда !film»).
 
 The session, its code and title live in the hall's gate (`FILM_URL`/_gate/api/session); the bot
 reads and changes them only through it. A session lives while the bot does: heartbeat_loop()

@@ -27,7 +27,9 @@ from src.gemini.memory import build as memory
 from src.twitch.gemini.proactive import proactive_loop
 from src.twitch.gemini.pulse import pulse_loop
 from src.twitch.local.emote_spam import emote_spam_loop
-from src.twitch.local import clip, film, film_bridge
+from src.twitch.local import clip
+from src.twitch.local.film import bridge as film_bridge
+from src.twitch.local.film import hall as film
 from src.twitch.local import schedule
 from src.twitch.local.help_announce import help_loop
 from src.twitch.local.mascot import feed as mascot_feed
@@ -225,7 +227,7 @@ class Bot(commands.Bot):
 
     async def event_ready(self) -> None:
         self.install_signal_handlers()
-        # twitchio fetched the bot's user at login, failing the start if it could not.
+        # twitchio fetches the bot's user at login and fails the start if it cannot.
         # ready fires once per start: an error escaping here would leave the bot deaf
         self._bot_name = getattr(self.user, 'name', None)
         if not self._bot_name:

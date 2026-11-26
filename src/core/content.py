@@ -50,7 +50,6 @@ REQUIRED = {
         'help', 'help_channel', 'help_channel_empty', 'channel_reply', 'help_announce',
         'schedule', 'schedule_slot', 'schedule_vacation', 'schedule_empty', 'schedule_failed',
         'project', 'project_none', 'project_set', 'project_usage', 'project_too_long',
-        'lastseen', 'lastseen_unknown', 'lastseen_usage', 'lastseen_today', 'lastseen_yesterday', 'lastseen_date',
         'discord_help', 'discord_no_rights',
         'stats_self', 'stats_self_day', 'stats_stream', 'stats_day',
         'stats_total', 'stats_user', 'stats_user_day', 'stats_unknown',

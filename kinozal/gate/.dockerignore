@@ -1,0 +1,2 @@
+# The image takes src/gate/ only; bytecode from a local run stays out
+**/__pycache__

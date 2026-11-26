@@ -12,7 +12,8 @@ license = "MIT"
 [tool.ruff]
 line-length = 120
 target-version = "py311"
-extend-exclude = ["venv"]
+# kinozal/ has its own rules for the gate's Python 3.14 (kinozal/gate/pyproject.toml, make -C kinozal lint)
+extend-exclude = ["venv", "kinozal"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "B", "UP", "SIM", "RUF", "ASYNC", "C4", "PERF"]

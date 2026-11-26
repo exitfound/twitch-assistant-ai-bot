@@ -190,7 +190,7 @@ async def test_help_channel_fills_the_list(db, component):
     message = make_message('!channel', make_chatter('gop'))
     await component.event_message(message)
     # The file's commands in file order, then the registered channel commands
-    message.respond.assert_awaited_once_with('@gop – !tg | !donate | !schedule | !project | !lastseen')
+    message.respond.assert_awaited_once_with('@gop – !tg | !donate | !schedule | !project')
 
 
 async def test_help_channel_without_commands(db):

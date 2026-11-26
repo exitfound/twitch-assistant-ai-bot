@@ -42,7 +42,9 @@ from src.gemini import client, fact_rest, pulse
 from src.twitch.gemini import commands
 from src.gemini.memory import build
 from src.twitch.gemini import picture as picture_command
-from src.twitch.local import clip, film, film_bridge, follow, help_announce, schedule
+from src.twitch.local import clip, follow, help_announce, schedule
+from src.twitch.local.film import bridge as film_bridge
+from src.twitch.local.film import hall as film
 from src.twitch.local.mascot import feed as mascot_feed
 from src.twitch.local.mascot import mood as mascot_mood
 from src.roll import game, perks, tiers

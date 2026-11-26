@@ -1,4 +1,5 @@
 # Everyday commands. There is no CI: `make check` is what runs before a merge.
+# The cinema hall has its own: kinozal/Makefile (make -C kinozal help).
 PY := ./venv/bin/python3
 
 .PHONY: venv lint fix test check audit lock up restart logs backup oauth pages
@@ -42,7 +43,7 @@ lock:
 up:
 	docker compose up -d --build
 
-# The services to restart or follow: all by default, one with S=bot, S=roll or S=voice
+# The bot's services to restart or follow: all by default, one with S=bot, S=roll or S=voice
 S ?= bot roll voice
 
 restart:

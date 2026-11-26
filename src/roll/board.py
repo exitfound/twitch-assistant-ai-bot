@@ -7,8 +7,9 @@ does not count until it is over, and the streamer, who throws without limit, is 
 if they never threw. A stream where a single viewer played gives no titles: there was no rival.
 The month is the one the stream started in, and a new month begins with its first stream. While
 the month goes on, a tie on the first place shares it; once it is over, one of the tied wins by lot,
-drawn once and kept, so the month always has one китежанин and one подзалупный. Below the first
-place whoever reached the count first takes the place.
+drawn once and kept, so the month always has one китежанин and one подзалупный, never the
+same nick: one who wins both keeps one by a coin, the other goes to the best of the rest.
+Below the first place whoever reached the count first takes the place.
 The first !roll of a month's first stream announces the previous month's results once, in
 chat and on the stream.
 """
@@ -152,18 +153,44 @@ async def final(month: str) -> Board:
         sessions, champions, losers = await _tables(month, None)
         if not sessions:
             return Board(month, (), Top(()), Top(()))
+        tables = {'champion': champions, 'loser': losers}
         saved = await get_state(DRAW_KEY.format(month=month))
         if saved is not None:
             winners = json.loads(saved)
         else:
-            tied = {'champion': _tied(champions), 'loser': _tied(losers)}
-            winners = {kind: random.choice(nicks) if nicks else None for kind, nicks in tied.items()}
+            winners = _draw(month, tables)
             await set_state(DRAW_KEY.format(month=month), json.dumps(winners))
-            for kind, nicks in tied.items():
-                if len(nicks) > 1:
-                    logger.info('Жребий за %s (%s): %s из %s', month, kind, winners[kind], ', '.join(nicks))
+        for kind, nick in winners.get('without', {}).items():
+            tables[kind].pop(nick, None)
     return Board(month, tuple(sessions), _top(champions, winners.get('champion')),
                  _top(losers, winners.get('loser')))
+
+
+def _draw(month: str, tables: dict[str, dict[str, Place]]) -> dict:
+    """The month's winners: a tie by lot, and never one nick for both titles.
+
+    A nick that wins both keeps one by a coin, and the other title goes to the first place
+    of its table without them, as a stream's champion is the best of the rest. without –
+    the nick left out of that table, so every later read shows the same board.
+    """
+    def lot(kind: str, table: dict[str, Place]) -> str | None:
+        nicks = _tied(table)
+        if not nicks:
+            return None
+        winner = random.choice(nicks)
+        if len(nicks) > 1:
+            logger.info('Жребий за %s (%s): %s из %s', month, kind, winner, ', '.join(nicks))
+        return winner
+
+    winners: dict = {kind: lot(kind, table) for kind, table in tables.items()}
+    nick = winners['champion']
+    if nick is not None and nick == winners['loser']:
+        kept = random.choice(tuple(tables))
+        other = next(kind for kind in tables if kind != kept)
+        winners[other] = lot(other, {n: p for n, p in tables[other].items() if n != nick})
+        winners['without'] = {other: nick}
+        logger.info('Оба титула за %s у %s: остаётся %s, %s – у %s', month, nick, kept, other, winners[other])
+    return winners
 
 
 async def current(session_id: str, live: bool) -> tuple[Board, bool]:

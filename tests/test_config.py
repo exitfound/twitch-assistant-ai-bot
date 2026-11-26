@@ -6,7 +6,7 @@ from src.core.utils import safe_format
 
 
 def test_swapped_roll_bounds_are_put_right(monkeypatch):
-    """ROLL_MIN above ROLL_MAX made every throw crash in randint()."""
+    """ROLL_MIN above ROLL_MAX is swapped, or every throw would crash in randint()."""
     monkeypatch.setenv('ROLL_MIN', '50')
     monkeypatch.setenv('ROLL_MAX', '10')
     assert config._env_ordered(('ROLL_MIN', 1, 1, 1000), ('ROLL_MAX', 100, 2, 1000)) == (10, 50)

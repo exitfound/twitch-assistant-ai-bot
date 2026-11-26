@@ -1,9 +1,8 @@
-// Chat moderation check (custom.js «moderation»), on the Russian page (a ru-RU browser): row buttons "Delete" and
-// "Ban" (second click, on a decorated row from Twitch), the result plate, the hidden "…" menu, no ban on a "Twitch"
-// row; the "Bans" button with a count and its window with "Unban"; the "Reconnect" plate when the gate reports
-// voice: false («reconnect»). The gate is stubbed through page.route. Needs a local oc-test with a stream and the
-// styling uploaded.
-// Usage: node tools/moderation.cjs [firefox]; screenshots go to tools/shots/.
+// Checks chat moderation (custom.js «moderation» and «reconnect») on the Russian page.
+// Covers the "Delete" and "Ban" row buttons, the result plate, the hidden "…" menu and the "Bans" window.
+// A "Twitch" row has no ban button. The "Reconnect" plate shows when the gate reports voice: false.
+// The gate is stubbed with page.route. Needs a local oc-test with a stream and the styling uploaded.
+// Usage: node tools/moderation.cjs [firefox]. Screenshots go to tools/shots/.
 const pw = require(process.env.PLAYWRIGHT_PATH || "playwright");
 
 const OC = "http://127.0.0.1:18080",
@@ -30,7 +29,7 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
 
 (async () => {
   // =================================================================================================================
-  // page: a Russian browser; the gate stubbed – the banned list, the voice flag, unban requests
+  // page: a Russian browser, the gate stubbed (bans, the voice flag, unban requests)
   // =================================================================================================================
   const b = await pw[engine].launch();
   const p = await (await b.newContext({ viewport: { width: 1600, height: 900 }, locale: "ru-RU" })).newPage();
@@ -92,15 +91,15 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
   let rows = [];
 
   for (let t = 0; t < 20; t++) {
-    await send(tw.accessToken, "строка " + t);
+    await send(tw.accessToken, "line " + t);
     await p.waitForTimeout(700);
     rows = await p.$$('[class*="ChatUserMessage-module"][class*="__root"]:has([class*="__modMenuWrapper"])');
     if (rows.length >= 3) break;
   }
 
-  await send(tw.accessToken, "удали меня " + stamp);
-  await send(bot.accessToken, "someone: строка через Twitch " + stamp);
-  await send(tw.accessToken, "последняя " + stamp);
+  await send(tw.accessToken, "delete me " + stamp);
+  await send(bot.accessToken, "someone: a line via Twitch " + stamp);
+  await send(tw.accessToken, "the last one " + stamp);
   await p.waitForTimeout(2500);
 
   const rowBy = async (text) => {
@@ -113,7 +112,7 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
   // =================================================================================================================
   // 1. row buttons on hover, Owncast's "…" menu hidden, no ban on a "Twitch" row
   // =================================================================================================================
-  let row = await rowBy("последняя " + stamp);
+  let row = await rowBy("the last one " + stamp);
   await row.hover();
   await p.waitForTimeout(300);
   const vis = (sel) => row.$eval(sel, (e) => getComputedStyle(e).display).catch(() => "missing");
@@ -122,7 +121,7 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
     (await vis(".kz-reply-btn")) === "grid" &&
       (await vis(".kz-del-btn")) === "grid" &&
       (await vis(".kz-ban-btn")) === "grid",
-    "стрелка, удалить, забанить видны при наведении"
+    "reply, delete and ban show on hover"
   );
 
   const mm = await vis('[class*="__modMenuWrapper"]');
@@ -134,34 +133,34 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
     })
     .catch(() => "-");
 
-  ok(mm === "none" || mmBox === "0x0", "меню «…» скрыто (" + mm + ", " + mmBox + ")");
+  ok(mm === "none" || mmBox === "0x0", "the «…» menu is hidden (" + mm + ", " + mmBox + ")");
   await p.screenshot({ path: D + "-hover.png", clip: { x: 1220, y: 40, width: 380, height: 860 } });
-  const twitchRow = await rowBy("строка через Twitch " + stamp);
+  const twitchRow = await rowBy("a line via Twitch " + stamp);
 
   ok(
     twitchRow && !(await twitchRow.$(".kz-ban-btn")) && !!(await twitchRow.$(".kz-del-btn")),
-    "у строки «Twitch» нет бана, удаление есть"
+    "a «Twitch» line has delete but no ban"
   );
 
   // =================================================================================================================
-  // 2. delete: the message hidden in Owncast and gone from the feed
+  // 2. delete: hidden in Owncast and gone from the feed
   // =================================================================================================================
-  row = await rowBy("удали меня " + stamp);
+  row = await rowBy("delete me " + stamp);
   await row.hover();
   await (await row.$(".kz-del-btn")).click();
   await p.waitForTimeout(1500);
 
   const hidden = (await j("GET", "/api/admin/chat/messages", null, { Authorization: auth })).find((m) =>
-    (m.body || "").includes("удали меня " + stamp)
+    (m.body || "").includes("delete me " + stamp)
   );
 
-  ok(hidden && hidden.hiddenAt, "сообщение скрыто в Owncast");
-  ok(!(await rowBy("удали меня " + stamp)), "строка ушла из ленты");
+  ok(hidden && hidden.hiddenAt, "the message is hidden in Owncast");
+  ok(!(await rowBy("delete me " + stamp)), "the row left the feed");
 
   // =================================================================================================================
-  // 3. ban: the first press arms and resets after 3 s, the second bans the author; the result plate
+  // 3. ban: the first press arms for 3 s, the second bans the author and shows the plate
   // =================================================================================================================
-  // the ban targets a row decorated for the streamer: "[TW]" stripped from the nick (data-kz-tw)
+  // Ban from a row decorated for the streamer, with "[TW]" stripped from the nick (data-kz-tw)
   const decorated = async () => {
     for (const r of await p.$$('[class*="ChatUserMessage-module"][class*="__root"]')) {
       const un = await r
@@ -179,7 +178,7 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
     if (!row) await p.waitForTimeout(250);
   }
 
-  ok(!!row, "есть оформленная строка " + victimName + " (ник без [TW])");
+  ok(!!row, "a styled row of " + victimName + " (nick without [TW])");
   await row.hover();
   let ban = await row.$(".kz-ban-btn");
   await ban.click();
@@ -187,18 +186,18 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
 
   ok(
     await ban.evaluate((e) => e.classList.contains("kz-armed") && e.textContent.includes("Забанить?")),
-    "первое нажатие – красная «Забанить?»"
+    "the first click arms the red «Забанить?»"
   );
 
   await p.screenshot({ path: D + "-armed.png", clip: { x: 1220, y: 40, width: 380, height: 860 } });
   await p.waitForTimeout(3300);
-  ok(!(await ban.evaluate((e) => e.classList.contains("kz-armed"))), "через 3 с подтверждение сбросилось");
+  ok(!(await ban.evaluate((e) => e.classList.contains("kz-armed"))), "the confirmation resets after 3 s");
 
   let user = (await j("GET", "/api/admin/chat/messages", null, { Authorization: auth })).find((m) =>
-    (m.body || "").includes("последняя " + stamp)
+    (m.body || "").includes("the last one " + stamp)
   ).user;
 
-  ok(!user.disabledAt, "одно нажатие не банит");
+  ok(!user.disabledAt, "one click does not ban");
   row = await decorated();
   await row.hover();
   ban = await row.$(".kz-ban-btn");
@@ -208,12 +207,15 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
   await p.waitForTimeout(2000);
 
   user = (await j("GET", "/api/admin/chat/messages", null, { Authorization: auth })).find(
-    (m) => (m.body || "").includes("строка 0") && m.user.displayName === victimName + " [TW]"
+    (m) => (m.body || "").includes("line 0") && m.user.displayName === victimName + " [TW]"
   ).user;
 
-  ok(!!user.disabledAt, "второе нажатие банит автора");
+  ok(!!user.disabledAt, "the second click bans the author");
   const note = await p.$eval(".kz-note", (e) => e.textContent).catch(() => "");
-  ok(note.includes(victimName + " забанен") && note.includes("Баны"), "плашка «забанен» с кнопкой «Баны»: " + note);
+  ok(
+    note.includes(victimName + " забанен") && note.includes("Баны"),
+    "the «забанен» note with the «Баны» button: " + note
+  );
   await p.screenshot({ path: D + "-banned.png", clip: { x: 1220, y: 40, width: 380, height: 860 } });
   await j("POST", "/api/admin/chat/users/setenabled", { userId: user.id, enabled: true }, { Authorization: auth });
 
@@ -221,29 +223,33 @@ const ok = (c, msg) => console.log((c ? "OK   " : "FAIL ") + msg);
   // 4. the "Bans" window: the count, unban through the gate, "Chat members" closes it
   // =================================================================================================================
   const head = await p.$(".kz-ch-bans");
-  ok(!!head, "кнопка «Баны» в шапке");
+  ok(!!head, "the «Баны» button in the header");
   await head.click();
   await p.waitForTimeout(800);
-  ok((await p.$$(".kz-bans .kz-b-row")).length === 2, "в окне два забаненных");
-  ok((await p.$eval(".kz-ch-bans .kz-ch-count", (e) => e.textContent)) === "2", "на кнопке «Баны» число 2");
+  ok((await p.$$(".kz-bans .kz-b-row")).length === 2, "two banned in the window");
+  ok((await p.$eval(".kz-ch-bans .kz-ch-count", (e) => e.textContent)) === "2", "the «Баны» button shows 2");
   await p.screenshot({ path: D + "-bans.png", clip: { x: 1220, y: 40, width: 380, height: 860 } });
   await (await p.$('.kz-bans .kz-b-lift[data-key="id:7"]')).click();
   await p.waitForTimeout(800);
-  ok(unbans.join() === "id:7" && (await p.$$(".kz-bans .kz-b-row")).length === 1, "разбан ушёл в шлюз, строка пропала");
+  ok(
+    unbans.join() === "id:7" && (await p.$$(".kz-bans .kz-b-row")).length === 1,
+    "the unban reached the gate, the row is gone"
+  );
   await (await p.$(".kz-ch-users")).click();
   await p.waitForTimeout(300);
-  ok(!(await p.$(".kz-bans")) && !!(await p.$(".kz-users")), "участники закрывают окно банов");
+  ok(!(await p.$(".kz-bans")) && !!(await p.$(".kz-users")), "the members list closes the bans window");
 
   // =================================================================================================================
-  // 5. lost Twitch voice: the "Reconnect" plate appears (the page asks the gate every 30 s) and goes once it is back
+  // 5. lost Twitch voice: the "Reconnect" plate comes and goes with it
   // =================================================================================================================
+  // The page asks the gate every 30 s, hence the 31 s waits
   voice = false;
   await p.waitForTimeout(31000);
   const go = await p.$eval(".kz-voicebar .kz-vb-go", (e) => e.getAttribute("href")).catch(() => null);
-  ok(go === "/_gate/twitch?next=%2F", "voice: false – плашка «Переподключить» (" + go + ")");
+  ok(go === "/_gate/twitch?next=%2F", "voice: false – the «Переподключить» bar (" + go + ")");
   await p.screenshot({ path: D + "-voice.png", clip: { x: 1220, y: 40, width: 380, height: 860 } });
   voice = true;
   await p.waitForTimeout(31000);
-  ok(!(await p.$(".kz-voicebar")), "voice: true – плашки нет");
+  ok(!(await p.$(".kz-voicebar")), "voice: true – no bar");
   await b.close();
 })();

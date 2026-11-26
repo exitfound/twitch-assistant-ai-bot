@@ -1,11 +1,10 @@
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@500;700&display=swap");
-
-/* Kinozal: the Owncast page's styles (customstyles), uploaded by kinozal.sh style, no restart needed.
-   Black page, grey #1A1A1A panels with a border, lavender for accents only; app.py's entry page shares the palette. */
+/* Kinozal styles for the Owncast page (customstyles). Upload with kinozal.sh style, no restart needed.
+  Black page, grey #1A1A1A panels with a border, lavender only for accents. The gate's entry page shares the palette. */
+/* No @import here. It would hold the whole sheet until Google answers, so custom.js links the fonts */
 
 /* =================================================================================================================
-   theme: palette, Owncast and antd variables, base font
-   ================================================================================================================= */
+  theme: palette, Owncast and antd variables, base font
+  ================================================================================================================== */
 :root {
   --kz-bg: #000;
   --kz-panel: #1A1A1A;
@@ -72,7 +71,7 @@
   --theme-color-components-modal-content-background: var(--kz-chat);
   --theme-color-components-modal-content-text: var(--kz-text);
 
-  /* nick colours, Owncast's eight slots: violet and pink one step lighter to stay visible on the dark panel */
+  /* Owncast's eight nick colours. Violet and pink are a step lighter to stay readable on the dark panel */
   --theme-color-users-0: #FA5;
   --theme-color-users-1: #FF5;
   --theme-color-users-2: #AF5;
@@ -90,7 +89,7 @@
   --primary-color-active: var(--kz-accent);
 }
 
-/* antd sets its own colours and sizes on .css-var-* elements; a doubled selector overrides them */
+/* antd sets its own colours and sizes on .css-var-* elements. The doubled selector wins over them */
 [class*="css-var-"][class*="css-var-"] {
   --ant-color-primary: var(--kz-accent);
   --ant-color-primary-hover: var(--kz-accent-hi);
@@ -111,13 +110,13 @@
   --ant-control-height-lg: 44px;
 }
 
-html { font-size: 16px; color-scheme: dark; }  /* color-scheme: dark browser scrollbars and form fields */
+html { font-size: 16px; color-scheme: dark; }  /* Dark browser scrollbars and form fields */
 html, body { background: var(--kz-bg); }
 
 /* =================================================================================================================
-   layout: everything fits the window, no page scrolling
-   ================================================================================================================= */
-/* the «Powered by Owncast» footer is hidden: it makes the page scroll */
+  layout: everything fits the window, no page scrolling
+  ================================================================================================================== */
+/* The «Powered by Owncast» footer would make the page scroll */
 [class*="Main-module"][class*="__footerContainer"],
 [class*="Footer-module"][class*="__footer"] { display: none; }
 
@@ -131,19 +130,19 @@ html, body { background: var(--kz-bg); }
   }
 }
 
-/* the keyboard «skip to footer» link leads nowhere: the footer is hidden */
+/* The keyboard «skip to footer» link points at the hidden footer */
 a[href$="#footer"][class*="__skipLink"] { display: none; }
 
-/* the player column is a container: the player and the plaque adapt to its width (cqw, @container) */
+/* The player and the plaque size themselves by the column width (cqw, @container) */
 [class*="Content-module"][class*="__mainColumn"] { container-type: inline-size; }
 
-/* player column: a very short window still scrolls, without a scrollbar (as Owncast intends) */
+/* A very short window still scrolls the column, as Owncast intends, but without a scrollbar */
 [class*="Content-module"][class*="__mainColumn"] { scrollbar-width: none; }
 
 /* =================================================================================================================
-   panels
-   ================================================================================================================= */
-/* header shorter than Owncast's 70px to leave room for the film; the 32px icon still fits */
+  panels
+  ================================================================================================================== */
+/* Header shorter than Owncast's 70px to leave room for the film. The 32px icon still fits */
 :root { --header-height: var(--kz-header-h); }
 
 @media (max-width: 768px) { :root { --header-height: var(--kz-header-h); } }
@@ -169,7 +168,7 @@ a[href$="#footer"][class*="__skipLink"] { display: none; }
 
 [class*="Header-module"][class*="__title"] { font-size: clamp(.85rem, 2.4vw, 1.05rem); line-height: 1; margin: 0; }
 
-/* header only: [class*="Header-module"] also matches ContentHeader, the block below the player */
+/* Scoped to header, because [class*="Header-module"] also matches ContentHeader below the player */
 header [class*="Header-module"][class*="__logo"]:not([class*="__logoImage"]) { display: flex; align-items: center; gap: .45rem; height: 100%; }
 
 header [class*="Header-module"][class*="__title"] { padding: 0; margin: 0; text-align: left; }
@@ -201,8 +200,7 @@ header [class*="Header-module"][class*="__title"] { padding: 0; margin: 0; text-
 
 #kz-logout:hover, #kz-logout:focus-visible { color: var(--kz-accent); border-color: var(--kz-accent); }
 
-/* the language switch (custom.js) before "Log out": RU | EN in one outline, the current language highlighted; the
-   header's font, as "Log out" has */
+/* RU | EN switch from custom.js, placed before "Log out". One outline, the current language highlighted */
 #kz-lang {
   display: inline-flex;
   margin-left: auto;
@@ -240,16 +238,16 @@ header [class*="UserDropdown-module"][class*="__root"] [class*="__username"] { f
 header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75rem; }
 [class*="Header-module"][class*="__chatOfflineText"] { font-size: .75rem; }
 
-/* the status row below the player is hidden: viewers and session time are in #kz-live (custom.js) */
+/* Viewers and session time are shown in #kz-live (custom.js) instead */
 [class*="Statusbar-module"][class*="__statusbar"] { display: none; }
 
 [class*="Content-module"][class*="__mainColumn"] { background: var(--kz-below); }
 [class*="ContentHeader-module"][class*="__root"] { background: var(--kz-below); }
 
-/* Owncast's logo and title here repeat the header; #kz-now (custom.js) replaces them */
+/* Owncast's logo and title here repeat the header. #kz-now (custom.js) replaces them */
 [class*="ContentHeader-module"][class*="__logoTitleSection"] { display: none; }
 
-/* without Owncast's 38px margins the block spans the column, viewers and timer sit next to the chat */
+/* Without Owncast's 38px margins the block spans the column, and viewers and timer sit by the chat */
 [class*="DesktopContent-module"][class*="__bottomSectionContent"] { margin: 0; flex: 1 1 auto; width: 100%; }
 
 [class*="ContentHeader-module"][class*="__root"] {
@@ -366,13 +364,13 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
   border-radius: 999px;
 }
 
-/* min-width rather than width: the chat can still be dragged wider by its corner */
+/* min-width, not width, so the chat can still be dragged wider by its corner */
 [class*="ChatContainer-module"][class*="__chatContainer"] {
   border-left: 1px solid var(--kz-line);
   min-width: clamp(320px, 22vw, 420px);
 }
 
-/* desktop: the chat takes the width the 16:9 frame does not need, so the player has no side bars */
+/* On desktop the chat takes the width the 16:9 frame leaves, so the player has no side bars */
 @media (min-width: 768px) {
   [class*="ChatContainer-module"][class*="__chatContainer"] {
     width: clamp(min(380px, 30vw), calc(100vw - var(--player-container-height) * 16 / 9), 600px) !important;
@@ -384,7 +382,7 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 
 [class*="ChatContainer-module"][class*="__chatTextField"] { border-top: 1px solid var(--kz-line); }
 
-/* Owncast's "Scroll to latest" button: Owncast sets dark text on a dark background inline, hence !important */
+/* "Scroll to latest" button. Owncast sets dark text on a dark background inline, hence !important */
 [class*="ChatContainer-module"][class*="__toBottomWrap"] button {
   font-size: .85rem;
   font-weight: 600;
@@ -398,9 +396,9 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 [class*="ChatContainer-module"][class*="__toBottomWrap"] button:hover { background: #E6E6E6 !important; }
 [class*="ChatContainer-module"][class*="__toBottomWrap"] button:focus-visible { outline: 2px solid var(--kz-accent); outline-offset: 2px; }
 
-/* chat row selectors match by substring, not by class suffix: antd appends «ant-tooltip-open» to the nick
-   on hover, which breaks a [class$="__user"] rule and makes the row re-render and flicker */
-/* rows as in Twitch: «badges nick: text» on one line, the nick on repeated rows too (Owncast hides it: .repeatUser) */
+/* Chat row selectors match by substring, never by class suffix. antd adds «ant-tooltip-open» to the nick on
+  hover, which breaks a [class$="__user"] rule and makes the row re-render and flicker */
+/* Rows as in Twitch, «badges nick: text» on one line. Repeated rows keep the nick (Owncast's .repeatUser hides it) */
 [class*="ChatUserMessage-module"][class*="__root"] { line-height: 1.5; border-left: 0; }
 
 [class*="ChatUserMessage-module"][class*="__messagePadding"] { padding: .2rem 5px 0; }
@@ -423,7 +421,7 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 [class*="ChatUserMessage-module"][class*="__root"] [class*="__message"]:not([class*="__messagePadding"]),
 [class*="ChatUserMessage-module"][class*="__root"] [class*="__message"]:not([class*="__messagePadding"]) p { display: inline; margin: 0; }
 
-/* the gate makes @nick mentions in rows from Twitch bold; they get the accent colour */
+/* The gate bolds @nick mentions in rows from Twitch */
 [class*="ChatUserMessage-module"][class*="__message"] strong { color: var(--kz-accent); font-weight: 600; }
 
 [class*="ChatUserBadge-module"][class*="__badge"] { width: 20px; height: 20px; font-size: .8rem; }
@@ -475,8 +473,8 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 [class*="ChatTextField-module"][class*="__sendButton"]:hover { color: var(--kz-accent); }
 
 /* =================================================================================================================
-   title block below the player: compact
-   ================================================================================================================= */
+  title block below the player: compact
+  ================================================================================================================== */
 [class*="ContentHeader-module"][class*="__title"] { font-size: 1.5rem; line-height: 1.2; margin: 0; }
 
 [class*="ContentHeader-module"][class*="__subtitle"] {
@@ -498,13 +496,13 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 
 [class*="Logo-module"][class*="__container"] { width: 100%; height: 100%; }
 
-/* the button row above the title (Notify, Follow – disabled) is empty but takes 12px */
+/* The button row above the title is empty (Notify and Follow are off) but takes 12px */
 [class*="Content-module"][class*="__actionButtonsContainer"] { display: none; }
 
 /* =================================================================================================================
-   player and controls
-   ================================================================================================================= */
-/* video.js sizes are in em of its font: 12px instead of 10px enlarges every button */
+  player and controls
+  ================================================================================================================== */
+/* video.js sizes everything in em. 12px instead of 10px enlarges every button */
 .video-js { font-size: 12px; }
 
 .video-js .vjs-big-play-button,
@@ -521,7 +519,7 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 .video-js:hover .vjs-big-play-button,
 .video-js .vjs-big-play-button:focus { opacity: 1; transform: scale(1.04); }
 
-/* Owncast paints the bar with a solid colour (!important), leaving a black strip: here it is transparent over the picture */
+/* Owncast paints the bar a solid colour (!important) and leaves a black strip. Here it is a gradient over the video */
 .video-js.vjs-owncast .vjs-control-bar,
 .video-js .vjs-control-bar {
   height: 4em;
@@ -530,7 +528,7 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
   background-image: linear-gradient(to top, rgba(0, 0, 0, .6), rgba(0, 0, 0, .25) 55%, rgba(0, 0, 0, 0));
 }
 
-/* all buttons on one axis: video.js puts its icons in a 36px row at the top of the 48px bar, «LIVE» in the middle */
+/* One axis for all buttons. video.js puts icons in a 36px row at the top of the 48px bar, and «LIVE» in the middle */
 .video-js .vjs-control-bar > .vjs-control { height: 100%; }
 
 .video-js .vjs-control-bar .vjs-icon-placeholder:before,
@@ -543,7 +541,8 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 
 .video-js .vjs-seek-to-live-control .vjs-icon-placeholder:before { line-height: 1; position: static; }
 
-/* desktop: the player is exactly 16:9 and centred, its height following the column width; fullscreen keeps video.js defaults */
+/* On desktop the player is exactly 16:9 and centred, its height set by the column width.
+  Fullscreen keeps the video.js defaults */
 @media (min-width: 768px) {
   [class*="OwncastPlayer-module"][class*="__container"] {
     background: #000;
@@ -604,7 +603,7 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 
 * { scrollbar-color: var(--kz-line-hi) transparent; }
 
-/* the hall nick is the Twitch nick: the menu has no «change name» or IndieAuth/Fediverse sign-in */
+/* The hall nick is the Twitch nick, so the menu drops «change name» and IndieAuth/Fediverse sign-in */
 .ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item:has(> .anticon-edit),
 .ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item:has(> .anticon-lock) { display: none !important; }
 
@@ -618,16 +617,16 @@ header [class*="UserDropdown-module"][class*="__root"] .anticon { font-size: .75
 .ant-dropdown .ant-dropdown-menu .ant-dropdown-menu-item:hover { background: rgba(185, 166, 242, .12); }
 
 /* =================================================================================================================
-   keyboard focus: a lavender outline everywhere (Owncast's is partly 1px dark on dark)
-   ================================================================================================================= */
+  keyboard focus: a lavender outline everywhere (Owncast's is partly 1px dark on dark)
+  ================================================================================================================== */
 :where(button, a, [role="button"], [role="menuitem"], [tabindex]:not([tabindex="-1"])):focus-visible {
   outline: 2px solid var(--kz-accent) !important;
   outline-offset: 2px;
 }
 
 /* =================================================================================================================
-   no stream (session open, OBS not started yet or the stream dropped)
-   ================================================================================================================= */
+  no stream (session open, OBS not started yet or the stream dropped)
+  ================================================================================================================== */
 #offline-banner {
   box-sizing: border-box;
   min-height: var(--player-container-height, 62vw);
@@ -657,15 +656,21 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
 #offline-banner [class*="__bodyText"] p { margin: 0; color: #BBB; font-size: 1rem; line-height: 1.5; text-wrap: pretty; }
 #offline-banner [class*="__lastLiveDate"] { display: none; }
 
-/* on a phone there is no chat without a stream: the offline screen fills the page above the title block */
+/* The text appears once the fonts load (custom.js «fonts»). The animation shows it after 3 s even if the script
+  never runs. Only the reveal fades, so a banner shown before these styles hides at once */
+html:not(.kz-fonts) #offline-banner [class*="__bodyText"] { opacity: 0; animation: kz-show 0s 3s forwards; }
+html.kz-fonts #offline-banner [class*="__bodyText"] { transition: opacity .2s; }
+@keyframes kz-show { to { opacity: 1; } }
+
+/* A phone has no chat without a stream, so the offline screen fills the page above the title block */
 @media (max-width: 768px) {
   #offline-banner { min-height: calc(100vh - var(--kz-header-h) - var(--kz-below-h)); }
   @supports (height: 100dvh) { #offline-banner { min-height: calc(100dvh - var(--kz-header-h) - var(--kz-below-h)); } }
 }
 
 /* =================================================================================================================
-   phone: the Owncast chat (the window behind the «Chat» button) sits below the video, as in Twitch
-   ================================================================================================================= */
+  phone: Owncast's chat window sits below the video, as in Twitch
+  ================================================================================================================== */
 @media (max-width: 768px) {
   .ant-modal-root:has([class*="ChatModal-module"]) .ant-modal-mask { display: none; }
 
@@ -699,7 +704,7 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
     box-shadow: none;
   }
 
-  /* the nick and menu are already in the page header; the chat needs no close button */
+  /* The nick and menu are already in the page header. The chat needs no close button */
   [class*="ChatModal-module"] .ant-modal-header,
   [class*="ChatModal-module"] .ant-modal-close { display: none; }
 
@@ -715,8 +720,8 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
 }
 
 /* =================================================================================================================
-   tablet portrait (769–1180px): full-width player, chat below it instead of a narrow side column
-   ================================================================================================================= */
+  tablet portrait (769–1180px): full-width player, chat below it
+  ================================================================================================================== */
 @media (min-width: 768px) and (max-width: 1180px) and (orientation: portrait) {
   [class*="Content-module"][class*="__main"]:not([class*="__mainColumn"]) {
     flex-direction: column;
@@ -735,8 +740,8 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
 }
 
 /* =================================================================================================================
-   phone landscape and large zoom in a short window: the whole video on screen
-   ================================================================================================================= */
+  phone landscape and large zoom in a short window: the whole video on screen
+  ================================================================================================================== */
 @media (orientation: landscape) and (max-height: 500px) {
   :root { --kz-below-h: 0px; --player-container-height: calc(100dvh - var(--kz-header-h)); }
   [class*="ContentHeader-module"][class*="__root"] { display: none; }
@@ -760,7 +765,7 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
   }
 }
 
-/* Owncast mobile layout in landscape: the «Chat» button opens a panel on the right over the video, with a close cross */
+/* Mobile layout in landscape. The «Chat» button opens a panel over the right of the video, with a close cross */
 @media (orientation: landscape) and (max-height: 500px) and (max-width: 768px) {
   [class*="ChatModal-module"][class*="__modalWrapper"] {
     top: var(--kz-header-h) !important;
@@ -771,7 +776,7 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
   [class*="ChatModal-module"] .ant-modal-container { border-top: 0; border-left: 1px solid var(--kz-line); background: rgba(26, 26, 26, .94); }
   [class*="ChatModal-module"] .ant-modal-close { display: block; z-index: 2; }
 
-  /* the «Chat» button sits above the player (otherwise it cannot be clicked) and in the right margin, clear of the player buttons */
+  /* The «Chat» button must sit above the player to be clickable. The corner keeps it clear of the player buttons */
   [class*="__floatingMobileChatModalButton"] {
     z-index: 110;
     width: auto;
@@ -786,8 +791,8 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
 }
 
 /* =================================================================================================================
-   touch screens: buttons and links get a target of at least 44px (appearance unchanged)
-   ================================================================================================================= */
+  touch screens: 44px targets for buttons and links, the look unchanged
+  ================================================================================================================== */
 @media (pointer: coarse) {
   #kz-lang button, #kz-logout,
   header [class*="UserDropdown-module"][class*="__root"] button, #kz-now .kz-chan { position: relative; }
@@ -806,9 +811,9 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
 }
 
 /* =================================================================================================================
-   phone and tablet portrait (mobile layout): player exactly 16:9 by width
-   ================================================================================================================= */
-/* Owncast fixes the player height at 250px: at width 390 that is 219px of picture and 15px of black above and below */
+  phone and tablet portrait (mobile layout): player exactly 16:9 by width
+  ================================================================================================================== */
+/* Owncast fixes the player at 250px high. At 390px wide that leaves 15px of black above and below the picture */
 @media (max-width: 768px) and (orientation: portrait) {
   [class*="Content-module"][class*="__mainColumn"] > .ant-row:has([class*="OwncastPlayer-module"]) { height: auto !important; }
 
@@ -818,9 +823,9 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
 }
 
 /* =================================================================================================================
-   narrow player (≤ 480px): 6 buttons × 48px + «LIVE» need 344px
-   ================================================================================================================= */
-/* a live stream needs no progress bar, and 40px buttons stay above the WCAG minimum of 24px */
+  narrow player (≤ 480px): 6 buttons × 48px + «LIVE» need 344px
+  ================================================================================================================== */
+/* A live stream needs no progress bar. 40px buttons are still above the WCAG minimum of 24px */
 @container (max-width: 480px) {
   .video-js .vjs-progress-control { display: none; }
   .video-js .vjs-custom-control-spacer { display: flex; flex: 1 1 auto; }
@@ -832,8 +837,8 @@ html[lang="en"] #offline-banner [class*="__bodyText"]::before { content: "The fi
 }
 
 /* =================================================================================================================
-   theatre mode (player button, key T; custom.js sets body.kz-theater)
-   ================================================================================================================= */
+  theatre mode (player button, key T; custom.js sets body.kz-theater)
+  ================================================================================================================== */
 .video-js .kz-theater-btn { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
 .video-js .kz-theater-btn svg { display: block; }
 body.kz-theater .video-js .kz-theater-btn { color: var(--kz-accent); }
@@ -855,16 +860,16 @@ body.kz-theater [class*="Content-module"][class*="__mainColumn"] { background: #
 @media (min-width: 768px) {
   body.kz-theater [class*="OwncastPlayer-module"][class*="__container"] { height: var(--player-container-height) !important; }
 
-  /* the theatre chat starts at 320px, as in Twitch: more room for the picture */
+  /* The theatre chat starts at 320px, as in Twitch, to leave more room for the picture */
   body.kz-theater [class*="ChatContainer-module"][class*="__chatContainer"] {
     width: clamp(min(320px, 25vw), calc(100vw - var(--player-container-height) * 16 / 9), 600px) !important;
   }
 }
 
 /* =================================================================================================================
-   chat: rows from Twitch – [TW] in Twitch violet #A970FF (~5:1; the brand #9146FF is 3.4:1)
-   ================================================================================================================= */
-/* the bot badge is redundant beside [TW]; Owncast badges are hidden where Twitch badges are shown */
+  chat: rows from Twitch
+  ================================================================================================================== */
+/* Owncast badges hide on rows from Twitch, where the bot badge repeats [TW], and on rows with Twitch badges */
 [class*="ChatUserMessage-module"] :is([class*="__user"]:not([class*="__userName"]):not([class*="__userBadges"]), [class*="__repeatUser"]):is(:has([data-kz-tw]), .kz-has-badges) [class*="__userBadges"] { display: none; }
 
 [class*="ChatUserMessage-module"] .kz-pre {
@@ -879,22 +884,23 @@ body.kz-theater [class*="Content-module"][class*="__mainColumn"] { background: #
 
 [class*="ChatUserMessage-module"] .kz-pre:empty { display: none; }
 .kz-pre .kz-time { color: #8C8C8C; font-size: .8em; font-variant-numeric: tabular-nums; font-weight: 400; }
+/* Twitch violet #A970FF gives about 5:1 contrast. The brand #9146FF gives only 3.4:1 */
 .kz-pre .kz-tw { color: #A970FF; font-weight: 700; }
 .kz-pre .kz-badge { width: 18px; height: 18px; display: block; }
 
 /* =================================================================================================================
-   chat: nick tooltip
-   ================================================================================================================= */
-/* an antd tooltip under the cursor flickers, and one a pixel past the window flickers the page scrollbar (17px on
-   Windows): the tooltip ignores the pointer, and the page never scrolls; only the chat and the column do */
+  chat: nick tooltip
+  ================================================================================================================== */
+/* An antd tooltip under the cursor flickers. One a pixel past the window flickers the page scrollbar (17px on
+  Windows). So the tooltip ignores the pointer, and only the chat and the column scroll, never the page */
 html, body { overflow: hidden; }
 
 .ant-tooltip { pointer-events: none; }
 .ant-tooltip .ant-tooltip-container, .ant-tooltip .ant-tooltip-inner { background: var(--kz-raised); color: var(--kz-text); }
 .ant-tooltip { --antd-arrow-background-color: var(--kz-raised); }
 
-/* Owncast's "You are now a moderator" line, posted on every moderator connection and reconnect, is hidden at 1px, not
-   display: none: the feed's virtual list cannot measure a 0px item and then draws no rows at all for the moderator */
+/* Owncast posts "You are now a moderator" on every moderator connect and reconnect. It is hidden at 1px, not with
+  display: none. The feed's virtual list cannot measure a 0px item and then draws no rows for the moderator */
 [class*="ChatModeratorNotification-module"][class*="__chatModerationNotification"] {
   height: 1px;
   overflow: hidden;
@@ -903,19 +909,19 @@ html, body { overflow: hidden; }
   padding: 0;
 }
 
-/* Owncast's «…» moderation menu is hidden: delete and ban are row buttons (custom.js «moderation»). The menu
-   stays in the markup: only moderators have it, and custom.js places the buttons by it */
+/* Owncast's «…» moderation menu gives way to row buttons (custom.js «moderation»). It stays in the markup,
+  because only moderators have it and custom.js places the buttons by it */
 [class*="ChatUserMessage-module"] [class*="__modMenuWrapper"] { display: none !important; }  /* Owncast has its own :hover rule */
 
-/* Twitch emotes drawn by custom.js: 28px as in Twitch, without growing the row */
+/* Twitch emotes from custom.js. 28px as in Twitch, and the negative margins keep the row height */
 img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1px -4px; }
 
 /* =================================================================================================================
-   chat: header with a "Chat members" button, as in Twitch (custom.js «chat members»)
-   ================================================================================================================= */
+  chat: header with a "Chat members" button (custom.js «chat members»)
+  ================================================================================================================== */
 [class*="ChatContainer-module"][class*="__chatContainer"] { position: relative; display: flex; flex-direction: column; --kz-chathead-h: 40px; }
 
-/* Owncast row text has z-index 100: without its own layer the feed would show through the users panel and the «@» hint */
+/* Owncast row text has z-index 100. Without its own layer the feed shows through the users panel and the «@» hint */
 [class*="ChatContainer-module"][class*="__chatContainer"] > [class*="__virtuoso"] { flex: 1 1 0; min-height: 0; isolation: isolate; }
 
 .kz-chathead {
@@ -967,13 +973,13 @@ img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1
   .kz-u-name, .kz-m-item { min-height: 44px; }
 }
 
-/* phone landscape: Owncast's close cross is on the right of the chat window; the button goes to its left */
+/* In phone landscape Owncast's close cross takes the right edge, so the buttons move left of it */
 @media (orientation: landscape) and (max-height: 500px) and (max-width: 768px) {
   [class*="ChatModal-module"] .kz-ch-users { right: 44px; }
   [class*="ChatModal-module"] .kz-ch-bans { right: 90px; }
 }
 
-/* the users list and the "Bans" window cover the feed; custom.js sets their bottom above the input */
+/* The users list and the "Bans" window cover the feed. custom.js sets their bottom above the input */
 .kz-users, .kz-bans {
   position: absolute;
   inset: var(--kz-chathead-h) 0 0 0;
@@ -1046,8 +1052,8 @@ img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1
 @media (pointer: coarse) { .kz-b-lift { min-height: 44px; } }
 
 /* =================================================================================================================
-   chat: nick suggestions on «@» above the input (custom.js «mentions»)
-   ================================================================================================================= */
+  chat: nick suggestions on «@» above the input (custom.js «mentions»)
+  ================================================================================================================== */
 [class*="ChatTextField-module"][class*="__root"] { position: relative; }
 
 .kz-mention {
@@ -1069,13 +1075,13 @@ img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1
 .kz-m-item.kz-on { box-shadow: inset 3px 0 0 var(--kz-accent); }
 
 /* =================================================================================================================
-   chat: replying to a row, as in Twitch (custom.js «replies»)
-   ================================================================================================================= */
+  chat: replying to a row, as in Twitch (custom.js «replies»)
+  ================================================================================================================== */
 [class*="ChatUserMessage-module"][class*="__root"] :is(.kz-reply-btn, .kz-del-btn, .kz-ban-btn) {
   position: absolute;
   right: 6px;
   top: 2px;
-  z-index: 110;  /* above Owncast's row background and text (z-index 100), otherwise the background takes the click */
+  z-index: 110;  /* Above Owncast's row (z-index 100), or the row background takes the click */
   display: none;
   place-items: center;
   width: 28px;
@@ -1130,7 +1136,7 @@ img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1
 .kz-r-icon { display: inline-grid; flex: none; }
 .kz-r-line { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
-/* the reply bar is a line of its own above the field, so the field does not move */
+/* The reply bar has its own line above the field, so the field does not move */
 .kz-replybar {
   box-sizing: border-box;
   display: flex;
@@ -1166,8 +1172,8 @@ img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1
 @media (pointer: coarse) { .kz-rb-close { width: 44px; height: 44px; } }
 
 /* =================================================================================================================
-   chat: delete and ban result – a plate at the top of the chat for 6 s (custom.js «moderation»)
-   ================================================================================================================= */
+  chat: delete and ban result, a plate at the top for 6 s (custom.js «moderation»)
+  ================================================================================================================== */
 .kz-note {
   position: absolute;
   top: calc(var(--kz-chathead-h) + 8px);
@@ -1196,8 +1202,8 @@ img.kz-emote { height: 28px; width: auto; vertical-align: middle; margin: -6px 1
 @media (pointer: coarse) { .kz-note button { min-height: 44px; } }
 
 /* =================================================================================================================
-   chat: Twitch voice lost – a plate above the input (custom.js «reconnect»)
-   ================================================================================================================= */
+  chat: Twitch voice lost, a plate above the input (custom.js «reconnect»)
+  ================================================================================================================== */
 .kz-voicebar {
   flex: none;
   display: flex;

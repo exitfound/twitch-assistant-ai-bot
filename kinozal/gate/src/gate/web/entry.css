@@ -1,0 +1,58 @@
+/* matches the hall (owncast/custom.css): black page, grey #1A1A1A panel with a border, lavender only for accents */
+:root{
+  --bg:#000; --panel:#1A1A1A; --field:#111; --line:#333; --line-hi:#555;
+  --accent:#BAF; --accent-hi:#DCF; --glow:rgba(136,102,255,.4);
+  --text:#EEE; --dim:#AAA; --ink:#111; --err:#F9B;
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{
+  display:grid;place-items:center;padding:24px;background:var(--bg);
+  color:var(--text);font-family:"JetBrains Mono",ui-monospace,Consolas,monospace;
+}
+.box{
+  position:relative;width:min(420px,100%);padding:36px 32px 30px;text-align:center;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+}
+h1{
+  margin:0 0 20px;font:700 30px/1.1 "Unbounded",system-ui,sans-serif;letter-spacing:.04em;
+  color:var(--text);text-shadow:0 0 18px var(--glow);
+}
+.now{margin:0 0 16px;font:700 16px/1.35 "Unbounded",system-ui,sans-serif;color:var(--text);
+  text-shadow:0 0 12px var(--glow);overflow-wrap:anywhere}
+.now span{font-weight:500;color:#CCC;text-shadow:none}
+.lead{margin:0 0 22px;font-size:15px;line-height:1.5;color:var(--text)}
+.hint{margin:0;font-size:13px;line-height:1.5;color:var(--dim)}
+.lead,.hint,.now{text-wrap:balance}
+.chan{color:var(--accent);text-decoration:underline;text-decoration-color:rgba(187,170,255,.4);text-underline-offset:3px}
+.chan:hover{color:var(--accent-hi);text-decoration-color:currentColor}
+.chan:focus-visible{outline:2px solid var(--accent-hi);outline-offset:2px;border-radius:2px}
+.hint.below{margin-top:18px}
+.hint.or{margin:12px 0 0}
+form{display:flex;flex-direction:column;gap:12px}
+.code{
+  width:100%;padding:14px 10px;text-align:center;
+  font:400 34px/1 "JetBrains Mono",monospace;letter-spacing:.4em;text-indent:.4em;
+  color:var(--text);background:var(--field);border:1px solid var(--line-hi);border-radius:10px;outline:none;
+}
+.code::placeholder{color:#666}
+.code:focus{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent),0 0 14px var(--glow)}
+button,.twitch{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:14px;border:0;border-radius:10px;cursor:pointer;text-decoration:none;
+  font:700 15px/1 "Unbounded",system-ui,sans-serif;letter-spacing:.04em;
+  color:var(--ink);background:var(--accent);
+}
+.twitch svg{width:18px;height:18px;flex:none;fill:currentColor}
+button:hover,.twitch:hover{background:var(--accent-hi)}
+button:focus-visible,.twitch:focus-visible{outline:2px solid var(--accent-hi);outline-offset:3px}
+.who{display:inline-block;margin:0 0 18px;padding:5px 12px;font-size:13px;color:var(--dim);
+  border:1px solid var(--line-hi);border-radius:8px}
+.who b{color:var(--accent);font-weight:500}
+.err{margin:16px 0 0;color:var(--err);font-size:13px;line-height:1.5}
+.lang{position:absolute;top:10px;right:12px;display:flex;border:1px solid var(--line-hi);border-radius:8px;
+  font-size:12px;line-height:1.4}
+.lang a,.lang span{padding:4px 8px;color:var(--dim);text-decoration:none}
+.lang span{background:#2A2A2A;color:var(--text);border-radius:7px}
+.lang a:hover,.lang a:focus-visible{color:var(--accent);outline:none}
+@media (pointer:coarse){.lang a,.lang span{padding:10px 12px}}

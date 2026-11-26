@@ -1,14 +1,14 @@
-/* Kinozal: the Owncast page's own JavaScript (customjavascript), uploaded by kinozal.sh style.
-   Each section, under a "// ====" banner, is one feature of the page; what it does is in docs/KINOZAL.md. */
+// Kinozal: custom JavaScript for the Owncast page, uploaded by kinozal.sh style.
+// Each "// ====" banner starts one feature. docs/KINOZAL.md describes them.
 (function () {
   "use strict";
 
   // =================================================================================================================
-  // language: the viewer's choice (the kz_lang cookie, shared with the gate), else the browser's first language
+  // language: the kz_lang cookie (shared with the gate), else the browser's first language
   // =================================================================================================================
   var has = Object.prototype.hasOwnProperty;
 
-  // browser languages read as Russian: Russian and the CIS languages whose speakers usually read it (the gate's list)
+  // Browser languages whose speakers usually read Russian. Same list as the gate
   var RU_READERS = ["ru", "uk", "be", "kk", "ky", "uz", "tg", "tk", "az", "hy"];
 
   var browserLang = ((navigator.languages && navigator.languages[0]) || navigator.language || "")
@@ -21,6 +21,9 @@
     return !browserLang || RU_READERS.indexOf(browserLang) >= 0 ? "ru" : "en";
   })();
 
+  // The Twitch channel: kinozal.sh style puts in TWITCH_CHANNEL of kinozal/.env on upload
+  var CHANNEL = "__TWITCH_CHANNEL__";
+
   var TEXT = {
     ru: {
       switchTitle: "Switch to English",
@@ -28,7 +31,7 @@
       fromStream: "кино со стрима",
       watching: "Смотрим фильм:",
       watchingUntitled: "Смотрим кино",
-      channelTitle: "Канал exitfound на Twitch (откроется в новой вкладке)",
+      channelTitle: "Канал {chan} на Twitch (откроется в новой вкладке)",
       viewers: "Зрители",
       sessionTime: "Сеанс идёт",
       logout: "Выйти",
@@ -82,7 +85,7 @@
       fromStream: "films from the stream",
       watching: "Now watching:",
       watchingUntitled: "Watching a film",
-      channelTitle: "exitfound on Twitch (opens in a new tab)",
+      channelTitle: "{chan} on Twitch (opens in a new tab)",
       viewers: "Viewers",
       sessionTime: "Session time",
       logout: "Log out",
@@ -141,7 +144,7 @@
     return text;
   }
 
-  // the page's address in a language: Owncast takes its own only from ?lang=, else from the browser's language
+  // Owncast takes its language from ?lang=, else from the browser
   function addressIn(lang) {
     var u = new URL(location.href);
     u.searchParams.delete("lang");
@@ -164,13 +167,13 @@
     }
   }
 
-  // Owncast sets the tab's title again on its own updates: the English one is put back at once, not on the next tick
+  // Owncast resets the tab title on its updates. Put the English one back at once, not on the next tick
   if (LANG === "en") {
     new MutationObserver(englishTitle).observe(document.head, { childList: true, subtree: true, characterData: true });
     englishTitle();
   }
 
-  // English: the hall's name in the header and the tab, and the offline text, which Owncast keeps in Russian
+  // Owncast keeps the header, the tab title and the offline text in Russian. The English page replaces them
   function englishPage() {
     if (LANG !== "en") return;
     var head = document.querySelector('header [class*="Header-module"][class*="__title"]');
@@ -179,6 +182,60 @@
     var off = document.querySelector('#offline-banner [class*="__bodyText"] p');
     if (off && off.textContent !== txt("offline")) off.textContent = txt("offline");
   }
+
+  // =================================================================================================================
+  // fonts
+  // =================================================================================================================
+  // Linked here, not imported in custom.css. Firefox holds a sheet with an @import until Google answers
+  // and shows Owncast's own look meanwhile
+  var FONTS =
+    "https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Unbounded:wght@500;700&display=swap";
+
+  if (!document.getElementById("kz-fonts-css")) {
+    var fontsLink = document.createElement("link");
+    fontsLink.id = "kz-fonts-css";
+    fontsLink.rel = "stylesheet";
+    fontsLink.href = FONTS;
+    document.head.appendChild(fontsLink);
+  }
+
+  // Unbounded wraps the heading differently from the fallback font, so the block would jump on load.
+  // custom.css hides the text until both fonts are in, 3 s at most
+  var BANNER_TEXT = '#offline-banner [class*="__bodyText"]';
+  var fontsDeadline = Date.now() + 3000;
+
+  function hasFace(family) {
+    var found = false;
+    document.fonts.forEach(function (f) {
+      if (f.family.replace(/"/g, "") === family) found = true;
+    });
+    return found;
+  }
+
+  function fontsIn() {
+    document.documentElement.classList.add("kz-fonts");
+  }
+
+  // The @font-face rules come with the linked stylesheet. Poll until the faces exist, then load them
+  function waitFonts() {
+    if (!document.fonts || Date.now() > fontsDeadline) {
+      fontsIn();
+      return;
+    }
+    var bt = document.querySelector(BANNER_TEXT);
+    if (!bt || !hasFace("Unbounded") || !hasFace("JetBrains Mono")) {
+      setTimeout(waitFonts, 50);
+      return;
+    }
+    var head = getComputedStyle(bt, "::before").content.replace(/^"|"$/g, "");
+    Promise.all([
+      document.fonts.load('700 1em "Unbounded"', head),
+      document.fonts.load('400 1em "JetBrains Mono"', bt.textContent + txt("offline"))
+    ]).then(fontsIn, fontsIn);
+    setTimeout(fontsIn, fontsDeadline - Date.now());
+  }
+
+  waitFonts();
 
   // =================================================================================================================
   // sound
@@ -202,7 +259,7 @@
 
   muteOnce();
 
-  // <video> events do not bubble but are caught on document in the capture phase, which survives the player being recreated
+  // <video> events do not bubble. Capturing them on document survives the player being recreated
   document.addEventListener(
     "volumechange",
     function (e) {
@@ -214,13 +271,13 @@
         v.kzSoftened = true;
         v.volume = 0.5;
       } else if (silentBefore && !v.muted && v.volume === 0) {
-        v.volume = 0.5; // unmuted at volume 0: otherwise the sound is on but silent
+        v.volume = 0.5; // Unmuted at volume 0 would stay silent
       }
     },
     true
   );
 
-  // Key M: Owncast shows "(m)" but has no handler; e.code is the physical key, so the Russian layout works too
+  // Key M. Owncast shows "(m)" but has no handler. e.code is the physical key, so the Russian layout works too
   document.addEventListener(
     "keydown",
     function (e) {
@@ -233,7 +290,7 @@
       v.muted = !v.muted;
     },
     true
-  ); // capture phase: video.js buttons stop the propagation of key events
+  ); // Capture phase, since video.js buttons stop key events from propagating
 
   // =================================================================================================================
   // panel under the player
@@ -258,7 +315,7 @@
     return Math.floor(s / 3600) + ":" + two(Math.floor(s / 60) % 60) + ":" + two(s % 60);
   }
 
-  // React re-renders the block: own elements are re-inserted when it drops them
+  // React re-renders the block and may drop these elements, so they are re-inserted
   function own(host, id, html) {
     var el = document.getElementById(id);
     if (!el || el.parentNode !== host) {
@@ -277,13 +334,18 @@
     var now = own(
       host,
       "kz-now",
-      '<div class="kz-ava" role="img" aria-label="exitfound"></div>' +
+      '<div class="kz-ava" role="img" aria-label="' +
+        CHANNEL +
+        '"></div>' +
         '<div class="kz-text"><h2 class="kz-title"><span class="kz-lead"></span> <span class="kz-film" translate="no">' +
-        '</span></h2><p class="kz-sub"><a class="kz-chan" href="https://www.twitch.tv/exitfound" target="_blank" ' +
+        '</span></h2><p class="kz-sub"><a class="kz-chan" href="https://www.twitch.tv/' +
+        CHANNEL +
+        '" target="_blank" ' +
         'rel="noopener noreferrer" translate="no" title="' +
-        txt("channelTitle") +
+        txt("channelTitle", { chan: CHANNEL }) +
         '">' +
-        "exitfound</a> · <span></span></p></div>"
+        CHANNEL +
+        "</a> · <span></span></p></div>"
     );
     var lead = started != null && title ? txt("watching") : "";
     var film = started != null ? title || txt("watchingUntitled") : txt("hall");
@@ -326,7 +388,7 @@
         if (d) ok(d);
       })
       .catch(function () {
-        /* network error: retried on the next poll */
+        /* retried on the next poll */
       });
   }
 
@@ -337,7 +399,7 @@
     });
   }
 
-  // voice: false from /_gate/live – the viewer's lines no longer reach Twitch (section «reconnect»)
+  // false when /_gate/live says the viewer's lines no longer reach Twitch (see «reconnect»)
   var voice = null;
 
   function pollLive() {
@@ -364,7 +426,7 @@
     user.parentNode.insertBefore(a, user);
   }
 
-  // the language switch: RU | EN, the current language highlighted, the other one switches; each named in itself
+  // RU | EN switch with the current language highlighted. Each name is written in its own language
   var LANG_NAMES = { ru: "Русский", en: "English" };
 
   function langButton() {
@@ -455,7 +517,7 @@
     "The stream is ending.": "Трансляция заканчивается",
     "The media could not be loaded, either because the server or network failed or because the format is not supported.":
       "Видео не загрузилось. Обновите страницу через минуту.",
-    // antd icon names, read out by screen readers next to the controls and chat events
+    // antd icon names. Screen readers read them out next to controls and chat events
     "user": "пользователь",
     "caret-down": "меню",
     "usergroup-add": "вошёл в чат",
@@ -464,7 +526,7 @@
     "send": "отправить"
   };
 
-  // a phrase split by markup is translated as a whole element; Owncast posts "Stay tuned…" as the stream starts
+  // Phrases split by markup, translated as a whole element. Owncast posts "Stay tuned…" as the stream starts
   var PHRASES = { "Stay tuned, the stream is starting!": "Трансляция начинается, устраивайтесь поудобнее" };
 
   var RX = [
@@ -526,7 +588,7 @@
       trTooltip(p);
       return;
     }
-    // "nick [TW]" becomes "nick" plus data-kz-tw: CSS draws the label before the nick
+    // "nick [TW]" becomes "nick" with data-kz-tw. CSS draws the label before the nick
     if (TWIN.test(n.nodeValue) && /__userName/.test(p.className)) {
       n.nodeValue = n.nodeValue.replace(TWIN, "");
       p.setAttribute("data-kz-tw", "");
@@ -560,6 +622,7 @@
 
   function startTranslating() {
     translate(document.body);
+    englishPage();
     new MutationObserver(function (list) {
       for (var i = 0; i < list.length; i++) {
         var m = list[i];
@@ -571,6 +634,8 @@
         } else if (m.type === "characterData") trText(m.target);
         else if (m.type === "attributes") trElement(m.target);
       }
+      // Runs before paint, so the English page never flashes the Russian header or offline text
+      englishPage();
     }).observe(document.body, {
       childList: true,
       subtree: true,
@@ -580,7 +645,7 @@
     });
   }
 
-  // the video.js gear button has no label; a screen reader would announce only "button"
+  // The video.js gear button has no label. Screen readers would say only "button"
   function labelSettings() {
     var b = document.querySelectorAll(".video-js .vjs-menu-button-popup > button:not([aria-label])");
     for (var i = 0; i < b.length; i++) {
@@ -602,7 +667,7 @@
       var y = Math.round(below.getBoundingClientRect().bottom);
       document.documentElement.style.setProperty("--kz-chat-top", Math.max(y, 120) + "px");
     }
-    // landscape phone: the space goes to the film, chat stays behind "Chat"
+    // Landscape phone. The film gets the space, chat stays behind the "Chat" button
     if (!btn || chatOpened || !online || innerWidth > innerHeight) return;
     if (!document.querySelector('[class*="ChatModal-module"]')) {
       chatOpened = true;
@@ -619,7 +684,7 @@
     if (!o || !o.lock || !matchMedia("(pointer: coarse)").matches) return;
     if (fs && fs.closest && (fs.matches(".video-js") || fs.querySelector(".video-js"))) {
       o.lock("landscape").catch(function () {
-        /* unsupported by the browser: the user rotates manually */
+        /* Unsupported. The viewer rotates by hand */
       });
     } else if (o.unlock) {
       try {
@@ -716,7 +781,7 @@
     readableCache = {};
 
   function readable(hex) {
-    // as Twitch "readable colors": a dark nick is mixed toward white while contrast stays below 4.5:1
+    // Like Twitch "readable colors". A dark nick is mixed toward white until contrast reaches 4.5:1
     if (readableCache[hex]) return readableCache[hex];
     var c = [1, 3, 5].map(function (i) {
       return parseInt(hex.substr(i, 2), 16);
@@ -741,7 +806,7 @@
     return list;
   }
 
-  // the nick's Twitch colour made readable on the panel, or "" when the nick has none
+  // "" when the nick has no Twitch colour
   function nickColor(name) {
     var key = name.toLowerCase();
     return has.call(look.colors, key) && look.colors[key] ? readable(look.colors[key]) : "";
@@ -808,7 +873,7 @@
     "Artist": "Художник канала"
   };
 
-  // a Twitch badge image: img is [1x url, 2x url, title] from /_gate/look
+  // img is [1x url, 2x url, title] from /_gate/look
   function badgeImg(b, img) {
     var el = document.createElement("img"),
       label = (LANG === "ru" && BADGE_RU[img[2]]) || img[2] || b.split("/")[0];
@@ -903,15 +968,15 @@
   // =================================================================================================================
   // chat autoscroll: the latest message stays visible
   // =================================================================================================================
-  // Only the viewer's own scrolling changes stickiness. Re-sticking within 60px works only downwards: a slow wheel step
-  // up moves 12–57px and re-renders virtuoso, so a two-way threshold would pull the feed back down
+  // Only the viewer's own scrolling changes stickiness. Re-sticking within 60px works only downwards.
+  // A slow wheel step up moves 12 to 57px and re-renders virtuoso, so a two-way threshold would pull the feed back
   var stick = { el: null, on: true, userAt: 0, readTop: 0, lastTop: 0, dir: 0, drag: false };
 
   function gapOf(v) {
     return v.scrollHeight - v.scrollTop - v.clientHeight;
   }
 
-  // a scrollbar drag counts as viewer scrolling throughout: otherwise Owncast's adjustments snap the feed back and it flickers
+  // A scrollbar drag counts as viewer scrolling until release. Otherwise Owncast snaps the feed back and it flickers
   function userScrolled() {
     return stick.drag || Date.now() - stick.userAt < 500;
   }
@@ -919,9 +984,9 @@
   function stickNow() {
     var v = stick.el;
     if (!v || !v.isConnected) return;
-    // nothing to scroll: sticky, otherwise a wheel step up in a short chat would unstick it for good
+    // Nothing to scroll means sticky. Otherwise a wheel step up in a short chat would unstick it for good
     if (v.scrollHeight - v.clientHeight < 4) stick.on = true;
-    // the viewer is scrolling: the scroll handler decides, a virtuoso re-render does not move the feed
+    // While the viewer scrolls, the scroll handler decides. A virtuoso re-render must not move the feed
     if (!stick.on || userScrolled()) return;
     if (gapOf(v) > 1) v.scrollTop = v.scrollHeight;
     requestAnimationFrame(function () {
@@ -938,15 +1003,15 @@
       stick.userAt = Date.now();
       stick.dir = dir || 0;
     };
-    // a step up is only marked, its position not recorded: Chromium scrolls before the wheel event arrives. The scroll
-    // handler unsticks once the feed actually moves up (touchpad jitter scrolls nothing)
+    // A step up is only marked, its position is not recorded. Chromium scrolls before the wheel event arrives.
+    // The scroll handler unsticks once the feed really moves up. Touchpad jitter scrolls nothing
     var up = function () {
       mark(-1);
     };
     v.addEventListener(
       "wheel",
       function (e) {
-        if (e.ctrlKey) return; // Ctrl+wheel and touchpad pinch zoom the page, they do not scroll
+        if (e.ctrlKey) return; // Ctrl+wheel and touchpad pinch zoom the page
         if (e.deltaY < 0) up();
         else mark(1);
       },
@@ -959,7 +1024,8 @@
       },
       { passive: true }
     );
-    // scrollbar (not a click on a row), left button only: the right one opens a menu and its release may never arrive
+    // A press on the scrollbar, not on a row. Left button only, since the right one opens a menu
+    // and its release may never arrive
     v.addEventListener("mousedown", function (e) {
       if (e.target === v && e.button === 0) {
         mark(0);
@@ -977,14 +1043,14 @@
           rising = top < stick.lastTop - 1,
           sinking = top > stick.lastTop + 1;
         stick.lastTop = top;
-        // the viewer scrolls up but the feed moves down: that is Owncast catching up with the bottom on a new message
+        // The feed moving down during an upward scroll is Owncast catching up with a new message
         if (userScrolled() && !(stick.dir < 0 && sinking)) {
           if (rising && gapOf(v) > 4) stick.on = false;
           else if ((sinking && gapOf(v) < 60) || gapOf(v) < 4) stick.on = true;
           stick.readTop = top;
         } else if (!stick.on && v.scrollTop > stick.readTop + 2) {
-          // the viewer reads above while something else pulls the feed down: Owncast's virtual list underestimates the
-          // height of rows extended with time and badges, assumes the viewer is at the bottom and scrolls to catch up
+          // The viewer reads above, yet the feed is pulled down. Owncast's virtual list underestimates rows extended
+          // with time and badges, thinks the viewer is at the bottom and scrolls to catch up
           v.scrollTop = stick.readTop;
         } else if (gapOf(v) < 4) stick.on = true;
       },
@@ -1017,7 +1083,7 @@
 
   document.addEventListener("mouseup", dragEnd, true);
 
-  // a lost mouseup (happens after a scrollbar drag) shows as mouse movement with no buttons pressed
+  // A scrollbar drag can lose its mouseup. Mouse movement with no buttons pressed ends the drag
   document.addEventListener(
     "mousemove",
     function (e) {
@@ -1040,7 +1106,7 @@
     function (e) {
       if (e.target.closest && e.target.closest('[class*="ChatContainer-module"][class*="__toBottomWrap"]')) {
         stick.on = true;
-        stick.userAt = 0; // pressed right after a wheel scroll: still go down
+        stick.userAt = 0; // Go down even right after a wheel scroll
         stickNow();
       }
     },
@@ -1067,7 +1133,7 @@
 
   var people = { list: null, at: 0, failed: false, asking: false, waiting: [] };
 
-  // a request in flight queues the callback instead of dropping it, so the panel does not hang on "Loading…"
+  // A request in flight queues the callback. Dropping it would leave the panel on "Loading…"
   function loadUsers(done) {
     if (done) people.waiting.push(done);
     if (people.asking) return;
@@ -1123,7 +1189,7 @@
     host.appendChild(n);
   }
 
-  // a panel over the feed ends above the input, which grows with the text
+  // The panel ends above the input, which grows with the text
   function fitAboveInput(panel) {
     var field = panel.parentNode && panel.parentNode.querySelector(FIELD_SEL);
     if (field) panel.style.bottom = field.offsetHeight + "px";
@@ -1254,7 +1320,7 @@
   var MENTION_MAX = 7;
   var mention = { box: null, ed: null, items: [], pick: 0 };
 
-  // "@prefix" right before the caret: { q, range }, the range replaced on selection
+  // "@prefix" right before the caret as { q, range }. The range is replaced on selection
   function caretQuery(ed) {
     var sel = getSelection();
     if (!ed || !sel.rangeCount || !sel.isCollapsed) return null;
@@ -1269,7 +1335,7 @@
     return { q: m[2].toLowerCase(), range: r };
   }
 
-  // a nick with a space cannot be mentioned; "Twitch" is the gate's fallback sender, not a person
+  // A nick with a space cannot be mentioned. "Twitch" is the gate's fallback sender, not a person
   function knownNicks() {
     var seen = { twitch: 1 },
       out = [];
@@ -1307,7 +1373,7 @@
       mention.box.className = "kz-mention";
       mention.box.setAttribute("role", "listbox");
       mention.box.setAttribute("aria-label", txt("mention"));
-      // mousedown rather than click: the input keeps focus and caret
+      // mousedown, not click, so the input keeps its focus and caret
       mention.box.addEventListener("mousedown", function (e) {
         var b = e.target.closest && e.target.closest(".kz-m-item");
         e.preventDefault();
@@ -1363,7 +1429,7 @@
       sel.removeAllRanges();
       sel.addRange(range);
     } else {
-      // from the member list: append to the end, since after focus() the caret may sit at the start
+      // From the member list. Append at the end, since after focus() the caret may sit at the start
       var end = document.createRange();
       end.selectNodeContents(ed);
       end.collapse(false);
@@ -1373,7 +1439,7 @@
       r.setStart(ed, 0);
       if (r.toString() && !/\s$/.test(r.toString())) text = " " + text;
     }
-    // insertText acts as typing: Owncast sees normal input and Ctrl+Z undo works
+    // insertText acts as typing. Owncast sees normal input and Ctrl+Z works
     document.execCommand("insertText", false, text);
   }
 
@@ -1420,7 +1486,7 @@
     true
   );
 
-  // capture phase on document runs before Owncast, whose Enter would send the message instead of picking the nick
+  // Capture on document runs before Owncast. Its Enter would send the message instead of picking the nick
   document.addEventListener(
     "keydown",
     function (e) {
@@ -1452,7 +1518,7 @@
   var MARK_RE = /\u2063([\u200b\u200c\u200d\u2060]+)\u2063/,
     MARKS_RE = /\u2063[\u200b\u200c\u200d\u2060]*\u2063/g;
 
-  // Owncast id alphabet (shortid): 64 characters, three zero-width characters per id character
+  // Owncast id alphabet (shortid), 64 characters. Each id character takes three zero-width characters
   var ID_ABC = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_-";
 
   var REPLY_ICON =
@@ -1490,13 +1556,13 @@
     return out.replace(MARKS_RE, "").replace(/\s+/g, " ").trim();
   }
 
-  // a bridge line from "Twitch" ("nick: text", when no twin is available) is attributed to its author, not "Twitch"
+  // A bridge line "nick: text" from "Twitch" (no twin available) is attributed to its author
   function author(nick, text) {
     var m = nick === "Twitch" && /^([^\s:]+): (.*)$/.exec(text);
     return m ? { nick: m[1], text: m[2] } : { nick: nick, text: text };
   }
 
-  // accumulated, not replaced: /api/chat returns only the last ~50 lines, and replies quote older ones
+  // Accumulated, not replaced. /api/chat returns only the last ~50 lines, and replies quote older ones
   var HIST_MAX = 3000;
   var hist = { byId: {}, list: [], at: 0, asking: false, waiting: [], tries: 0 };
 
@@ -1505,7 +1571,7 @@
     return isNaN(d) ? "" : two(d.getHours()) + ":" + two(d.getMinutes());
   }
 
-  // the viewer's Owncast chat token, which the Owncast page keeps in localStorage
+  // The Owncast page keeps the viewer's chat token in localStorage
   function chatToken() {
     try {
       return localStorage.getItem("accessToken");
@@ -1527,7 +1593,7 @@
         f();
       });
     };
-    // Owncast issues a new viewer's token ~1 s after load: wait for it rather than record an empty history
+    // Owncast issues a new viewer's token ~1 s after load. Wait for it instead of recording an empty history
     if (!token) {
       if (hist.tries++ < 30) {
         setTimeout(function () {
@@ -1589,7 +1655,7 @@
     return a.text === b.text && a.nick.toLowerCase() === b.nick.toLowerCase();
   }
 
-  // number of identical lines (author, text, minute) below this one in the feed: "+" is often posted several times in a row
+  // Counts identical lines (author, text, minute) below this one. "+" is often posted several times in a row
   function twinsBelow(row, info) {
     var rows = document.querySelectorAll(ROW_SEL),
       after = false,
@@ -1606,7 +1672,8 @@
     return k;
   }
 
-  // feed row → history entry: same author, text and minute, the k-th from the end; else the newest with the same text
+  // A feed row's entry has the same author, text and minute and is the k-th from the end.
+  // Failing that, the newest entry with the same text
   function findInHistory(info, k) {
     var exact = [],
       loose = null;
@@ -1638,7 +1705,7 @@
   function replyRows(root) {
     within(root, ROW_SEL).forEach(function (row) {
       if (!row.querySelector(":scope > .kz-reply-btn")) {
-        // a new feed row fetches history (at most every 10 s) while the row is still among the last ~50
+        // A new row refetches history, at most every 10 s, while it is still among the last ~50
         if (Date.now() - hist.at > 10000) loadHistory();
         var b = document.createElement("button");
         b.type = "button";
@@ -1659,7 +1726,7 @@
         e = id && has.call(hist.byId, id) ? hist.byId[id] : null;
       var key = id + "|" + (e ? "1" : "0");
       if (old && old.getAttribute("data-key") === key) return;
-      // source line missing from history (page open for a long time): refetch, at most every 3 s
+      // Source line missing from history (page open for long). Refetch, at most every 3 s
       if (!e && Date.now() - hist.at > 3000) {
         loadHistory(function () {
           replyRows(document.body);
@@ -1678,7 +1745,7 @@
   }
 
   var replying = null;
-  // with a mark the prefix is searched in the whole input, which may start with an emoji or a line break
+  // With a mark, the prefix is searched in the whole input. It may start with an emoji or a line break
   var PREFIX_RE = /@[^\s\u2063]*\u2063[\u200b\u200c\u200d\u2060]*\u2063 ?/;
 
   function prefixRange(ed) {
@@ -1705,8 +1772,8 @@
     return r;
   }
 
-  // the bar is a separate row above the input, in the field's wrapper rather than the field itself: Owncast lays out
-  // the field root's children in a row, and a bar inside it pushes the input past the right edge of the chat
+  // The bar is a row above the input, in the field's wrapper. Owncast lays out the field root's children
+  // in a row, so a bar inside it would push the input past the chat's right edge
   function replyHost(ed) {
     var root = ed && ed.closest && ed.closest('[class*="ChatTextField-module"][class*="__root"]');
     return root && root.parentNode ? { host: root.parentNode, root: root } : null;
@@ -1757,7 +1824,7 @@
       ed.focus();
       var sel = getSelection(),
         r = prefixRange(ed);
-      // line not in history: the reply goes out as a plain "@nick", with no quote bar for others
+      // Line not in history. The reply goes out as a plain "@nick", and others see no quote bar
       replying = { nick: info.nick, text: info.text, mark: e ? encodeId(e.id) : "", ed: ed };
       sel.removeAllRanges();
       sel.addRange(r);
@@ -1788,7 +1855,7 @@
     drawReplyBar();
   }
 
-  // the bar stays while the input holds the reply prefix; sending (Owncast clears the input) or erasing it removes the bar
+  // The bar stays while the input holds the reply prefix. Owncast clears the input on send, which removes it too
   function checkReply() {
     if (!replying) return;
     var t = replying.ed.isConnected ? replying.ed.textContent : "";
@@ -1807,10 +1874,16 @@
     true
   );
 
-  document.addEventListener("keydown", function (e) {
-    if (isEditor(e.target) && e.key === "Enter") setTimeout(checkReply, 120);
-    if (isEditor(e.target) && e.key === "Escape" && replying && !mention.box) cancelReply();
-  });
+  // Capture, like every own key handler: the editor may stop Escape before it bubbles up.
+  // The «mentions» handler runs first and stops a key it uses, so Escape closes the nick list before the reply
+  document.addEventListener(
+    "keydown",
+    function (e) {
+      if (isEditor(e.target) && e.key === "Enter") setTimeout(checkReply, 120);
+      if (isEditor(e.target) && e.key === "Escape" && replying && !mention.box) cancelReply();
+    },
+    true
+  );
 
   document.addEventListener(
     "click",
@@ -1870,8 +1943,9 @@
     return b;
   }
 
-  // Owncast's hidden "…" menu exists on a row only for moderators, so it gates the buttons. No ban on own rows, the
-  // broadcaster's (the OBS dock shows no own nick) and "Twitch" (the gate's fallback sender: banning it cuts the bridge)
+  // Owncast renders the hidden "…" menu only for moderators, so it gates the buttons. No ban on own rows
+  // or the broadcaster's (the OBS dock shows no own nick). None on "Twitch" either. It is the gate's fallback
+  // sender, and banning it cuts the bridge
   function modRows(root) {
     within(root, ROW_SEL).forEach(function (row) {
       if (!row.querySelector('[class*="__modMenuWrapper"]')) return;
@@ -1905,7 +1979,7 @@
     }
   }
 
-  // Owncast moderation API, called with the streamer's (moderator's) own token, as the "…" menu does
+  // Owncast moderation API with the moderator's own token, as the "…" menu does
   function modPost(path, body) {
     var token = chatToken();
     if (!token) return Promise.reject(new Error("no token"));
@@ -1940,7 +2014,7 @@
     });
   }
 
-  // ban needs a second press within 3 s: the viewer is dropped from the video, so a misclick would cost them the film
+  // Ban needs a second press within 3 s. A banned viewer loses the video, so a misclick costs them the film
   var armed = null;
 
   function disarm() {
@@ -1953,7 +2027,7 @@
     armed = null;
   }
 
-  // nick without "[TW]": the feed row has it stripped (the label is drawn before the nick), history keeps it
+  // Feed rows lose "[TW]" (CSS draws the label), history keeps it. Compare without it
   function bareNick(n) {
     return (n || "").replace(TWIN, "").trim().toLowerCase();
   }
@@ -1973,7 +2047,7 @@
       nick = raw.replace(TWIN, ""),
       chat = row.closest(CHAT_SEL);
     rowEntry(row, function (e) {
-      // the entry must belong to the row's user: a "Twitch" line with the same text is someone else
+      // The entry must belong to the row's user. A "Twitch" line with the same text is someone else
       if (!e || !e.uid || e.raw === "Twitch" || bareNick(e.raw) !== bareNick(raw)) {
         failed(b);
         notice(chat, txt("banNotFound", { nick: nick }));
@@ -1995,7 +2069,8 @@
     });
   }
 
-  // the "Bans" window: ok – the gate recognised the streamer (null until asked), list – the banned viewers
+  // The "Bans" window. ok tells whether the gate recognised the streamer (null until asked).
+  // list holds the banned viewers
   var bans = { ok: null, list: null, failed: false, at: 0, asking: false, waiting: [] };
 
   function notice(chat, text, bansLink) {
@@ -2230,7 +2305,8 @@
   // =================================================================================================================
   // reconnect: lost Twitch voice
   // =================================================================================================================
-  // viewers' Twitch tokens live only in the gate's memory; the code is already entered, so the login returns straight to chat
+  // Viewers' Twitch tokens live only in the gate's memory and a gate restart loses them.
+  // The code is already entered, so the login returns straight to chat
   function voiceBar() {
     document.querySelectorAll(CHAT_SEL).forEach(function (chat) {
       var bar = chat.querySelector(":scope > .kz-voicebar");
@@ -2252,7 +2328,7 @@
   }
 
   // =================================================================================================================
-  // start: the first requests and the timers that keep every section up to date
+  // start: the first requests and the timers that keep every section fresh
   // =================================================================================================================
   loadHistory(function () {
     replyRows(document.body);

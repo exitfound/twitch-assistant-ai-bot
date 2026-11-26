@@ -1,32 +1,33 @@
-// Hall layout check at 19 window sizes (monitors, browser zoom, tablets, phones).
-// Needs a local oc-test with a stream and the styling uploaded (kinozal.sh style --local with OWNCAST_API=...18080).
-// Usage: node tools/layout-audit.cjs [part of a size name]; screenshots go to ./shots/ next to the script.
-// Playwright: PLAYWRIGHT_PATH (its node_modules/playwright directory, e.g. in the npx cache) or NODE_PATH.
+// Checks the hall layout at 19 window sizes.
+// Needs a local oc-test with a stream and the styling uploaded (kinozal.sh style with OWNCAST_API=...18080).
+// Usage: node tools/layout-audit.cjs [part of a size name]. Screenshots go to tools/shots/.
+// Playwright comes from PLAYWRIGHT_PATH (its node_modules/playwright directory, e.g. in the npx cache) or NODE_PATH.
 const { chromium } = require(process.env.PLAYWRIGHT_PATH || "playwright");
 
 // ===================================================================================================================
-// window sizes: monitors, browser zoom, tablets, phones; 1 – a touch screen
+// window sizes: monitors, browser zoom, tablets, phones
 // ===================================================================================================================
+// A fourth value of 1 marks a touch screen
 const V = [
-  ["2560x1300 монитор 1440p", 2560, 1300],
-  ["1920x950 1080p+браузер", 1920, 950],
+  ["2560x1300 monitor 1440p", 2560, 1300],
+  ["1920x950 1080p+browser", 1920, 950],
   ["1920x1080 F11", 1920, 1080],
-  ["1536x730 ноут 125%", 1536, 730],
+  ["1536x730 laptop 125%", 1536, 730],
   ["1440x800", 1440, 800],
-  ["1366x657 ноут+браузер", 1366, 657],
+  ["1366x657 laptop+browser", 1366, 657],
   ["1280x650", 1280, 650],
-  ["1536x760 зум125", 1536, 760],
-  ["1280x633 зум150", 1280, 633],
-  ["960x475 зум200", 960, 475],
-  ["640x316 зум300", 640, 316],
-  ["1024x768 планшет гор", 1024, 768, 1],
-  ["768x1024 планшет верт", 768, 1024, 1],
+  ["1536x760 zoom125", 1536, 760],
+  ["1280x633 zoom150", 1280, 633],
+  ["960x475 zoom200", 960, 475],
+  ["640x316 zoom300", 640, 316],
+  ["1024x768 tablet landscape", 1024, 768, 1],
+  ["768x1024 tablet portrait", 768, 1024, 1],
   ["820x1180 iPad Air", 820, 1180, 1],
   ["390x844 iPhone", 390, 844, 1],
   ["360x740 Android", 360, 740, 1],
-  ["320x568 мин", 320, 568, 1],
-  ["844x390 телефон гор", 844, 390, 1],
-  ["740x360 Android гор", 740, 360, 1]
+  ["320x568 smallest", 320, 568, 1],
+  ["844x390 phone landscape", 844, 390, 1],
+  ["740x360 Android landscape", 740, 360, 1]
 ];
 
 const only = process.argv[2];
@@ -35,10 +36,11 @@ const only = process.argv[2];
   const b = await chromium.launch();
 
   // =================================================================================================================
-  // each size: the page in a Russian browser (its longer labels are the harder case), the session stubbed
+  // each size: a Russian browser, the session stubbed
   // =================================================================================================================
   for (const [name, w, h, touch] of V) {
     if (only && !name.includes(only)) continue;
+    // Russian labels are longer, so they are the harder case
     const ctx = await b.newContext({
       locale: "ru-RU",
       viewport: { width: w, height: h },
@@ -50,13 +52,13 @@ const only = process.argv[2];
       const now = Date.now() / 1000;
       r.fulfill({
         contentType: "application/json",
-        body: JSON.stringify({ started: now - 3723, title: "Жизнь Брайана по Монти Пайтону", now })
+        body: JSON.stringify({ started: now - 3723, title: "Monty Python's Life of Brian, Uncut", now })
       });
     });
     await p.goto("http://127.0.0.1:18080/", { waitUntil: "networkidle" }).catch(() => {});
     await p.waitForTimeout(6500);
 
-    // the measurements, taken inside the page
+    // Measured inside the page
     const r = await p.evaluate((isTouch) => {
       const q = (s) => document.querySelector(s),
         R = (e) => e && e.getBoundingClientRect();
@@ -70,7 +72,7 @@ const only = process.argv[2];
         title = q("#kz-now .kz-title");
       const input = R(q('div[role="textbox"]'));
 
-      // the player's control bar: do its buttons fit
+      // Do the player's control buttons fit
       const bar = q(".vjs-control-bar");
       let ctrlSum = 0;
       if (bar) {
@@ -79,7 +81,7 @@ const only = process.argv[2];
         });
       }
 
-      // the header: nothing past the window or below the header
+      // Nothing in the header may stick out past the window or below the header
       const hdr = R(q("header"));
       let hdrOverflow = false;
       if (q("header")) {
@@ -91,7 +93,7 @@ const only = process.argv[2];
           });
       }
 
-      // touch screens: controls with a target under 44px
+      // On touch screens, list controls with a target under 44px
       const small = [];
       if (isTouch) {
         document.querySelectorAll('button, a[href], [role="button"], [role="slider"]').forEach((e) => {
@@ -115,16 +117,15 @@ const only = process.argv[2];
         });
       }
 
-      // the result, one line per measurement
-      let chatText = "нет";
+      let chatText = "none";
       if (chat && chat.width) chatText = `${Math.round(chat.width)} (${Math.round((chat.width / innerWidth) * 100)}%)`;
-      else if (mobile) chatText = "под видео (окно)";
+      else if (mobile) chatText = "below the video (window)";
       return {
-        mode: mobile ? "моб" : "комп",
+        mode: mobile ? "mobile" : "desktop",
         hScroll: document.documentElement.scrollWidth > innerWidth,
         vScroll: document.documentElement.scrollHeight > innerHeight + 1,
         video: vid
-          ? `${Math.round(vid.width)}x${Math.round(vid.height)} (${Math.round((vid.width / innerWidth) * 100)}% ширины, ${Math.round((vid.height / innerHeight) * 100)}% высоты)`
+          ? `${Math.round(vid.width)}x${Math.round(vid.height)} (${Math.round((vid.width / innerWidth) * 100)}% of width, ${Math.round((vid.height / innerHeight) * 100)}% of height)`
           : "-",
         bars: (() => {
           const v = q(".vjs-tech");
@@ -133,7 +134,7 @@ const only = process.argv[2];
           const k = Math.min(tr.width / v.videoWidth, tr.height / v.videoHeight),
             pw = v.videoWidth * k,
             ph = v.videoHeight * k;
-          return `бок ${Math.round(cont.width - pw)} верх/низ ${Math.round(cont.height - ph)} (кадр ${Math.round(pw)}x${Math.round(ph)})`;
+          return `sides ${Math.round(cont.width - pw)} top/bottom ${Math.round(cont.height - ph)} (frame ${Math.round(pw)}x${Math.round(ph)})`;
         })(),
         chat: chatText,
         plaqueOverlap:
@@ -148,7 +149,6 @@ const only = process.argv[2];
       };
     }, !!touch);
 
-    // the report and a screenshot of this size
     console.log(
       `\n### ${name}\n` +
         Object.entries(r)

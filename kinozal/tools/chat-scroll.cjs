@@ -1,14 +1,14 @@
-// Chat autoscroll check (custom.js «chat autoscroll»): slow upward scrolling by 12px keeps the feed still, whether the
-// chat is quiet or active; same for a fast jump up; back at the bottom, the feed follows new messages again.
-// The gap from the bottom must grow, not drop to 0. Needs a local oc-test with a stream and the styling uploaded
-// (as for layout-audit.cjs) and dozens of chat rows. Usage: node tools/chat-scroll.cjs [firefox].
-// Playwright: PLAYWRIGHT_PATH or NODE_PATH, as in layout-audit.cjs.
+// Checks chat autoscroll (custom.js «chat autoscroll»). Scrolling up, slowly by 12px or in one jump, must keep
+// the feed still in a quiet chat and in a busy one. The gap from the bottom must grow, not drop to 0.
+// Back at the bottom, the feed must follow new messages again.
+// Needs a local oc-test with a stream, the styling uploaded (as for layout-audit.cjs) and dozens of chat rows.
+// Usage: node tools/chat-scroll.cjs [firefox]. Playwright comes from PLAYWRIGHT_PATH or NODE_PATH.
 const pw = require(process.env.PLAYWRIGHT_PATH || "playwright");
 const chromium = pw[process.argv[2] === "firefox" ? "firefox" : "chromium"];
 
 (async () => {
   // =================================================================================================================
-  // page: the hall in a Russian browser, the gate stubbed, the cursor over the chat feed
+  // page: a Russian browser, the gate stubbed, the cursor over the chat feed
   // =================================================================================================================
   const b = await chromium.launch();
   const p = await (await b.newContext({ viewport: { width: 1600, height: 900 }, locale: "ru-RU" })).newPage();
@@ -30,7 +30,7 @@ const chromium = pw[process.argv[2] === "firefox" ? "firefox" : "chromium"];
       await fetch("http://127.0.0.1:18080/api/admin/accesstokens/create", {
         method: "POST",
         headers: { "Authorization": auth, "Content-Type": "application/json" },
-        body: JSON.stringify({ name: "Поток [TW]", scopes: ["CAN_SEND_MESSAGES"] })
+        body: JSON.stringify({ name: "Flow [TW]", scopes: ["CAN_SEND_MESSAGES"] })
       })
     ).json()
   ).accessToken;
@@ -42,16 +42,16 @@ const chromium = pw[process.argv[2] === "firefox" ? "firefox" : "chromium"];
     fetch("http://127.0.0.1:18080/api/integrations/chat/send", {
       method: "POST",
       headers: { "Authorization": "Bearer " + token, "Content-Type": "application/json" },
-      body: JSON.stringify({ body: "поток " + k++ + " – чат пишет, пока зритель читает выше" })
+      body: JSON.stringify({ body: "flow " + k++ + " – the chat writes while the viewer reads above" })
     }).catch(() => {});
 
   // =================================================================================================================
-  // scrolling up: slowly in a quiet chat, slowly in a busy one, one jump; the gap from the bottom must grow
+  // scrolling up: slowly in a quiet chat, slowly in a busy one, one jump
   // =================================================================================================================
   for (const [name, step, n, pause, live] of [
-    ["медленно, чат молчит", -12, 30, 150, false],
-    ["медленно, чат пишет", -12, 30, 150, true],
-    ["рывок, чат пишет", -400, 1, 0, true]
+    ["slow, chat quiet", -12, 30, 150, false],
+    ["slow, chat writing", -12, 30, 150, true],
+    ["jerk, chat writing", -400, 1, 0, true]
   ]) {
     if (live) flow = setInterval(send, 700);
     for (let i = 0; i < 6; i++) {
@@ -69,12 +69,12 @@ const chromium = pw[process.argv[2] === "firefox" ? "firefox" : "chromium"];
     await p.waitForTimeout(1200);
     clearInterval(flow);
     console.log(
-      `${name}: прокручено ${-step * n}px, отступ от низа: старт ${start}, по шагам ${seen.slice(0, 12).join(" ")}…, через 1.2 с ${await gap()}`
+      `${name}: scrolled ${-step * n}px, gap to the bottom: start ${start}, per step ${seen.slice(0, 12).join(" ")}…, after 1.2 s ${await gap()}`
     );
   }
 
   // =================================================================================================================
-  // back at the bottom by the wheel: the feed follows new lines again, the gap stays near 0
+  // back at the bottom by the wheel: the gap must stay near 0 as new lines come
   // =================================================================================================================
   for (let i = 0; i < 6; i++) {
     await p.mouse.wheel(0, 5000);
@@ -91,6 +91,6 @@ const chromium = pw[process.argv[2] === "firefox" ? "firefox" : "chromium"];
   }
 
   clearInterval(flow);
-  console.log("вернулся вниз, чат пишет: отступ от низа " + follow.join(" "));
+  console.log("back at the bottom, chat writing: gap to the bottom " + follow.join(" "));
   await b.close();
 })();

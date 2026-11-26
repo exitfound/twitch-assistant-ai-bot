@@ -487,39 +487,6 @@ relations – до {max_relations} самых заметных людей в е�
 
 @{user}, слишком длинно – не больше {max} символов.
 
-### lastseen
-<!-- !lastseen <ник> – когда зритель последний раз писал в чат (вся история, команды не в счёт).
-     Плейсхолдеры: {user}, {target} – ник, {when} – lastseen_today, lastseen_yesterday или
-     lastseen_date. Ник цели без @: иначе любой фолловер мог бы отмечать ботом кого угодно -->
-
-@{user}, последнее сообщение {target} в чате – {when}.
-
-### lastseen_unknown
-<!-- !lastseen про ник, от которого в чате нет ни одного сообщения. Плейсхолдеры: {user}, {target} -->
-
-@{user}, от {target} в этом чате ещё не было сообщений.
-
-### lastseen_usage
-<!-- !lastseen без ника или с несколькими словами. Плейсхолдеры: {user}, {command} – !lastseen -->
-
-@{user}, ник пишется после команды: {command} ник
-
-### lastseen_today
-<!-- {when} в lastseen, если сообщение сегодня (в BOT_TIMEZONE). Плейсхолдеры: {time} – 21:40 -->
-
-сегодня в {time}
-
-### lastseen_yesterday
-<!-- {when} в lastseen, если сообщение вчера. Плейсхолдеры: {time} -->
-
-вчера в {time}
-
-### lastseen_date
-<!-- {when} в lastseen, если сообщение раньше вчерашнего дня. Плейсхолдеры: {date} – 18.11.2026,
-     {time} -->
-
-{date} в {time}
-
 ### help_announce
 <!-- Напоминание, которое бот шлёт сам раз в HELP_ANNOUNCE_INTERVAL_MINUTES, пока идёт
      эфир и в чате кто-то пишет, и ответ на !help. Ника в тексте нет. Только

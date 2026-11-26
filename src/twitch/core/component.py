@@ -37,7 +37,6 @@ from src.twitch.local.follow import handle_follow
 from src.twitch.local.film import bridge as film_bridge
 from src.twitch.local.film import hall as film
 from src.twitch.local import project
-from src.twitch.local.lastseen import TRIGGER as LASTSEEN_TRIGGER, handle_lastseen
 from src.twitch.local.schedule import TRIGGER as SCHEDULE_TRIGGER, handle_schedule
 from src.twitch.local.mascot import feed as mascot
 from src.twitch.roll.client import GameCommand, RollLink, RollUnavailable
@@ -176,8 +175,6 @@ class ChatComponent(commands.Component):
         add(project.TITLE_TRIGGER, project.handle_project_title, prefix=True,
             roles=frozenset({'broadcaster'}))
         add(project.TRIGGER, project.handle_project, prefix=True, public=True, channel=True)
-        # Listed by !channel, but a personal cooldown: the nick differs from call to call
-        add(LASTSEEN_TRIGGER, handle_lastseen, prefix=True, channel=True)
         self._registry.set_fallback(self._channel.resolve)
         self._channel.check()
 

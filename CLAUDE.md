@@ -155,7 +155,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `database.py` – facade re-exporting `src/core/db/`: callers import every query from here
 - `db/connection.py` – the shared connection (`get_db()`, `close_db()`, `reopen()`), `transaction()`, `backup_db()`, `vacuum_db()`
 - `db/schema.py` – `init_db()`: named `STEPS` for every table, `SCHEMA_VERSION`
-- `db/chat.py` – `chat_messages`: saving, chat windows, previous/last session (cached), `!stat` numbers, a nick's last message time (`!lastseen`)
+- `db/chat.py` – `chat_messages`: saving, chat windows, previous/last session (cached), `!stat` numbers
 - `db/interactions.py` – `bot_interactions`: tagged answers, the viewer's dialogues
 - `db/knowledge.py` – `knowledge` and `facts`: FTS5 search, the random «language» sample
 - `db/quota.py` – `bot_uses`: hourly quota, channel ceiling, per-stream counts, the all-time count that numbers clips
@@ -169,7 +169,7 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `service.py` – `ServiceClient` (one service's API: a kept session, `SERVICE_TOKEN`, a deadline per call; raises `ServiceUnavailable` with `maybe_done`: False – never reached the service (refused, connect timeout, 4xx), True – sent and maybe done (read timeout, dropped connection, 5xx)), `require_token()`, `read_json()` (a body with its required fields, or 400 before any work: a caller on another version learns it was not done), `serve()` (an API until cancelled; a busy port is logged)
 - `tasks.py` – `BackgroundTasks`: loops by name, never started twice; `once=True` for a task meant to finish; `cancel(name)` for one task
 - `logging_setup.py` – `setup_logging()`, `make_formatter()` (log times in `BOT_TIMEZONE`, secrets replaced by `redact()`)
-- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `parse_nick` (one word that looks like a login: `!lastseen`, `!rollstat`, the rewards that take a nick), `safe_format`, `defuse`, `find_banned` (the stop list), `local_time`, `random_delay`, `gather_cancelling`, `put_latest` (a full queue drops its oldest item: the voice forwarder, the game's event queue, the overlay feeds). `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
+- `utils.py` – shared helpers: `SOSUR_RE`, `clean_nick`, `parse_nick` (one word that looks like a login: `!rollstat`, the rewards that take a nick), `safe_format`, `defuse`, `find_banned` (the stop list), `local_time`, `random_delay`, `gather_cancelling`, `put_latest` (a full queue drops its oldest item: the voice forwarder, the game's event queue, the overlay feeds). `SOSUR_RE` lives here rather than in `component.py`: `db/schema.py` backfills `chat_messages.addressed` with it, and importing the dispatcher there would be circular
 
 **gemini** (shared)
 - `client.py` – `get_client()`, `generate()` (chat, with the answer deadline), `generate_checked()` (the reason there is no text), `make_gen_config()`, `background()` (the slots memory, the pulse and the fact check share, `use_all_slots()` for the CLI backfill), `using_model()` (another model for one task's requests, the probe's candidate), `SAFETY_OFF` / `SAFETY_CHECK`, `usage`, `PRICES` / `cost_estimate()` (the one place the Gemini prices live, per model). BOT.md «Шаг 10: Вызов Gemini»
@@ -213,7 +213,6 @@ One line per module: what it holds. How a feature behaves and why lives in `BOT.
 - `clip.py` – `!clip`: `parse()`, `default_title()`, `handle_clip`, `make_clip()` (create the clip as the bot, wait until Twitch lists it). BOT.md «Шаг 7з»
 - `schedule.py` – `!schedule`: `fetch()` (a raw Helix request, 404 – no schedule), `parse()` (the nearest upcoming slots not cancelled, `SLOTS` of them; a vacation while it lasts), `render()`, `handle_schedule` (Helix's answer cached for `CACHE_SECONDS`, a failure is not). BOT.md «Шаг 7а6»
 - `project.py` – `!project` (anyone, a channel command) and `!project title <text>` (the streamer's): the text in `bot_state.channel_project`, kept until the next title. BOT.md «Шаг 7а7»
-- `lastseen.py` – `!lastseen <nick>`: the nick's last chat line (`get_last_message_time()`), «сегодня / вчера / date» in `BOT_TIMEZONE` (`when()`); listed by `!channel` but with the usual gate and a personal cooldown, since the nick differs per call. BOT.md «Шаг 7а8»
 - `follow.py` – `handle_follow()`: a thank-you once per viewer, a few a minute
 - `emote_spam.py` – `emote_spam_loop()`
 - `help_announce.py` – `help_loop()`, `note_help_shown()`

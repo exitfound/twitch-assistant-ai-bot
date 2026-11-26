@@ -5,7 +5,6 @@
     clip.py        !clip – a clip of the stream's last seconds
     schedule.py    !schedule – the nearest stream from the channel's schedule on Twitch
     project.py     !project – what the stream is working on, set by the streamer
-    lastseen.py    !lastseen – when a viewer last wrote in chat
     follow.py      reply to a new follow
     emote_spam.py  a batch of emotes in chat once per interval
     film/          !film – the cinema hall's session kept by its gate, and the chat bridge to the hall

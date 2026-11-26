@@ -20,7 +20,7 @@ async def get_recent_chat(session_id: str, limit: int = 20,
     db = await get_db()
     where, params = ('', ()) if before_id is None else (' AND id < ?', (before_id,))
     async with db.execute(
-        # Commands are not stored any more; the filter covers rows that still hold them
+        # Commands are not stored. Older rows may hold them, so the filter stays
         "SELECT username, message FROM chat_messages WHERE session_id = ? AND message NOT LIKE '!%'"
         f'{where} ORDER BY id DESC LIMIT ?',
         (session_id, *params, limit),
@@ -86,26 +86,13 @@ async def get_user_messages(username: str, limit: int = 30) -> list[str]:
     db = await get_db()
     async with db.execute(
         # Commands (!roll, !who …) say nothing about a person but eat up the window.
-        # They are not written any more; the filter covers rows that still hold them
+        # They are not stored. Older rows may hold them, so the filter stays
         "SELECT message FROM chat_messages WHERE username = ? AND message NOT LIKE '!%'"
         ' ORDER BY id DESC LIMIT ?',
         (username, limit),
     ) as cursor:
         rows = await cursor.fetchall()
     return [row[0] for row in reversed(rows)]
-
-
-async def get_last_message_time(username: str) -> float | None:
-    """time.time() of the nick's last chat message, all time; None – never wrote."""
-    db = await get_db()
-    async with db.execute(
-        # Old rows may still hold commands: they are not what «last wrote» means
-        "SELECT CAST(strftime('%s', created_at) AS REAL) FROM chat_messages"
-        " WHERE username = ? AND message NOT LIKE '!%' ORDER BY id DESC LIMIT 1",
-        (username,),
-    ) as cursor:
-        row = await cursor.fetchone()
-    return row[0] if row else None
 
 
 async def has_chatted(username: str) -> bool:

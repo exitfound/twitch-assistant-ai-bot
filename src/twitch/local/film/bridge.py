@@ -1,4 +1,4 @@
-"""The chat bridge Twitch → cinema hall while a session is open (BOT.md «Мост чатов кинозала»).
+"""The chat bridge Twitch → cinema hall while a session is open (docs/KINOZAL.md «Мост чатов»).
 
 Every Twitch line – the viewers' and the bot's own, not commands – goes to the gate's chat API
 as `texts.film_bridge_to_hall`, with the author's colour, badges and the line's emotes (look()).
